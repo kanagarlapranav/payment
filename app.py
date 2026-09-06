@@ -11,16 +11,9 @@ from bot.commands import (
 )
 from bot.handlers import handle_image, handle_callback_query, handle_text
 
-def main():
-    """Main entry point for the bot."""
-    if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN is not set. Exiting.")
-        return
-
-    logger.info("Setting up database...")
+def build_application():
+    """Builds and configures the Telegram Application."""
     setup_database()
-
-    logger.info("Initializing Telegram bot...")
     req = HTTPXRequest(read_timeout=60.0, write_timeout=60.0, connect_timeout=30.0, pool_timeout=60.0)
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(req).build()
 
@@ -54,6 +47,16 @@ def main():
     # Callback query handler for inline keyboards (Confirm / Cancel)
     app.add_handler(CallbackQueryHandler(handle_callback_query))
 
+    return app
+
+def main():
+    """Main entry point for local polling."""
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN is not set. Exiting.")
+        return
+
+    logger.info("Initializing Telegram bot...")
+    app = build_application()
     logger.info("Bot is running. Press Ctrl+C to stop.")
     app.run_polling()
 
