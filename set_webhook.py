@@ -16,32 +16,32 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 def set_webhook(url: str):
     if not TOKEN:
-        print("❌ Error: TELEGRAM_BOT_TOKEN is not set in .env")
+        print("[ERROR] TELEGRAM_BOT_TOKEN is not set in .env")
         return
     webhook_url = f"{url.rstrip('/')}/api/index"
     api_url = f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={webhook_url}"
-    print(f"📡 Setting Telegram Webhook to: {webhook_url} ...")
+    print(f"Setting Telegram Webhook to: {webhook_url} ...")
     try:
         req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req) as resp:
             data = json.loads(resp.read().decode('utf-8'))
             print("Response:", data)
     except Exception as e:
-        print("❌ Failed to set webhook:", e)
+        print("[ERROR] Failed to set webhook:", e)
 
 def delete_webhook():
     if not TOKEN:
-        print("❌ Error: TELEGRAM_BOT_TOKEN is not set in .env")
+        print("[ERROR] TELEGRAM_BOT_TOKEN is not set in .env")
         return
     api_url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook"
-    print("📡 Removing Telegram Webhook (switching back to local polling)...")
+    print("Removing Telegram Webhook (switching back to local polling)...")
     try:
         req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req) as resp:
             data = json.loads(resp.read().decode('utf-8'))
             print("Response:", data)
     except Exception as e:
-        print("❌ Failed to delete webhook:", e)
+        print("[ERROR] Failed to delete webhook:", e)
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
