@@ -3,15 +3,10 @@ import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Base paths
-IS_SERVERLESS = (
-    os.getenv('VERCEL') is not None
-    or os.getenv('AWS_LAMBDA_FUNCTION_NAME') is not None
-    or os.getenv('LAMBDA_TASK_ROOT') is not None
-)
+# Serverless environments (Vercel/Lambda) must write to /tmp
+IS_SERVERLESS = os.getenv('VERCEL') is not None or os.path.exists('/tmp') and os.name != 'nt'
 BASE_DIR = Path(__file__).resolve().parent
 
 if IS_SERVERLESS:
@@ -40,16 +35,13 @@ except Exception:
     IMAGE_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-# Configuration
+# Telegram Configuration
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_USER_ID = os.getenv('TELEGRAM_USER_ID')
 TELEGRAM_GROUP_ID = os.getenv('TELEGRAM_GROUP_ID')
 TESSERACT_CMD = os.getenv('TESSERACT_CMD', r'C:\Program Files\Tesseract-OCR\tesseract.exe')
-
-# Default Timezone
 DEFAULT_TIMEZONE = 'Asia/Kolkata'
 
-# Setup Logging
 handlers = [logging.StreamHandler()]
 try:
     handlers.append(logging.FileHandler(LOG_DIR / 'app.log'))
@@ -62,7 +54,3 @@ logging.basicConfig(
     handlers=handlers
 )
 logger = logging.getLogger(__name__)
-
-# Validate critical config
-if not TELEGRAM_BOT_TOKEN:
-    logger.warning("Missing TELEGRAM_BOT_TOKEN environment variable.")
