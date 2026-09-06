@@ -1,0 +1,6 @@
+[build]
+  command = "pip install -r requirements.txt"
+  functions = "api"
+
+[functions]
+  included_files = ["database/**", "bot/**", "services/**", "utils/**", "ocr/**", "parsers/**", "config.py", "app.py"]
