@@ -269,10 +269,48 @@ async def filter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎛️ *Filter & Sort Transactions:*\n\nChoose an option below:", reply_markup=get_filter_keyboard(), parse_mode='Markdown')
 
 async def sort_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Opens sorting options."""
+    """Opens sorting options or performs sorting directly by money / date args."""
     if not await is_authorized(update): return
     from bot.keyboards import get_sort_keyboard
-    await update.message.reply_text("🔀 *Choose Sorting Order:*", reply_markup=get_sort_keyboard(), parse_mode='Markdown')
+    
+    # If user provided argument e.g. /sort high, /sort low, /sort amount, /sort money
+    if context.args:
+        arg = context.args[0].lower()
+        if arg in ('high', 'highest', 'max', 'amount_desc', 'desc', 'money', 'amount'):
+            sort_by = 'amount_desc'
+            title = "💰 Amount (Highest First - ₹ High ➔ Low)"
+        elif arg in ('low', 'lowest', 'min', 'amount_asc', 'asc'):
+            sort_by = 'amount_asc'
+            title = "💰 Amount (Lowest First - ₹ Low ➔ High)"
+        elif arg in ('date_asc', 'oldest', 'old'):
+            sort_by = 'date_asc'
+            title = "🗓️ Date (Oldest First)"
+        else:
+            sort_by = 'date_desc'
+            title = "🗓️ Date (Newest First)"
+            
+        txs = search_transactions(sort_by=sort_by, limit=10)
+        if not txs:
+            await update.message.reply_text("No transactions found.")
+            return
+            
+        text = f"🔀 *Sorted by: {title}*\n\n"
+        for t in txs:
+            date_s = format_display_date(t['transaction_date'])
+            time_str = f" | ⏰ {t['transaction_time']}" if t['transaction_time'] and t['transaction_time'] != 'Unknown Time' else ""
+            person = t['person_name'] or "Unknown"
+            type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
+            text += (
+                f"• *{date_s}*{time_str} | {type_badge}\n"
+                f"👤 {person}\n"
+                f"💵 {format_currency(t['amount'])}\n"
+                f"Balance: {format_currency(t['balance_after'])}\n\n"
+            )
+        await update.message.reply_text(text, reply_markup=get_sort_keyboard(), parse_mode='Markdown')
+        return
+
+    await update.message.reply_text("🔀 *Sort Transactions by Money or Date:*\n\nChoose an option below:", reply_markup=get_sort_keyboard(), parse_mode='Markdown')
+
 
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Initiates interactive editing or applies direct edit command."""
