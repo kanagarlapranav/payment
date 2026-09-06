@@ -7,7 +7,7 @@ from bot.commands import (
     start_command, balance_command, today_command, history_command,
     edit_command, delete_command, date_command, search_command,
     monthly_command, filter_command, sort_command, details_command,
-    setbalance_command, export_command, help_command, chatid_command
+    setbalance_command, export_command, help_command, chatid_command, amount_command
 )
 from bot.handlers import handle_image, handle_callback_query, handle_text
 
@@ -27,6 +27,8 @@ def build_application():
     app.add_handler(CommandHandler("date", date_command))
     app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CommandHandler("find", search_command))
+    app.add_handler(CommandHandler("amount", amount_command))
+    app.add_handler(CommandHandler("amt", amount_command))
     app.add_handler(CommandHandler("monthly", monthly_command))
     app.add_handler(CommandHandler("stats", monthly_command))
     app.add_handler(CommandHandler("filter", filter_command))
@@ -37,6 +39,7 @@ def build_application():
     app.add_handler(CommandHandler("export", export_command))
     app.add_handler(CommandHandler("chatid", chatid_command))
     app.add_handler(CommandHandler("help", help_command))
+
 
     # Image handler (photos and documents)
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
