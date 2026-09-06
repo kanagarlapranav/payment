@@ -1,0 +1,50 @@
+from parsers import get_best_parser
+from database.models import Transaction
+from database.queries import insert_transaction
+from services.balance_service import update_balance_for_transaction
+from services.duplicate_service import is_duplicate
+from config import logger
+
+def process_transaction(raw_text: str, image_path: str, message_id: str, chat_id: str, caption: str = "") -> tuple[Transaction, int]:
+    """
+    Core pipeline: Parses text, evaluates confidence, checks duplicates, updates balance, and saves.
+    Returns: (Transaction object, confidence score)
+    """
+    full_text = f"{raw_text}\n{caption}".strip() if caption else raw_text
+    logger.info("Selecting parser...")
+    parser = get_best_parser(full_text)
+    logger.info(f"Selected parser: {parser.__class__.__name__}")
+    
+    transaction = parser.parse()
+    transaction.original_image_path = image_path
+    transaction.telegram_message_id = message_id
+    transaction.telegram_chat_id = chat_id
+    
+    confidence = parser.get_confidence(transaction)
+    logger.info(f"Parsed transaction with confidence: {confidence}")
+    
+    return transaction, confidence
+
+def commit_transaction(transaction: Transaction) -> bool:
+    """
+    Saves the transaction to DB and updates balance.
+    Must be called only if confident or after user confirmation.
+    """
+    try:
+        # Check duplicate
+        if is_duplicate(transaction):
+            logger.warning("Duplicate transaction detected during commit.")
+            return False
+            
+        # Update balance
+        transaction = update_balance_for_transaction(transaction)
+        
+        # Save to DB
+        transaction_id = insert_transaction(transaction)
+        transaction.id = transaction_id
+        
+        logger.info(f"Transaction committed successfully. ID: {transaction_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Error committing transaction: {e}")
+        raise e

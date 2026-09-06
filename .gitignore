@@ -1,0 +1,31 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Environment Variables
+.env
+.env.local
+
+# Database & Data
+data/*.db
+data/images/*
+!data/images/.gitkeep
+data/*.xlsx
+
+# Logs
+logs/*.log
+*.log
+
+# Large Binaries / Installers
+*.exe
+tesseract_setup.exe
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Vercel
+.vercel/
