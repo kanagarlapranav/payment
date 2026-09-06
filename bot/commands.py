@@ -9,7 +9,7 @@ from database.queries import (
 from services.balance_service import get_today_summary, recalculate_all_balances
 from services.export_service import generate_excel_report
 from utils.currency import format_currency, parse_amount
-from utils.dates import parse_date, get_current_time_in_tz
+from utils.dates import parse_date, get_current_time_in_tz, format_display_date
 import os
 
 async def is_authorized(update: Update) -> bool:
@@ -80,6 +80,7 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update): return
     await balance_command(update, context)
 
+
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update): return
     
@@ -95,12 +96,13 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     text = "📜 *Recent Transactions*\n\n"
     for t in transactions:
-        date_str = t['transaction_date'] if t['transaction_date'] else "Unknown Date"
-        time_str = t['transaction_time'] if t['transaction_time'] else "Unknown Time"
+        date_str = format_display_date(t['transaction_date'])
+        time_str = f" | ⏰ {t['transaction_time']}" if t['transaction_time'] and t['transaction_time'] != 'Unknown Time' else ""
         person = t['person_name'] or "Unknown"
+        type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
         
         text += (
-            f"📅 {date_str} | ⏰ {time_str} | {t['transaction_type']}\n"
+            f"• *{date_str}*{time_str} | {type_badge}\n"
             f"👤 {person}\n"
             f"💵 {format_currency(t['amount'])}\n"
             f"Balance: {format_currency(t['balance_after'])}\n\n"
@@ -119,15 +121,16 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     text = "🔍 *Detailed Transactions (With IDs)*\n\n"
     for t in transactions:
-        date_str = t['transaction_date'] if t['transaction_date'] else "Unknown Date"
-        time_str = t['transaction_time'] if t['transaction_time'] else "N/A"
+        date_str = format_display_date(t['transaction_date'])
+        time_str = f" {t['transaction_time']}" if t['transaction_time'] and t['transaction_time'] != 'N/A' else ""
         person = t['person_name'] or "Unknown"
         ref = t['reference_number'] or "N/A"
         bank = t['bank_name'] or "N/A"
+        type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
         
         text += (
-            f"🆔 *ID: #{t['id']}* | {t['transaction_type']}\n"
-            f"📅 Date: {date_str} {time_str}\n"
+            f"🆔 *ID: #{t['id']}* | {type_badge}\n"
+            f"Date: {date_str}{time_str}\n"
             f"👤 Person: {person}\n"
             f"💵 Amount: {format_currency(t['amount'])}\n"
             f"🏦 Bank: {bank}\n"
@@ -142,7 +145,7 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not context.args:
         await update.message.reply_text(
-            "📅 *Date Search:*\n"
+            "🗓 *Date Search:*\n"
             "Usage: `/date <date>`\n\n"
             "Examples:\n"
             "• `/date yesterday`\n"
@@ -161,22 +164,23 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     txs = search_transactions(target_date=target_d, sort_by="date_desc")
     if not txs:
-        await update.message.reply_text(f"📅 No transactions found on *{target_d.strftime('%d %b %Y')}*.", parse_mode='Markdown')
+        await update.message.reply_text(f"No transactions found on *{target_d.strftime('%d %b %Y')}*.", parse_mode='Markdown')
         return
         
     total_sent = sum(t['amount'] for t in txs if t['transaction_type'] == 'SENT')
     total_recv = sum(t['amount'] for t in txs if t['transaction_type'] == 'RECEIVED')
     
     text = (
-        f"📅 *Transactions on {target_d.strftime('%d %b %Y')}*\n"
+        f"• *Transactions on {target_d.strftime('%d %b %Y')}*\n"
         f"Total Sent: {format_currency(total_sent)} | Received: {format_currency(total_recv)}\n\n"
     )
     
     for t in txs:
-        time_str = t['transaction_time'] or "N/A"
+        time_str = f" | ⏰ {t['transaction_time']}" if t['transaction_time'] and t['transaction_time'] != 'N/A' else ""
         person = t['person_name'] or "Unknown"
+        type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
         text += (
-            f"⏰ {time_str} | {t['transaction_type']}\n"
+            f"• {t['transaction_type']}{time_str}\n"
             f"👤 {person}\n"
             f"💵 {format_currency(t['amount'])}\n"
             f"Balance: {format_currency(t['balance_after'])}\n\n"
@@ -211,15 +215,18 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = f"🔍 *Found {len(txs)} transactions for '{query_text}'* (Total: {format_currency(total_amount)})\n\n"
     
     for t in txs:
-        date_str = t['transaction_date'] or "Unknown Date"
+        date_str = format_display_date(t['transaction_date'])
+        time_str = f" | ⏰ {t['transaction_time']}" if t['transaction_time'] and t['transaction_time'] != 'Unknown Time' else ""
         person = t['person_name'] or "Unknown"
+        type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
         text += (
-            f"📅 {date_str} | {t['transaction_type']}\n"
+            f"• *{date_str}*{time_str} | {type_badge}\n"
             f"👤 {person}\n"
             f"💵 {format_currency(t['amount'])}\n"
             f"Balance: {format_currency(t['balance_after'])}\n\n"
         )
     await update.message.reply_text(text, parse_mode='Markdown')
+
 
 async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows analytics and spending summary for the current or specified month."""
