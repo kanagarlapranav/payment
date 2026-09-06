@@ -227,6 +227,51 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     await update.message.reply_text(text, parse_mode='Markdown')
 
+async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Searches all transactions with the specified amount."""
+    if not await is_authorized(update): return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "💵 *Search by Amount:*\n"
+            "Usage: `/amount <number>` or simply type the number (e.g. `500` or `5000`)\n\n"
+            "Examples:\n"
+            "• `/amount 500`\n"
+            "• `/amount 5000`\n"
+            "• `/amount 6200`\n"
+            "• `30700`",
+            parse_mode='Markdown'
+        )
+        return
+        
+    raw_amt = "".join(context.args).replace(',', '').replace('₹', '').replace('rs', '').strip()
+    try:
+        amt = float(raw_amt)
+    except ValueError:
+        await update.message.reply_text("❌ Invalid amount. Example: `/amount 500` or `/amount 5000`", parse_mode='Markdown')
+        return
+        
+    txs = search_transactions(exact_amount=amt, sort_by="date_desc")
+    if not txs:
+        await update.message.reply_text(f"💵 No transactions found with amount *{format_currency(amt)}*.", parse_mode='Markdown')
+        return
+        
+    total_val = sum(t['amount'] for t in txs)
+    text = f"💵 *Found {len(txs)} transaction(s) of {format_currency(amt)}* (Total: {format_currency(total_val)})\n\n"
+    for t in txs:
+        date_str = format_display_date(t['transaction_date'])
+        time_str = f" | ⏰ {t['transaction_time']}" if t['transaction_time'] and t['transaction_time'] != 'Unknown Time' else ""
+        person = t['person_name'] or "Unknown"
+        type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
+        text += (
+            f"• *{date_str}*{time_str} | {type_badge}\n"
+            f"👤 {person}\n"
+            f"💵 {format_currency(t['amount'])}\n"
+            f"Balance: {format_currency(t['balance_after'])}\n\n"
+        )
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+
 
 async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows analytics and spending summary for the current or specified month."""

@@ -70,6 +70,7 @@ def search_transactions(
     year: int = None,
     tx_type: str = "",
     person: str = "",
+    exact_amount: float = None,
     sort_by: str = "date_desc",
     limit: int = 50
 ):
@@ -77,6 +78,10 @@ def search_transactions(
     conditions = []
     params = []
     
+    if exact_amount is not None and float(exact_amount) > 0:
+        conditions.append("amount = ?")
+        params.append(float(exact_amount))
+
     if target_date:
         conditions.append("transaction_date = ?")
         params.append(str(target_date))
@@ -102,6 +107,7 @@ def search_transactions(
         conditions.append("(person_name LIKE ? OR sender_name LIKE ? OR recipient_name LIKE ? OR reference_number LIKE ? OR bank_name LIKE ? OR ocr_text LIKE ?)")
         q_pattern = f"%{query_text}%"
         params.extend([q_pattern, q_pattern, q_pattern, q_pattern, q_pattern, q_pattern])
+
         
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
     

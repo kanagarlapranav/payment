@@ -383,7 +383,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Normalize commands e.g. \date, /search, /monthly, /filter, /sort, /details
     from bot.commands import (
         edit_command, delete_command, history_command, balance_command,
-        date_command, search_command, monthly_command, filter_command, sort_command, details_command
+        date_command, search_command, monthly_command, filter_command, sort_command, details_command, amount_command
     )
     cmd_lower = text.lower()
     
@@ -404,6 +404,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     elif cmd_lower in (r'\search', 'search', '/search', 'find', '/find'):
         await search_command(update, context)
+        return
+    elif cmd_lower in (r'\amount', 'amount', '/amount', r'\amt', 'amt', '/amt'):
+        await amount_command(update, context)
         return
     elif cmd_lower in (r'\filter', 'filter', '/filter'):
         await filter_command(update, context)
@@ -433,6 +436,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.args = text.split()[1:]
         await search_command(update, context)
         return
+    elif text.startswith(r'\amount ') or text.startswith('amount ') or text.startswith(r'\amt ') or text.startswith('amt '):
+        context.args = text.split()[1:]
+        await amount_command(update, context)
+        return
     elif text.startswith(r'\monthly ') or text.startswith('monthly '):
         context.args = text.split()[1:]
         await monthly_command(update, context)
@@ -445,6 +452,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.args = [text]
             await date_command(update, context)
             return
+
+    # If the message is just a standalone number / amount (e.g. 500, 5000, ₹6200) without action keywords
+    import re
+    clean_amt_str = re.sub(r'[₹,\s]', '', cmd_lower.replace('rs', '').replace('inr', '')).strip()
+    if re.match(r'^\d+(\.\d+)?$', clean_amt_str) and not any(w in cmd_lower for w in ('paid', 'received', 'sent', 'to', 'from')) and not context.user_data.get('action'):
+        context.args = [clean_amt_str]
+        await amount_command(update, context)
+        return
+
 
     # Check active conversational state
     pending_action = context.user_data.get('action')
