@@ -116,9 +116,10 @@ from bot.keyboards import (
     get_confirmation_keyboard, get_edit_fields_keyboard, get_delete_confirm_keyboard,
     get_filter_keyboard, get_sort_keyboard
 )
-from utils.dates import parse_date, get_current_time_in_tz
+from utils.dates import parse_date, get_current_time_in_tz, format_display_date
 from utils.currency import parse_amount, format_currency
 from datetime import timedelta
+
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles button presses from inline keyboards."""
@@ -308,8 +309,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         text = f"📜 *{title}* (Total: {format_currency(total_amt)})\n\n"
         for t in txs[:10]:
             person = t['person_name'] or "Unknown"
-            date_s = t['transaction_date'] or ""
-            text += f"📅 {date_s} | {t['transaction_type']}\n👤 {person} | 💵 {format_currency(t['amount'])}\n\n"
+            date_s = format_display_date(t['transaction_date'])
+            time_str = f" | ⏰ {t['transaction_time']}" if t['transaction_time'] and t['transaction_time'] != 'Unknown Time' else ""
+            type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
+            text += f"• *{date_s}*{time_str} | {type_badge}\n👤 {person} | 💵 {format_currency(t['amount'])}\n\n"
         await query.edit_message_text(text, reply_markup=get_filter_keyboard(), parse_mode='Markdown')
 
     # 6. Sorting Callbacks
@@ -320,10 +323,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             return
             
         sort_names = {
-            "date_desc": "📅 Date (Newest first)",
-            "date_asc": "📅 Date (Oldest first)",
-            "amount_desc": "💰 Amount (Highest first)",
-            "amount_asc": "💰 Amount (Lowest first)"
+            "date_desc": "Date (Newest first)",
+            "date_asc": "Date (Oldest first)",
+            "amount_desc": "Amount (Highest first)",
+            "amount_asc": "Amount (Lowest first)"
         }
         txs = search_transactions(sort_by=sort_by, limit=10)
         if not txs:
@@ -332,15 +335,18 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             
         text = f"🔀 *Sorted by: {sort_names.get(sort_by, sort_by)}*\n\n"
         for t in txs:
-            date_s = t['transaction_date'] or "Unknown Date"
+            date_s = format_display_date(t['transaction_date'])
+            time_str = f" | ⏰ {t['transaction_time']}" if t['transaction_time'] and t['transaction_time'] != 'Unknown Time' else ""
             person = t['person_name'] or "Unknown"
+            type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
             text += (
-                f"📅 {date_s} | {t['transaction_type']}\n"
+                f"• *{date_s}*{time_str} | {type_badge}\n"
                 f"👤 {person}\n"
                 f"💵 {format_currency(t['amount'])}\n"
                 f"Balance: {format_currency(t['balance_after'])}\n\n"
             )
         await query.edit_message_text(text, reply_markup=get_sort_keyboard(), parse_mode='Markdown')
+
 
 def format_success_message(t) -> str:
     icon = "✅ Payment Recorded" if t.transaction_type == 'SENT' else "✅ Payment Received"

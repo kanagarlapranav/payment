@@ -71,3 +71,15 @@ def parse_time(time_str: str) -> str:
         raw_t = re.sub(r'(\d{2})([AP]M)', r'\1 \2', raw_t)
         return raw_t
     return time_str.strip()
+
+def format_display_date(d) -> str:
+    """Formats date cleanly as '06 Sep 2026'."""
+    if not d:
+        return "Unknown Date"
+    if isinstance(d, (datetime, date)):
+        return d.strftime("%d %b %Y")
+    parsed = parse_date(str(d))
+    if parsed:
+        return parsed.strftime("%d %b %Y")
+    return str(d)
+
