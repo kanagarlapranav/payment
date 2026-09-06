@@ -49,11 +49,36 @@ def build_application():
 
     return app
 
+import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Payment Tracker Bot is Running 24/7 OK")
+
+    def log_message(self, format, *args):
+        pass # Suppress HTTP access logs
+
+def start_health_server():
+    port = int(os.environ.get("PORT", 10000))
+    try:
+        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+        server.serve_forever()
+    except Exception as e:
+        logger.warning(f"Health server error: {e}")
+
 def main():
-    """Main entry point for local polling."""
+    """Main entry point for polling & cloud web service."""
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN is not set. Exiting.")
         return
+
+    # Start dummy HTTP server in background thread so Free Cloud Tiers (Render/Koyeb) stay alive for free
+    threading.Thread(target=start_health_server, daemon=True).start()
 
     logger.info("Initializing Telegram bot...")
     app = build_application()
@@ -62,3 +87,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
