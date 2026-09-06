@@ -80,15 +80,16 @@ def get_sort_keyboard():
     """Returns sorting options keyboard."""
     keyboard = [
         [
-            InlineKeyboardButton("📅 Date (Newest first)", callback_data="sort:date_desc"),
-            InlineKeyboardButton("📅 Date (Oldest first)", callback_data="sort:date_asc")
+            InlineKeyboardButton("💰 Amount: High ➔ Low", callback_data="sort:amount_desc"),
+            InlineKeyboardButton("💰 Amount: Low ➔ High", callback_data="sort:amount_asc")
         ],
         [
-            InlineKeyboardButton("💰 Amount (Highest first)", callback_data="sort:amount_desc"),
-            InlineKeyboardButton("💰 Amount (Lowest first)", callback_data="sort:amount_asc")
+            InlineKeyboardButton("🗓️ Date: Newest First", callback_data="sort:date_desc"),
+            InlineKeyboardButton("🗓️ Date: Oldest First", callback_data="sort:date_asc")
         ],
         [
             InlineKeyboardButton("🔙 Back to Filters", callback_data="sort:back_filters")
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
+
