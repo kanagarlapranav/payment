@@ -1,0 +1,14 @@
+services:
+  - type: worker
+    name: payment-tracker-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    autoDeploy: true
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_USER_ID
+        sync: false
+      - key: TELEGRAM_GROUP_ID
+        sync: false
