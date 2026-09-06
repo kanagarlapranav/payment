@@ -7,10 +7,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Base paths
-IS_VERCEL = os.getenv('VERCEL') == '1' or os.getenv('AWS_LAMBDA_FUNCTION_NAME') is not None
+IS_SERVERLESS = (
+    os.getenv('VERCEL') is not None
+    or os.getenv('AWS_LAMBDA_FUNCTION_NAME') is not None
+    or os.getenv('LAMBDA_TASK_ROOT') is not None
+)
 BASE_DIR = Path(__file__).resolve().parent
 
-if IS_VERCEL:
+if IS_SERVERLESS:
     DATA_DIR = Path('/tmp/data')
     IMAGE_DIR = DATA_DIR / 'images'
     LOG_DIR = Path('/tmp/logs')
@@ -21,10 +25,20 @@ else:
 
 DB_PATH = DATA_DIR / 'database.sqlite3'
 
-# Ensure directories exist
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-IMAGE_DIR.mkdir(parents=True, exist_ok=True)
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+# Ensure directories exist safely
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    DATA_DIR = Path('/tmp/data')
+    IMAGE_DIR = DATA_DIR / 'images'
+    LOG_DIR = Path('/tmp/logs')
+    DB_PATH = DATA_DIR / 'database.sqlite3'
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # Configuration
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
