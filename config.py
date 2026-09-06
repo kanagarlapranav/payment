@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Serverless environments (Vercel/Lambda) must write to /tmp
-IS_SERVERLESS = os.getenv('VERCEL') is not None or os.path.exists('/tmp') and os.name != 'nt'
+# Serverless environments (Vercel/Lambda/Netlify) must write to /tmp
+IS_SERVERLESS = bool(os.getenv('VERCEL') or os.getenv('AWS_LAMBDA_FUNCTION_NAME') or os.getenv('NETLIFY'))
 BASE_DIR = Path(__file__).resolve().parent
 
 if IS_SERVERLESS:
