@@ -9,6 +9,9 @@ env/
 
 # Database & Data
 data/*.db
+data/*.sqlite3
+*.db
+*.sqlite3
 data/images/*
 !data/images/.gitkeep
 data/*.xlsx
