@@ -9,6 +9,7 @@ from bot.commands import is_authorized
 from bot.keyboards import get_confirmation_keyboard
 from ocr.extractor import perform_ocr
 from services.transaction_service import process_transaction, commit_transaction
+from services.backup_service import backup_to_telegram
 from utils.currency import format_currency
 
 # In-memory store for pending transactions awaiting confirmation
@@ -81,6 +82,10 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if success:
                 response = format_success_message(transaction)
                 await status_msg.edit_text(response, parse_mode='Markdown')
+                try:
+                    asyncio.create_task(backup_to_telegram(context.bot))
+                except Exception:
+                    pass
             else:
                 await status_msg.edit_text("⚠️ Transaction already recorded.")
         elif confidence >= 40:
@@ -147,6 +152,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             if success:
                 response = format_success_message(transaction)
                 await query.edit_message_text(response, parse_mode='Markdown')
+                try:
+                    asyncio.create_task(backup_to_telegram(context.bot))
+                except Exception:
+                    pass
             else:
                 await query.edit_message_text("⚠️ Transaction already recorded.")
             del pending_transactions[tx_id]
@@ -234,6 +243,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         success = delete_transaction(tx_id)
         if success:
             new_bal = recalculate_all_balances()
+            try:
+                asyncio.create_task(backup_to_telegram(context.bot))
+            except Exception:
+                pass
             await query.edit_message_text(
                 f"🗑️ *Transaction deleted successfully.*\n\n"
                 f"💰 *Updated Balance:* `{format_currency(new_bal)}`",
@@ -573,6 +586,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if success:
                     response = format_success_message(transaction)
                     await update.message.reply_text(response, parse_mode='Markdown')
+                    try:
+                        asyncio.create_task(backup_to_telegram(context.bot))
+                    except Exception:
+                        pass
                 else:
                     await update.message.reply_text("⚠️ Transaction already recorded.")
                 return

@@ -12,6 +12,11 @@ def split_camel_case(text: str) -> str:
     s = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', s)
     return re.sub(r'\s+', ' ', s).strip()
 
+APP_NAME_BLACKLIST = {
+    'phonepe', 'phone pe', 'paytm', 'google pay', 'googlepay', 'gpay',
+    'bhim', 'cred', 'amazon pay', 'bank', 'upi', 'payment', 'phonepe payment'
+}
+
 def clean_person_name(name: str) -> str:
     """Cleans extracted person name by removing noise keywords and punctuation."""
     if not name or '@' in name:
@@ -19,14 +24,22 @@ def clean_person_name(name: str) -> str:
     # Remove leading/trailing non-alphanumeric except spaces
     cleaned = re.sub(r'^[^a-zA-Z0-9]+|[^a-zA-Z0-9\s.]+$', '', name)
     # Remove common noise words
-    noise = ['paid to', 'received from', 'transfer to', 'payment to', 'money sent to', 'to', 'from', 'edit', 'pay', 'view history']
+    noise = ['paid to', 'received from', 'transfer to', 'payment to', 'money sent to', 'to', 'from', 'edit', 'pay', 'view history', 'payment from']
     for n in noise:
         cleaned = re.sub(rf'^{n}\s*[:.-]*\s*', '', cleaned, flags=re.IGNORECASE)
     cleaned = split_camel_case(cleaned)
+    # Remove trailing badge letters/digits (like 'PV', '8', 'LV')
+    cleaned = re.sub(r'\s+[A-Z0-9]{1,2}$', '', cleaned)
+    # Remove trailing noise words like 'via', 'from', 'to'
+    cleaned = re.sub(r'\s+(?:via|from|to|on|using)\s*$', '', cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip()
+    
     # If it's a short noise string (like "LV" or single letter), return empty
     if len(cleaned.replace(' ', '')) <= 2 and cleaned.isupper():
         return ""
-    return cleaned.strip().title()
+    if cleaned.lower() in APP_NAME_BLACKLIST:
+        return ""
+    return cleaned.title()
 
 class BasePaymentParser(ABC):
     """Abstract base class for payment parsers."""

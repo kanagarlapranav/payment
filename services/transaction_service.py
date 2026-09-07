@@ -43,6 +43,13 @@ def commit_transaction(transaction: Transaction) -> bool:
         transaction_id = insert_transaction(transaction)
         transaction.id = transaction_id
         
+        # Keep local JSON snapshot in sync
+        try:
+            from services.backup_service import export_database_to_json
+            export_database_to_json()
+        except Exception as bkp_err:
+            logger.warning(f"Could not update local JSON backup: {bkp_err}")
+        
         logger.info(f"Transaction committed successfully. ID: {transaction_id}")
         return True
     except Exception as e:
