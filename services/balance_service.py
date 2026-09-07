@@ -59,7 +59,7 @@ def recalculate_all_balances() -> float:
         running_balance = float(row['value']) if row else 0.0
         
         # Fetch all transactions in chronological order
-        cursor.execute("SELECT id, transaction_type, amount FROM transactions ORDER BY created_at ASC, id ASC")
+        cursor.execute("SELECT id, transaction_type, amount FROM transactions ORDER BY transaction_date ASC, created_at ASC, id ASC")
         txs = cursor.fetchall()
         
         for tx in txs:
@@ -81,4 +81,11 @@ def recalculate_all_balances() -> float:
             (str(running_balance),)
         )
         conn.commit()
-        return running_balance
+        
+    try:
+        from services.backup_service import export_database_to_json
+        export_database_to_json()
+    except Exception:
+        pass
+        
+    return running_balance

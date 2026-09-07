@@ -102,7 +102,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
         
         text += (
-            f"• *{date_str}*{time_str} | {type_badge}\n"
+            f"• *{date_str}*{time_str} | {type_badge} `[ID: #{t['id']}]`\n"
             f"👤 {person}\n"
             f"💵 {format_currency(t['amount'])}\n"
             f"Balance: {format_currency(t['balance_after'])}\n\n"
@@ -369,24 +369,40 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("No transactions found to edit.")
             return
         context.user_data['action'] = 'waiting_edit_id'
+        context.user_data['recent_edit_ids'] = [t['id'] for t in transactions]
+        
+        tx_list_lines = []
+        for idx, t in enumerate(transactions, 1):
+            date_s = format_display_date(t['transaction_date'])
+            badge = "🟢" if t['transaction_type'] == 'RECEIVED' else "🔴"
+            tx_list_lines.append(f"*{idx}.* {badge} {t['person_name'] or 'Unknown'} — *{format_currency(t['amount'])}* ({date_s}) `[ID: #{t['id']}]`")
+            
+        list_text = "\n".join(tx_list_lines)
         await update.message.reply_text(
             "✏️ *Edit Transaction*\n\n"
-            "Select a transaction from the list below, or send its ID number:",
+            f"Tap a button below, or reply with the number (1-{len(transactions)}) or ID:\n\n"
+            f"{list_text}",
             reply_markup=get_transaction_selection_keyboard(transactions, 'select_edit'),
             parse_mode='Markdown'
         )
         return
         
     try:
-        tx_id = int(context.args[0].replace('#', ''))
+        raw_num = int(context.args[0].replace('#', ''))
     except ValueError:
-        await update.message.reply_text("❌ Invalid ID format. Example: `/edit 3`", parse_mode='Markdown')
+        await update.message.reply_text("❌ Invalid ID format. Example: `/edit 3` or `/edit 1`", parse_mode='Markdown')
         return
         
-    tx = get_transaction_by_id(tx_id)
+    tx = get_transaction_by_id(raw_num)
     if not tx:
-        await update.message.reply_text(f"❌ Transaction not found.")
+        # Fallback: check if raw_num was a 1-based index of recent transactions
+        recent = get_recent_transactions(limit=10)
+        if 1 <= raw_num <= len(recent):
+            tx = recent[raw_num - 1]
+    if not tx:
+        await update.message.reply_text("❌ Transaction not found.", parse_mode='Markdown')
         return
+    tx_id = tx['id']
         
     # 2. Only ID provided: show edit field buttons
     if len(context.args) == 1:
@@ -464,24 +480,39 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("No transactions found to delete.")
             return
         context.user_data['action'] = 'waiting_delete_id'
+        context.user_data['recent_delete_ids'] = [t['id'] for t in transactions]
+        
+        tx_list_lines = []
+        for idx, t in enumerate(transactions, 1):
+            date_s = format_display_date(t['transaction_date'])
+            badge = "🟢" if t['transaction_type'] == 'RECEIVED' else "🔴"
+            tx_list_lines.append(f"*{idx}.* {badge} {t['person_name'] or 'Unknown'} — *{format_currency(t['amount'])}* ({date_s}) `[ID: #{t['id']}]`")
+            
+        list_text = "\n".join(tx_list_lines)
         await update.message.reply_text(
             "🗑️ *Delete Transaction*\n\n"
-            "Select a transaction from the list below, or send its ID number:",
+            f"Tap a button below, or reply with the number (1-{len(transactions)}) or ID:\n\n"
+            f"{list_text}",
             reply_markup=get_transaction_selection_keyboard(transactions, 'select_delete'),
             parse_mode='Markdown'
         )
         return
         
     try:
-        tx_id = int(context.args[0].replace('#', ''))
+        raw_num = int(context.args[0].replace('#', ''))
     except ValueError:
-        await update.message.reply_text("❌ Invalid ID format. Example: `/delete 3`", parse_mode='Markdown')
+        await update.message.reply_text("❌ Invalid ID format. Example: `/delete 3` or `/delete 1`", parse_mode='Markdown')
         return
         
-    tx = get_transaction_by_id(tx_id)
+    tx = get_transaction_by_id(raw_num)
     if not tx:
-        await update.message.reply_text(f"❌ Transaction not found.")
+        recent = get_recent_transactions(limit=10)
+        if 1 <= raw_num <= len(recent):
+            tx = recent[raw_num - 1]
+    if not tx:
+        await update.message.reply_text("❌ Transaction not found.", parse_mode='Markdown')
         return
+    tx_id = tx['id']
         
     # Show confirmation keyboard
     date_str = tx['transaction_date'] or "Today"

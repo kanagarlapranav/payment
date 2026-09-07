@@ -43,10 +43,10 @@ def get_transaction_by_reference(reference_number: str):
         return dict(row) if row else None
 
 def get_recent_transactions(limit: int = 10):
-    """Fetches recent transactions ordered by creation date."""
+    """Fetches recent transactions ordered by transaction date and creation date."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM transactions ORDER BY created_at DESC LIMIT ?", (limit,))
+        cursor.execute("SELECT * FROM transactions ORDER BY transaction_date DESC, created_at DESC, id DESC LIMIT ?", (limit,))
         return [dict(row) for row in cursor.fetchall()]
 
 def get_transactions_by_date(target_date):
