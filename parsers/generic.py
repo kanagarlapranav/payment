@@ -52,57 +52,102 @@ class GenericParser(BasePaymentParser):
                 t.transaction_type = 'SENT'
 
         # 2. Extract Amount
-        # Strategy A: Look for currency symbols (₹, $, €, £, Rs, INR, or R prefix like R30,700)
-        amount_matches = []
-        for match in re.finditer(r'(?:[₹$€£]|Rs\.?|INR)\s*([\d,]+(?:\.\d{1,2})?)', self.raw_text, re.IGNORECASE):
-            amt = parse_amount(match.group(1))
-            if amt > 0:
-                amount_matches.append(amt)
-                
-        for match in re.finditer(r'\b[Rr]([\d,]{3,}(?:\.\d{1,2})?)\b', self.raw_text):
-            amt = parse_amount(match.group(1))
-            if amt > 0:
-                amount_matches.append(amt)
+        # Priority 1: Check for explicit words like 'Rupees Six Hundred Only', 'INR Six Hundred Only'
+        word_amount = 0.0
+        for line in self.lines:
+            if any(w in line.lower() for w in ('thousand', 'hundred', 'lakh', 'crore', 'only')) and any(w in line.lower() for w in ('rupees', 'rs', 'inr')):
+                w_amt = parse_amount(line)
+                if w_amt > 0:
+                    word_amount = w_amt
+                    break
+        if word_amount == 0.0:
+            words_match = re.search(r'(?:rupees|rs\.?|inr)\s+([a-zA-Z\s]+?)\s+only', self.raw_text, re.IGNORECASE)
+            if words_match:
+                word_amount = parse_amount(words_match.group(0))
 
-        # Strategy B: Look after "Amount", "Total", "Paid", "Received"
-        if not amount_matches:
-            for i, line in enumerate(self.lines):
-                if re.search(r'\b(amount|total)\b', line, re.IGNORECASE):
-                    # Check same line or next line
-                    amt = parse_amount(line)
+        # Helper: check if a number or line is an account number, phone, upi, or year
+        def is_ignored_number(num_str: str, line_str: str) -> bool:
+            line_l = line_str.lower()
+            if any(k in line_l for k in ('account', 'acct', 'a/c', 'ref no', 'upi ref', 'utr', 'txn')):
+                return True
+            if 'bank' in line_l and re.search(r'[-–\s]+' + re.escape(num_str) + r'\b', line_str):
+                return True
+            if re.search(r'@|\.com|\.in|ptyes|paytm|ybl|ibl|axl', line_str):
+                return True
+            if num_str in ('2023', '2024', '2025', '2026', '2027', '2028', '2029', '2030'):
+                return True
+            return False
+
+        # Priority 2: Amount associated with primary action header (e.g. 'Money Received', 'Paid Successfully')
+        header_amount = 0.0
+        for i, line in enumerate(self.lines):
+            line_l = line.lower()
+            if any(h in line_l for h in ('money received', 'payment received', 'paid successfully', 'sent successfully', 'transferred successfully', 'payment to', 'paid to', 'received from', 'transfer to', 'money sent')):
+                for offset in (0, 1, 2):
+                    if i + offset < len(self.lines):
+                        cand = self.lines[i + offset].strip()
+                        if any(w in cand.lower() for w in ('bank', 'upi', 'from', 'to', 'ref', 'rupees', 'only')):
+                            continue
+                        m = re.search(r'(?:[₹$€£]|Rs\.?|INR)?\s*([\d,]+(?:\.\d{1,2})?)', cand, re.IGNORECASE)
+                        if m:
+                            val_str = m.group(1).replace(',', '')
+                            if (val_str.isdigit() or re.match(r'^\d+\.\d{1,2}$', val_str)) and not is_ignored_number(val_str, cand):
+                                amt = float(val_str)
+                                if amt > 0:
+                                    header_amount = amt
+                                    break
+                if header_amount > 0:
+                    break
+
+        # Priority 3: Look for currency symbols (₹, $, €, £, Rs, INR, or R prefix like R30,700)
+        currency_matches = []
+        for line in self.lines:
+            for match in re.finditer(r'(?:[₹$€£]|Rs\.?|INR)\s*([\d,]+(?:\.\d{1,2})?)', line, re.IGNORECASE):
+                val_str = match.group(1).replace(',', '')
+                if not is_ignored_number(val_str, line):
+                    amt = parse_amount(match.group(1))
                     if amt > 0:
-                        amount_matches.append(amt)
-                    elif i + 1 < len(self.lines):
-                        amt = parse_amount(self.lines[i + 1])
-                        if amt > 0:
-                            amount_matches.append(amt)
+                        currency_matches.append(amt)
+            for match in re.finditer(r'\b[Rr]([\d,]{3,}(?:\.\d{1,2})?)\b', line):
+                val_str = match.group(1).replace(',', '')
+                if not is_ignored_number(val_str, line):
+                    amt = parse_amount(match.group(1))
+                    if amt > 0:
+                        currency_matches.append(amt)
 
-        # Strategy C: Look for numbers with commas (e.g. 30,700 or 1,50,000)
-        if not amount_matches:
-            for match in re.finditer(r'\b(\d{1,3}(?:,\d{2,3})+(?:\.\d{1,2})?)\b', self.raw_text):
-                amt = parse_amount(match.group(1))
+        # Priority 4: Look after "Amount", "Total"
+        labeled_matches = []
+        for i, line in enumerate(self.lines):
+            if re.search(r'\b(amount|total)\b', line, re.IGNORECASE):
+                amt = parse_amount(line)
                 if amt > 0:
-                    amount_matches.append(amt)
-
-        # Strategy D: Look for standalone numbers in conversational text (e.g. 5000, 500, 25000)
-        if not amount_matches:
-            for match in re.finditer(r'\b(\d{2,7}(?:\.\d{1,2})?)\b', self.raw_text):
-                val = match.group(1)
-                if val not in ('2023', '2024', '2025', '2026', '2027', '2028', '2029', '2030'):
-                    amt = parse_amount(val)
+                    labeled_matches.append(amt)
+                elif i + 1 < len(self.lines):
+                    amt = parse_amount(self.lines[i + 1])
                     if amt > 0:
-                        amount_matches.append(amt)
+                        labeled_matches.append(amt)
 
-        # Strategy E: Look for words like 'Rupees Six Thousand Two Hundred Only'
-        if not amount_matches:
+        # Selection of best amount:
+        if word_amount > 0:
+            t.amount = word_amount
+        elif header_amount > 0:
+            t.amount = header_amount
+        elif currency_matches:
+            t.amount = currency_matches[0]
+        elif labeled_matches:
+            t.amount = labeled_matches[0]
+        else:
+            # Fallback: standalone numbers not belonging to bank accounts or upi
+            cand_matches = []
             for line in self.lines:
-                if any(w in line.lower() for w in ('thousand', 'hundred', 'lakh', 'crore', 'rupees')):
-                    amt = parse_amount(line)
-                    if amt > 0:
-                        amount_matches.append(amt)
-
-        if amount_matches:
-            t.amount = max(amount_matches)
+                for match in re.finditer(r'\b(\d{2,7}(?:\.\d{1,2})?)\b', line):
+                    val_str = match.group(1)
+                    if not is_ignored_number(val_str, line):
+                        amt = parse_amount(val_str)
+                        if amt > 0:
+                            cand_matches.append(amt)
+            if cand_matches:
+                t.amount = cand_matches[0]
             
         # 3. Extract Reference / UTR Number
         # Common patterns: UPIRefNo:661385614715Copy, UTR: 123456789012, Ref No: 6132 2762 5054
@@ -195,18 +240,24 @@ class GenericParser(BasePaymentParser):
             # Check standalone "From"
             if re.match(r'^from\b', line_clean, re.IGNORECASE):
                 val = re.sub(r'^from\s*[:.-]*\s*', '', line_clean, flags=re.IGNORECASE).strip()
-                if not val and i + 1 < len(self.lines):
-                    val = self.lines[i + 1]
-                val = clean_person_name(val)
+                name_parts = [val] if val else []
+                if i + 1 < len(self.lines):
+                    next_line = self.lines[i + 1].strip()
+                    if not re.match(r'^(?:upi|to|from|bank|ref|a/c|account|paid|received)\b', next_line, re.IGNORECASE) and '@' not in next_line and not re.search(r'\d', next_line):
+                        name_parts.append(next_line)
+                val = clean_person_name(' '.join(name_parts))
                 if val and not t.sender_name:
                     t.sender_name = val
 
             # Check standalone "To"
             elif re.match(r'^to\b', line_clean, re.IGNORECASE):
                 val = re.sub(r'^to\s*[:.-]*\s*', '', line_clean, flags=re.IGNORECASE).strip()
-                if not val and i + 1 < len(self.lines):
-                    val = self.lines[i + 1]
-                val = clean_person_name(val)
+                name_parts = [val] if val else []
+                if i + 1 < len(self.lines):
+                    next_line = self.lines[i + 1].strip()
+                    if not re.match(r'^(?:upi|to|from|bank|ref|a/c|account|paid|received)\b', next_line, re.IGNORECASE) and '@' not in next_line and not re.search(r'\d', next_line):
+                        name_parts.append(next_line)
+                val = clean_person_name(' '.join(name_parts))
                 if val and not t.recipient_name:
                     t.recipient_name = val
 

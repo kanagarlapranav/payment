@@ -11,11 +11,24 @@ from bot.commands import (
 )
 from bot.handlers import handle_image, handle_callback_query, handle_text
 
+async def on_startup(app):
+    """Restores database state from cloud backup if needed on fresh container spins."""
+    try:
+        from services.backup_service import restore_from_telegram, export_database_to_json
+        logger.info("Checking for cloud backup on startup...")
+        restored = await restore_from_telegram(app.bot)
+        if restored:
+            logger.info("Cloud backup restored successfully on startup.")
+        else:
+            export_database_to_json()
+    except Exception as e:
+        logger.warning(f"Cloud restore check completed with notice: {e}")
+
 def build_application():
     """Builds and configures the Telegram Application."""
     setup_database()
     req = HTTPXRequest(read_timeout=60.0, write_timeout=60.0, connect_timeout=30.0, pool_timeout=60.0)
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(req).build()
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(req).post_init(on_startup).build()
 
     # Command handlers
     app.add_handler(CommandHandler("start", start_command))
@@ -40,7 +53,6 @@ def build_application():
     app.add_handler(CommandHandler("chatid", chatid_command))
     app.add_handler(CommandHandler("help", help_command))
 
-
     # Image handler (photos and documents)
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
 
@@ -53,6 +65,8 @@ def build_application():
     return app
 
 import os
+import time
+import urllib.request
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -74,14 +88,28 @@ def start_health_server():
     except Exception as e:
         logger.warning(f"Health server error: {e}")
 
+def start_keep_alive():
+    """Pings public URL every 10 minutes to prevent Render free instance from spinning down."""
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "https://payment-3-kldp.onrender.com")
+    time.sleep(30) # Initial warmup delay
+    while True:
+        try:
+            req = urllib.request.Request(render_url, headers={'User-Agent': 'KeepAliveBot/1.0'})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                logger.info(f"Keep-alive self ping to {render_url}: status {resp.status}")
+        except Exception as e:
+            logger.debug(f"Keep-alive ping notice: {e}")
+        time.sleep(600) # Ping every 10 minutes
+
 def main():
     """Main entry point for polling & cloud web service."""
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN is not set. Exiting.")
         return
 
-    # Start dummy HTTP server in background thread so Free Cloud Tiers (Render/Koyeb) stay alive for free
+    # Start HTTP server & self-ping so Free Cloud Tiers (Render/Koyeb) stay alive 24/7
     threading.Thread(target=start_health_server, daemon=True).start()
+    threading.Thread(target=start_keep_alive, daemon=True).start()
 
     logger.info("Initializing Telegram bot...")
     app = build_application()

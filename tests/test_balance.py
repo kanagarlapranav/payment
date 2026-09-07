@@ -32,5 +32,12 @@ class TestBalance(unittest.TestCase):
             self.assertEqual(t_recv.balance_after, 48000.0)
             self.assertEqual(current_balance, 48000.0)
 
+    def test_backup_roundtrip(self):
+        from services.backup_service import export_database_to_json, import_database_from_json
+        data = export_database_to_json()
+        self.assertGreaterEqual(data.get("transaction_count", 0), 4)
+        success = import_database_from_json(data_dict=data)
+        self.assertTrue(success)
+
 if __name__ == '__main__':
     unittest.main()

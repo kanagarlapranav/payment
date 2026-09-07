@@ -123,5 +123,37 @@ class TestParsers(unittest.TestCase):
         from utils.dates import get_current_time_in_tz
         self.assertEqual(t.transaction_date, get_current_time_in_tz().date() - timedelta(days=1))
 
+    def test_paytm_user_screenshot_extraction(self):
+        text = """
+        paytm
+        Money Received
+        ₹600
+        Rupees Six Hundred Only
+        Payment from PhonePe
+        From: Patchigolla Lakshmi
+        Vinay PV
+        UPI ID: 8919991810-3@ybl
+        To: Kanagarla Pranav
+        UPI ID: ******1141@ptyes 8
+        Union Bank Of India -
+        1185
+        UPI Ref No: 756482083834
+        09:57 PM, 06 Sep 2026
+        """
+        parser = get_best_parser(text)
+        self.assertIsInstance(parser, PaytmParser)
+        t = parser.parse()
+        
+        self.assertEqual(t.transaction_type, "RECEIVED")
+        self.assertEqual(t.amount, 600.0) # MUST be 600.0, NOT 1185.0
+        self.assertEqual(t.person_name, "Patchigolla Lakshmi Vinay") # MUST include wrapped surname
+        self.assertEqual(t.sender_name, "Patchigolla Lakshmi Vinay")
+        self.assertEqual(t.recipient_name, "Kanagarla Pranav")
+        self.assertEqual(t.reference_number, "756482083834")
+        self.assertEqual(t.bank_name, "Union Bank of India")
+        self.assertEqual(t.bank_account, "1185")
+        self.assertEqual(t.transaction_time, "09:57 PM")
+        self.assertEqual(t.transaction_date, date(2026, 9, 6))
+
 if __name__ == '__main__':
     unittest.main()
