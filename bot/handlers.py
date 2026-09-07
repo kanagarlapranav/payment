@@ -481,10 +481,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if pending_action == 'waiting_edit_id':
         clean_id_str = text.replace('#', '').strip()
         if clean_id_str.isdigit():
-            tx_id = int(clean_id_str)
-            tx = get_transaction_by_id(tx_id)
+            num = int(clean_id_str)
+            tx = get_transaction_by_id(num)
+            if not tx:
+                recent_ids = context.user_data.get('recent_edit_ids') or [t['id'] for t in get_recent_transactions(limit=10)]
+                if 1 <= num <= len(recent_ids):
+                    tx = get_transaction_by_id(recent_ids[num - 1])
             if tx:
+                tx_id = tx['id']
                 context.user_data.pop('action', None)
+                context.user_data.pop('recent_edit_ids', None)
                 date_str = tx['transaction_date'] or "Today"
                 person = tx['person_name'] or "Unknown"
                 msg = (
@@ -498,16 +504,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(msg, reply_markup=get_edit_fields_keyboard(tx_id), parse_mode='Markdown')
                 return
             else:
-                await update.message.reply_text("❌ Transaction not found. Please send a valid number:")
+                await update.message.reply_text("❌ Transaction not found. Please send a valid number or ID:")
                 return
                 
     elif pending_action == 'waiting_delete_id':
         clean_id_str = text.replace('#', '').strip()
         if clean_id_str.isdigit():
-            tx_id = int(clean_id_str)
-            tx = get_transaction_by_id(tx_id)
+            num = int(clean_id_str)
+            tx = get_transaction_by_id(num)
+            if not tx:
+                recent_ids = context.user_data.get('recent_delete_ids') or [t['id'] for t in get_recent_transactions(limit=10)]
+                if 1 <= num <= len(recent_ids):
+                    tx = get_transaction_by_id(recent_ids[num - 1])
             if tx:
+                tx_id = tx['id']
                 context.user_data.pop('action', None)
+                context.user_data.pop('recent_delete_ids', None)
                 date_str = tx['transaction_date'] or "Today"
                 person = tx['person_name'] or "Unknown"
                 msg = (
@@ -521,7 +533,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(msg, reply_markup=get_delete_confirm_keyboard(tx_id), parse_mode='Markdown')
                 return
             else:
-                await update.message.reply_text("❌ Transaction not found. Please send a valid number:")
+                await update.message.reply_text("❌ Transaction not found. Please send a valid number or ID:")
                 return
                 
     elif pending_action == 'waiting_edit_value':

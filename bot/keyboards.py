@@ -44,16 +44,15 @@ def get_transaction_selection_keyboard(transactions: list, action_prefix: str):
     """Returns a list of buttons for selecting a recent transaction."""
     from utils.currency import format_currency
     keyboard = []
-    for t in transactions[:6]: # Show top 6
+    for idx, t in enumerate(transactions[:6], 1): # Show top 6
         person = t['person_name'] or t['transaction_type']
-        date_str = str(t['transaction_date']) if t['transaction_date'] else ""
-        if len(date_str) > 5:
-            date_display = date_str[5:] # e.g. 09-05
-        else:
-            date_display = date_str
+        badge = "🟢" if t['transaction_type'] == 'RECEIVED' else "🔴"
         amt = format_currency(t['amount'])
-        btn_label = f"{t['transaction_type'][0]}: {person[:12]} - {amt} ({date_display})"
+        btn_label = f"{idx}. {badge} {person[:14]} - {amt}"
         keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"{action_prefix}:{t['id']}")])
+    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data=f"{action_prefix}_cancel")])
+    return InlineKeyboardMarkup(keyboard)
+
 def get_filter_keyboard():
     """Returns interactive filter options keyboard."""
     keyboard = [
