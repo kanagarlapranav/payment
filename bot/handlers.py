@@ -15,8 +15,23 @@ from utils.currency import format_currency
 # In-memory store for pending transactions awaiting confirmation
 pending_transactions = {}
 
+async def deliver_response(status_msg, message, text: str, reply_markup=None, parse_mode=None):
+    """Safely updates status_msg or sends a new reply if edit_text fails or is flood controlled."""
+    try:
+        await status_msg.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    except Exception as err:
+        logger.warning(f"Could not edit status message ({err}); falling back to new reply.")
+        try:
+            await message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except Exception:
+            # Fallback without parse_mode if formatting entity error occurred
+            try:
+                await message.reply_text(text, reply_markup=reply_markup)
+            except Exception as final_err:
+                logger.error(f"Failed to deliver message: {final_err}")
+
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles incoming images (screenshots)."""
+    """Handles incoming images (screenshots) with non-blocking OCR and resilient responses."""
     if not await is_authorized(update): return
     
     message = update.message
@@ -31,7 +46,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         return # Ignore non-images
         
-    status_msg = await message.reply_text("📥 Image received. Downloading...")
+    status_msg = await message.reply_text("🔍 Analyzing screenshot (OCR)...")
     
     try:
         # Download image with resilient timeout and retry
@@ -52,42 +67,69 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     raise dl_err
                 await asyncio.sleep(1)
         
-        await status_msg.edit_text("🔍 Analyzing screenshot (OCR)...")
-        
-        # Perform OCR
-        raw_text = perform_ocr(str(image_path))
-        if not raw_text.strip():
-            await status_msg.edit_text("❌ Could not extract any text from the image.")
+        # Send typing action to keep Telegram active without triggering edit flood control
+        try:
+            await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+        except Exception:
+            pass
+
+        # Perform OCR in background thread so asyncio event loop never freezes
+        raw_text = await asyncio.to_thread(perform_ocr, str(image_path))
+        if not raw_text or not raw_text.strip():
+            await deliver_response(status_msg, message, "❌ Could not extract any readable text from the image. Please upload a clearer screenshot.")
             return
             
-        await status_msg.edit_text("⚙️ Parsing transaction details...")
-        
         # Process Transaction
         caption = message.caption or ""
         transaction, confidence = process_transaction(raw_text, str(image_path), message_id, chat_id, caption=caption)
         
         # Basic validation
         if not transaction.amount or transaction.amount <= 0:
-            await status_msg.edit_text("⚠️ Could not detect a valid amount. Please provide a clearer screenshot or enter manually.")
+            await deliver_response(status_msg, message, "⚠️ Could not detect a valid amount. Please provide a clearer screenshot or enter manually.")
             return
             
         if not transaction.transaction_type:
-            await status_msg.edit_text(f"⚠️ Transaction type (SENT/RECEIVED) could not be determined reliably.\nAmount found: {format_currency(transaction.amount)}")
+            await deliver_response(status_msg, message, f"⚠️ Transaction type (SENT/RECEIVED) could not be determined reliably.\nAmount found: {format_currency(transaction.amount)}")
             return
             
+        # Check if already recorded (duplicate prevention with friendly informative response)
+        from database.queries import get_transaction_by_reference
+        if transaction.reference_number:
+            existing = get_transaction_by_reference(transaction.reference_number)
+            if existing:
+                date_str = format_display_date(existing['transaction_date'])
+                person = existing['person_name'] or "Unknown"
+                amt_str = format_currency(existing['amount'])
+                notice = ""
+                if abs(float(existing['amount']) - float(transaction.amount)) > 0.01:
+                    notice = f"\n⚠️ *Note:* Receipt shows *{format_currency(transaction.amount)}*, but existing record has *{amt_str}*."
+                
+                dup_text = (
+                    "ℹ️ *Transaction Already Recorded*\n\n"
+                    f"• Type: {existing['transaction_type']}\n"
+                    f"• Person: {person}\n"
+                    f"• Amount: {amt_str}\n"
+                    f"• Date: {date_str} {existing['transaction_time'] or ''}\n"
+                    f"• Reference: `{existing['reference_number']}`\n"
+                    f"• Balance After: {format_currency(existing['balance_after'])}{notice}\n\n"
+                    f"💡 To update or edit this transaction, send `/edit #{existing['id']}`."
+                )
+                await deliver_response(status_msg, message, dup_text, parse_mode='Markdown')
+                return
+
         # Confidence check
         if confidence >= 80:
             # High confidence, save automatically
             success = commit_transaction(transaction)
             if success:
                 response = format_success_message(transaction)
-                await status_msg.edit_text(response, parse_mode='Markdown')
+                await deliver_response(status_msg, message, response, parse_mode=None)
                 try:
                     asyncio.create_task(backup_to_telegram(context.bot))
                 except Exception:
                     pass
             else:
-                await status_msg.edit_text("⚠️ Transaction already recorded.")
+                await deliver_response(status_msg, message, "⚠️ Transaction already recorded.")
         elif confidence >= 40:
             # Medium confidence, ask for confirmation
             tx_id = uuid.uuid4().hex
@@ -104,13 +146,13 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Save this transaction?"
             )
             keyboard = get_confirmation_keyboard(tx_id)
-            await status_msg.edit_text(confirm_text, reply_markup=keyboard, parse_mode='Markdown')
+            await deliver_response(status_msg, message, confirm_text, reply_markup=keyboard, parse_mode='Markdown')
         else:
-            await status_msg.edit_text("❌ Confidence too low to process automatically. Please check the image.")
+            await deliver_response(status_msg, message, "❌ Confidence too low to process automatically. Please check the image.")
 
     except Exception as e:
         logger.error(f"Error handling image: {e}", exc_info=True)
-        await status_msg.edit_text(f"❌ Error processing image: {e}")
+        await deliver_response(status_msg, message, f"❌ Error processing image: {e}")
 
 from database.queries import (
     get_transaction_by_id, update_transaction, delete_transaction,
