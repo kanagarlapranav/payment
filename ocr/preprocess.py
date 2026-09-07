@@ -15,7 +15,7 @@ def preprocess_image_for_ocr(image_path: str) -> str:
             gray = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         gray = clahe.apply(gray)
-        gray = cv2.fastNlMeansDenoising(gray, h=30)
+        gray = cv2.bilateralFilter(gray, 5, 50, 50)
         processed_path = image_path.replace('.jpg', '_processed.jpg').replace('.png', '_processed.png')
         if processed_path == image_path:
             processed_path = image_path + '_processed.jpg'

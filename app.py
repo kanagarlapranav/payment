@@ -111,6 +111,10 @@ def main():
     threading.Thread(target=start_health_server, daemon=True).start()
     threading.Thread(target=start_keep_alive, daemon=True).start()
 
+    # Pre-warm OCR engine in background to ensure zero cold-start delay for users
+    from ocr.engine import warmup_ocr
+    threading.Thread(target=warmup_ocr, daemon=True).start()
+
     logger.info("Initializing Telegram bot...")
     app = build_application()
     logger.info("Bot is running. Press Ctrl+C to stop.")
