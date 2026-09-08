@@ -125,8 +125,14 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 person = existing['person_name'] or "Unknown"
                 amt_str = format_currency(existing['amount'])
                 notice = ""
+                dup_markup = None
                 if abs(float(existing['amount']) - float(transaction.amount)) > 0.01:
-                    notice = f"\n⚠️ *Note:* Receipt shows *{format_currency(transaction.amount)}*, but existing record has *{amt_str}*."
+                    notice = f"\n\n⚠️ *Note:* Receipt shows *{format_currency(transaction.amount)}*, but existing record has *{amt_str}*."
+                    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                    dup_markup = InlineKeyboardMarkup([
+                        [InlineKeyboardButton(f"🔄 Correct to {format_currency(transaction.amount)}", callback_data=f"correct_amount:{existing['id']}:{transaction.amount}")],
+                        [InlineKeyboardButton("🗑️ Delete Old Record", callback_data=f"delete_confirm:{existing['id']}")]
+                    ])
                 
                 dup_text = (
                     "ℹ️ *Transaction Already Recorded*\n\n"
@@ -138,7 +144,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"• Balance After: {format_currency(existing['balance_after'])}{notice}\n\n"
                     f"💡 To update or edit this transaction, send `/edit #{existing['id']}`."
                 )
-                await deliver_response(status_msg, message, dup_text, parse_mode='Markdown')
+                await deliver_response(status_msg, message, dup_text, reply_markup=dup_markup, parse_mode='Markdown')
                 return
 
         # Confidence check
@@ -324,6 +330,30 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "delete_cancel":
         context.user_data.pop('action', None)
         await query.edit_message_text("❌ Deletion cancelled.")
+
+    # 4b. Correct Amount for Existing Transaction
+    elif action == "correct_amount":
+        tx_id = int(parts[1])
+        new_amt = float(parts[2])
+        tx = get_transaction_by_id(tx_id)
+        if not tx:
+            await query.edit_message_text("❌ Transaction not found.")
+            return
+        success = update_transaction(tx_id, {'amount': new_amt})
+        if success:
+            new_bal = recalculate_all_balances()
+            try:
+                asyncio.create_task(backup_to_telegram(context.bot))
+            except Exception:
+                pass
+            await query.edit_message_text(
+                f"✅ *Transaction updated successfully!*\n\n"
+                f"• Amount corrected to: *{format_currency(new_amt)}*\n"
+                f"💰 *Updated Current Balance:* `{format_currency(new_bal)}`",
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text("❌ Failed to update transaction.")
 
     # 5. Interactive Filter Callbacks
     elif action == "filter":

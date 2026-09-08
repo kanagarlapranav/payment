@@ -155,5 +155,62 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(t.transaction_time, "09:57 PM")
         self.assertEqual(t.transaction_date, date(2026, 9, 6))
 
+    def test_bhim_user_screenshot_extraction(self):
+        text = """
+        1:540
+        todayat1:45PM
+        ePaid
+        ?4,000.00
+        Paidin1.38Seconds
+        Banking Name
+        KANAGARLASAIAKHIL
+        Transaction ID
+        Date& Time
+        134446412863
+        8th Sep 26, 01:44
+        pm
+        To UPI ID
+        From UPI ID
+        .****6729@ybl
+        *1141@upi
+        Debited account
+        Remarks
+        NOREMARKS
+        State Bank Of India
+        X7751
+        Payment instrument
+        Payment mode
+        Bankaccount
+        Send Money
+        Process details
+        Payment initiated by Kanagarla Pranav
+        Paymenttransferred from Kanagarla Pranav's
+        account
+        Payment received by KANAGARLA SAI
+        AKHIL
+        Hide details ↑
+        Share
+        PaymentdoneviaBHIMPaymentsApp
+        Get
+        upto300cashbackeverymonthwithBHIMApp.
+        Downloadnow:https://bhim.onelink.me/CoHB
+        /DownloadNow
+        """
+        parser = get_best_parser(text)
+        from parsers.bhim import BhimParser
+        self.assertIsInstance(parser, BhimParser)
+        t = parser.parse()
+        
+        self.assertEqual(t.transaction_type, "SENT")
+        self.assertEqual(t.amount, 4000.0)
+        self.assertEqual(t.recipient_name, "Kanagarla Sai Akhil")
+        self.assertEqual(t.sender_name, "Kanagarla Pranav")
+        self.assertEqual(t.reference_number, "134446412863")
+        self.assertEqual(t.bank_name, "State Bank Of India")
+        self.assertEqual(t.bank_account, "X7751")
+        self.assertEqual(t.payment_app, "BHIM")
+        self.assertEqual(t.transaction_time, "01:44 PM")
+        self.assertEqual(t.transaction_date, date(2026, 9, 8))
+
 if __name__ == '__main__':
     unittest.main()

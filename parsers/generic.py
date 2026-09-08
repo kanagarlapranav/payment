@@ -31,6 +31,12 @@ class GenericParser(BasePaymentParser):
         t = Transaction()
         t.ocr_text = self.raw_text
         text_lower = self.raw_text.lower()
+
+        # Detect BHIM forwarded messages that don't contain the payment amount.
+        # BHIM shares text like "Payment done via BHIM Payments App" with
+        # transaction details but NOT the amount — the amount only appears
+        # in the BHIM app UI header which isn't part of the forwarded text.
+        is_bhim_text = 'bhim' in text_lower and ('payment done via' in text_lower or 'banking name' in text_lower)
         
         # 1. Determine Type
         # Strong received patterns
@@ -84,7 +90,10 @@ class GenericParser(BasePaymentParser):
         # Helper: check if a number or line is an account number, phone, upi, or year
         def is_ignored_number(num_str: str, line_str: str) -> bool:
             line_l = line_str.lower()
-            if any(k in line_l for k in ('account', 'acct', 'a/c', 'ref no', 'upi ref', 'utr', 'txn')):
+            if any(k in line_l for k in ('account', 'acct', 'a/c', 'ref no', 'upi ref', 'utr', 'txn', 'kb/s', 'mb/s', 'gb/s', 'g+', '5g', '4g', 'lte', '%')):
+                return True
+            # Ignore phone status bar clock times like 1:54, 12:37
+            if re.search(r'\b\d{1,2}:\d{2}\b', line_str):
                 return True
             if 'bank' in line_l and re.search(r'[-–\s]+' + re.escape(num_str) + r'\b', line_str):
                 return True
@@ -94,21 +103,21 @@ class GenericParser(BasePaymentParser):
                 return True
             return False
 
-        # Priority 2: Amount associated with primary action header (e.g. 'Money Received', 'Paid Successfully')
-        # Also catches BHIM-style headers where "Paid" appears alone and ₹4,000.00 is on the next line.
+        # Priority 2: Amount associated with primary action header (e.g. 'Money Received', 'Paid Successfully', 'Paid')
         header_keywords = (
             'money received', 'payment received', 'paid successfully',
             'sent successfully', 'transferred successfully', 'payment to',
             'paid to', 'received from', 'transfer to', 'money sent',
         )
-        # Include single-word headers that BHIM uses (e.g. a line that is
-        # exactly "Paid" or "Received" or starts with "₹" / currency symbol)
         header_amount = 0.0
         for i, line in enumerate(self.lines):
             line_l = line.lower().strip()
+            # Skip process details / narration lines
+            if any(p in line_l for p in ('initiated by', 'transferred from', 'received by', 'narration', 'upi/dr', 'upi/cr', 'description')):
+                continue
             is_header = any(h in line_l for h in header_keywords)
-            # BHIM-style: a line that is just "Paid" or "Received" (possibly with emoji/icon text)
-            if not is_header and re.match(r'^[^a-z]*(?:paid|received)[^a-z]*$', line_l):
+            # Catch lines like "ePaid", "✔ Paid", "Paid in 1.38s", "Paid"
+            if not is_header and re.search(r'\b(?:paid|received|sent|transferred)\b', line_l):
                 is_header = True
             if is_header:
                 for offset in (0, 1, 2, 3):
@@ -116,35 +125,36 @@ class GenericParser(BasePaymentParser):
                         cand = self.lines[i + offset].strip()
                         if self._is_promo_or_balance_line(cand):
                             continue
-                        if any(w in cand.lower() for w in ('bank', 'upi', 'from', 'to', 'ref', 'rupees', 'only')):
+                        if offset > 0 and any(w in cand.lower() for w in ('account', 'instrument', 'initiated', 'transferred from', 'seconds', 'narration')):
                             continue
-                        m = re.search(r'(?:[₹$€£]|Rs\.?|INR)?\s*([\d,]+(?:\.\d{1,2})?)', cand, re.IGNORECASE)
-                        if m:
+                        for m in re.finditer(r'(?:[₹$€£?]|Rs\.?|INR|[RrFf](?=\d))?\s*(\b(?:\d{1,3}(?:,\d{2,3})+|\d+)(?:\.\d{1,2})?\b)', cand, re.IGNORECASE):
                             val_str = m.group(1).replace(',', '')
-                            if (val_str.isdigit() or re.match(r'^\d+\.\d{1,2}$', val_str)) and not is_ignored_number(val_str, cand):
-                                amt = float(val_str)
-                                if amt > 0:
+                            if not is_ignored_number(val_str, cand):
+                                amt = parse_amount(m.group(0))
+                                if amt >= 1.0:
                                     header_amount = amt
                                     break
+                        if header_amount > 0:
+                            break
                 if header_amount > 0:
                     break
 
-        # Priority 3: Look for currency symbols (₹, $, €, £, Rs, INR, or R prefix like R30,700)
+        # Priority 3: Look for currency symbols (₹, $, €, £, Rs, INR, ?, or R/F prefix like ?4,000.00, R30,700)
         # Skip promotional/ad lines so we don't pick up amounts like "₹300 cashback"
         currency_matches = []
         for line in self.lines:
             if self._is_promo_or_balance_line(line):
                 continue
-            for match in re.finditer(r'(?:[₹$€£]|Rs\.?|INR)\s*([\d,]+(?:\.\d{1,2})?)', line, re.IGNORECASE):
+            for match in re.finditer(r'(?:[₹$€£?]|Rs\.?|INR)\s*(\b(?:\d{1,3}(?:,\d{2,3})+|\d+)(?:\.\d{1,2})?\b)', line, re.IGNORECASE):
                 val_str = match.group(1).replace(',', '')
                 if not is_ignored_number(val_str, line):
-                    amt = parse_amount(match.group(1))
+                    amt = parse_amount(match.group(0))
                     if amt > 0:
                         currency_matches.append(amt)
-            for match in re.finditer(r'\b[Rr]([\d,]{3,}(?:\.\d{1,2})?)\b', line):
+            for match in re.finditer(r'\b[RrFf](\b(?:\d{1,3}(?:,\d{2,3})+|\d+)(?:\.\d{1,2})?\b)', line):
                 val_str = match.group(1).replace(',', '')
                 if not is_ignored_number(val_str, line):
-                    amt = parse_amount(match.group(1))
+                    amt = parse_amount(match.group(0))
                     if amt > 0:
                         currency_matches.append(amt)
 
@@ -169,23 +179,11 @@ class GenericParser(BasePaymentParser):
         elif header_amount > 0:
             t.amount = header_amount
         elif currency_matches:
-            # Use the largest currency-prefixed amount (the real payment
-            # amount is almost always the largest one on screen).
             t.amount = max(currency_matches)
         elif labeled_matches:
             t.amount = max(labeled_matches)
         else:
-            # Fallback: standalone numbers not belonging to bank accounts or upi
-            cand_matches = []
-            for line in self.lines:
-                for match in re.finditer(r'\b(\d{2,7}(?:\.\d{1,2})?)\b', line):
-                    val_str = match.group(1)
-                    if not is_ignored_number(val_str, line):
-                        amt = parse_amount(val_str)
-                        if amt > 0:
-                            cand_matches.append(amt)
-            if cand_matches:
-                t.amount = cand_matches[0]
+            t.amount = 0.0
             
         # 3. Extract Reference / UTR Number
         # Common patterns: UPIRefNo:661385614715Copy, UTR: 123456789012, Ref No: 6132 2762 5054

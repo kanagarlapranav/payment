@@ -8,7 +8,7 @@ class PhonePeParser(GenericParser):
     
     def can_parse(self) -> bool:
         text_lower = self.raw_text.lower()
-        if "paytm" in text_lower:
+        if "paytm" in text_lower or "bhim" in text_lower or "banking name" in text_lower:
             return False
         return "phonepe" in text_lower or "@ybl" in text_lower or "@ibl" in text_lower or "@axl" in text_lower
 
