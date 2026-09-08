@@ -28,27 +28,9 @@ async def is_authorized(update: Update) -> bool:
     return False
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Sends a welcome message and instructions."""
+    """Sends a welcome message and comprehensive help instructions."""
     if not await is_authorized(update): return
-    
-    welcome_text = (
-        "👋 Welcome to the Personal Payment Tracker!\n\n"
-        "Send screenshots or text messages to track expenses automatically.\n\n"
-        "📊 *Main Commands:*\n"
-        "/balance - Current balance & today's summary\n"
-        "/history - Clean list of recent transactions\n"
-        "/date <date> - Transactions on a specific date\n"
-        "/search <name> - Search by person or keyword\n"
-        "/filter - Interactive filtering & sorting menu\n"
-        "/monthly - Monthly spending & savings analytics\n"
-        "/details - View transactions with IDs & full details\n\n"
-        "⚙️ *Management:*\n"
-        "/edit - Interactively edit a transaction\n"
-        "/delete - Interactively delete a transaction\n"
-        "/setbalance <amt> - Set starting balance\n"
-        "/export - Download full Excel sheet"
-    )
-    await update.message.reply_text(welcome_text, parse_mode='Markdown')
+    await help_command(update, context)
 
 async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Returns the chat ID for group configuration."""
@@ -56,8 +38,44 @@ async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"This chat's ID is: `{chat_id}`", parse_mode='Markdown')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays the complete, comprehensive guide of everything the bot can do."""
     if not await is_authorized(update): return
-    await start_command(update, context)
+    
+    help_text = (
+        "👑 *Payment Tracker Bot — Complete Guide*\n\n"
+        "Automatically log expenses, scan receipts from any UPI app, track balances, and generate financial statements.\n\n"
+        "📸 *1. Receipt Upload & Scanning (OCR)*\n"
+        "• Send a *screenshot* or *shared receipt* (image + text caption) from any app:\n"
+        "  `BHIM`, `Paytm`, `PhonePe`, `Google Pay`, `CRED`, `Super.money`, `NaviPay`, `YONO SBI`, `Union EASE / Vyom`.\n"
+        "• The bot instantly extracts Amount, Person, Date, Bank, & UTR Ref No.\n\n"
+        "💬 *2. Natural Text Tracking*\n"
+        "• Simply type what you spent or received:\n"
+        "  `Paid 500 to Ramesh`\n"
+        "  `Received 6200 from Johnson`\n"
+        "  `Paid 5000 to Balaji yesterday`\n\n"
+        "📊 *3. Balance & Daily Summary*\n"
+        "• `/balance` — Current balance, total sent/received today & net flow\n"
+        "• `/today` — Today's quick financial summary\n\n"
+        "📜 *4. History & Transaction Lookup*\n"
+        "• `/history` — Clean list of recent transactions with dates & amounts\n"
+        "• `/details` (or `/ids`) — Detailed view with database IDs & UTR numbers\n"
+        "• `/date <date>` — View transactions on a specific date (e.g. `/date yesterday` or `/date 06 Sep 2026`)\n"
+        "• `/search <query>` — Search by person name, bank, or UTR (e.g. `/search Balaji`)\n"
+        "• `/amount <number>` — Search by exact amount (e.g. `/amount 5000` or simply type `5000`)\n\n"
+        "📈 *5. Analytics & Organization*\n"
+        "• `/monthly` (or `/stats`) — Monthly total spent, income, net savings & top recipient\n"
+        "• `/filter` — Interactive filter buttons (Today, Yesterday, This Month, Sent, Received)\n"
+        "• `/sort` — Interactive sorting menu (Amount High ➔ Low, Low ➔ High, Date)\n\n"
+        "⚙️ *6. Management & Edits*\n"
+        "• `/edit` — Interactive 1-tap menu to edit amount, name, date, type, or UTR\n"
+        "• `/delete` — Interactive 1-tap menu to delete any record & auto-recalculate balance\n"
+        "• `/setbalance <amt>` — Set starting balance (e.g. `/setbalance 50000`)\n\n"
+        "📄 *7. Reports & Export*\n"
+        "• `/export` (or `/report`, `/statement`) — Download official **PDF Statement** or **Excel Sheet (.xlsx)**\n\n"
+        "☁️ *Cloud Reliability:*\n"
+        "• Every transaction, edit, and deletion is automatically backed up to Telegram and synced 24/7 across server restarts."
+    )
+    await update.message.reply_text(help_text, parse_mode='Markdown')
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update): return
