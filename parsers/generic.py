@@ -299,6 +299,32 @@ class GenericParser(BasePaymentParser):
                 if val and not t.recipient_name:
                     t.recipient_name = val
 
+            # BHIM-style: "Banking Name" followed by the person's name on the next line
+            if re.match(r'^banking\s*name\b', line_clean, re.IGNORECASE):
+                if i + 1 < len(self.lines):
+                    next_line = self.lines[i + 1].strip()
+                    # The next line should be a name (all letters/spaces), not a field label
+                    if next_line and re.match(r'^[a-zA-Z\s.]+$', next_line) and len(next_line) > 2:
+                        val = clean_person_name(next_line)
+                        if val:
+                            if t.transaction_type == 'SENT' and not t.recipient_name:
+                                t.recipient_name = val
+                            elif t.transaction_type == 'RECEIVED' and not t.sender_name:
+                                t.sender_name = val
+                            elif not t.person_name:
+                                t.person_name = val
+
+            # BHIM-style: "Payment initiated by <Name>" or "Payment received by <Name>"
+            initiated_match = re.search(r"payment\s+(?:initiated|transferred|received)\s+(?:by|from)\s+([a-zA-Z\s.]+?)(?:\s*'s|\s*$)", line_clean, re.IGNORECASE)
+            if initiated_match:
+                val = clean_person_name(initiated_match.group(1))
+                if val:
+                    # "Payment initiated by" = the sender (you), "Payment received by" = recipient
+                    if 'received by' in line_clean.lower() and not t.recipient_name:
+                        t.recipient_name = val
+                    elif 'initiated' in line_clean.lower() and not t.sender_name:
+                        t.sender_name = val
+
         # 6. Extract Bank and Account Information
         for i, line in enumerate(self.lines):
             line_clean = line.strip()

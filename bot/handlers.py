@@ -75,13 +75,23 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Perform OCR in background thread so asyncio event loop never freezes
         raw_text = await asyncio.to_thread(perform_ocr, str(image_path))
+
+        # Delete the image immediately after OCR — text is extracted, the file
+        # is no longer needed.  This saves disk space on Render's free plan.
+        try:
+            if os.path.exists(image_path):
+                os.remove(image_path)
+                logger.info(f"Cleaned up image after OCR: {image_path}")
+        except OSError as cleanup_err:
+            logger.warning(f"Could not delete image {image_path}: {cleanup_err}")
+
         if not raw_text or not raw_text.strip():
             await deliver_response(status_msg, message, "❌ Could not extract any readable text from the image. Please upload a clearer screenshot.")
             return
             
         # Process Transaction
         caption = message.caption or ""
-        transaction, confidence = process_transaction(raw_text, str(image_path), message_id, chat_id, caption=caption)
+        transaction, confidence = process_transaction(raw_text, "", message_id, chat_id, caption=caption)
         
         # Basic validation
         if not transaction.amount or transaction.amount <= 0:
