@@ -355,6 +355,18 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             await query.edit_message_text("❌ Failed to update transaction.")
 
+    # 4c. Export Format Selection (PDF / Excel)
+    elif action == "export_file":
+        fmt = parts[1]
+        if fmt == "pdf":
+            from bot.commands import send_pdf_report
+            await query.edit_message_text("⏳ Generating official PDF statement...")
+            await send_pdf_report(query.message.chat, context.bot)
+        elif fmt == "excel":
+            from bot.commands import send_excel_report
+            await query.edit_message_text("⏳ Generating Excel spreadsheet...")
+            await send_excel_report(query.message.chat, context.bot)
+
     # 5. Interactive Filter Callbacks
     elif action == "filter":
         filter_type = parts[1]

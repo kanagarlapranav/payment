@@ -23,9 +23,14 @@ def get_rapid_ocr_engine():
 
 
 def warmup_ocr():
-    """Pre-warms the OCR model in a background thread during startup."""
+    """Pre-warms the OCR model in a background thread during startup so first request has zero cold-start delay."""
     try:
-        get_rapid_ocr_engine()
+        engine = get_rapid_ocr_engine()
+        if engine:
+            import numpy as np
+            dummy = np.ones((64, 64, 3), dtype=np.uint8) * 255
+            engine(dummy)
+            logger.info("OCR model pre-warmed successfully with initial inference.")
     except Exception as e:
         logger.debug(f"OCR warmup notice: {e}")
 
