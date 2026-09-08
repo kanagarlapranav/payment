@@ -55,10 +55,10 @@ def parse_amount(amount_str: str) -> float:
             return w_amt
 
     # 2. Try numeric parsing
-    cleaned = re.sub(r'^[₹$€£]\s*', '', raw_str)
+    cleaned = re.sub(r'^[^\d₹$€£?RsINRinr]*[₹$€£?]\s*', '', raw_str, flags=re.IGNORECASE)
     cleaned = re.sub(r'^(?:Rs\.?|INR|rupees?)\s*', '', cleaned, flags=re.IGNORECASE)
-    # Handle OCR artifact where ₹ is read as 'R' or 'r' right before digits e.g. R30,700
-    cleaned = re.sub(r'^[Rr](?=\d)', '', cleaned)
+    # Handle OCR artifact where ₹ is read as 'R', 'r', 'F', 'f' right before digits e.g. R30,700, F4000
+    cleaned = re.sub(r'^[RrFf](?=\d)', '', cleaned)
     
     # Remove commas
     cleaned = cleaned.replace(',', '').replace(' ', '')

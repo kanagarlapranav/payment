@@ -63,12 +63,15 @@ def parse_time(time_str: str) -> str:
     if not time_str:
         return ""
     
-    # Simple regex to find time-like patterns: e.g. 10:02AM, 10:02 AM, 10.02 AM
-    match = re.search(r'(\d{1,2}[:.]\d{2}(?::\d{2})?\s?(?:[aApP][mM])?)', time_str)
+    # Collapse newlines and multiple spaces to a single space
+    time_str = re.sub(r'\s+', ' ', time_str).strip()
+    
+    # Regex to find time-like patterns: valid hours (1-12 or 00-23)
+    match = re.search(r'(\b(?:0?[1-9]|1[0-2]|2[0-3])[:.]\d{2}(?::\d{2})?\s*(?:[aApP][mM])?)', time_str)
     if match:
         raw_t = match.group(1).upper().replace('.', ':').strip()
-        # Add space before AM/PM if missing (e.g. 10:02AM -> 10:02 AM)
-        raw_t = re.sub(r'(\d{2})([AP]M)', r'\1 \2', raw_t)
+        # Ensure single space before AM/PM (e.g. 10:02AM -> 10:02 AM)
+        raw_t = re.sub(r'(\d{2})\s*([AP]M)', r'\1 \2', raw_t)
         return raw_t
     return time_str.strip()
 
