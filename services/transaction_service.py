@@ -5,12 +5,31 @@ from services.balance_service import update_balance_for_transaction
 from services.duplicate_service import is_duplicate
 from config import logger
 
+_PROMO_PATTERNS = (
+    'cashback', 'download now', 'onelink', 'playstore', 'appstore',
+    'get up to', 'win up to', 'scratch card', 'refer and earn',
+    'invite and earn', 'install now', 'bit.ly/', 'goo.gl/',
+)
+
+def _strip_promo_lines(text: str) -> str:
+    """Removes promotional / ad lines so their amounts don't pollute parsing."""
+    cleaned = []
+    for line in text.split('\n'):
+        ll = line.lower()
+        if any(kw in ll for kw in _PROMO_PATTERNS):
+            continue
+        cleaned.append(line)
+    return '\n'.join(cleaned)
+
+
 def process_transaction(raw_text: str, image_path: str, message_id: str, chat_id: str, caption: str = "") -> tuple[Transaction, int]:
     """
     Core pipeline: Parses text, evaluates confidence, checks duplicates, updates balance, and saves.
     Returns: (Transaction object, confidence score)
     """
     full_text = f"{raw_text}\n{caption}".strip() if caption else raw_text
+    # Strip promotional/ad lines BEFORE parsing so promo amounts (e.g. "₹300 cashback") are never seen
+    full_text = _strip_promo_lines(full_text)
     logger.info("Selecting parser...")
     parser = get_best_parser(full_text)
     logger.info(f"Selected parser: {parser.__class__.__name__}")
