@@ -21,6 +21,17 @@ async def on_startup(app):
             logger.info("Cloud backup restored successfully on startup.")
         else:
             export_database_to_json()
+        # Clean up any leftover temporary images from prior runs
+        try:
+            from config import IMAGE_DIR
+            for f in os.listdir(IMAGE_DIR):
+                if f != '.gitkeep':
+                    p = os.path.join(IMAGE_DIR, f)
+                    if os.path.isfile(p):
+                        os.remove(p)
+            logger.info("Cleaned up any stray temporary images.")
+        except Exception as e:
+            logger.debug(f"Image cleanup notice: {e}")
     except Exception as e:
         logger.warning(f"Cloud restore check completed with notice: {e}")
 
@@ -50,6 +61,8 @@ def build_application():
     app.add_handler(CommandHandler("delete", delete_command))
     app.add_handler(CommandHandler("setbalance", setbalance_command))
     app.add_handler(CommandHandler("export", export_command))
+    app.add_handler(CommandHandler("report", export_command))
+    app.add_handler(CommandHandler("statement", export_command))
     app.add_handler(CommandHandler("chatid", chatid_command))
     app.add_handler(CommandHandler("help", help_command))
 

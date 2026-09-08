@@ -541,22 +541,73 @@ async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except ValueError:
         await update.message.reply_text("❌ Invalid amount format. Example: /setbalance 50000")
 
-async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_authorized(update): return
-    
-    await update.message.reply_text("Generating Excel report...")
+async def send_pdf_report(chat, bot):
+    from services.export_service import generate_pdf_statement
+    export_path = DATA_DIR / "Payment_Tracker_Statement.pdf"
+    try:
+        generate_pdf_statement(str(export_path))
+        with open(export_path, 'rb') as f:
+            await bot.send_document(
+                chat_id=chat.id,
+                document=f,
+                filename="Payment_Tracker_Statement.pdf",
+                caption="📄 *Here is your official PDF Account Statement.*",
+                parse_mode='Markdown'
+            )
+    except Exception as e:
+        logger.error(f"PDF Export error: {e}", exc_info=True)
+        await bot.send_message(chat_id=chat.id, text="❌ Failed to generate PDF statement.")
+    finally:
+        if os.path.exists(export_path):
+            try: os.remove(export_path)
+            except OSError: pass
+
+async def send_excel_report(chat, bot):
+    from services.export_service import generate_excel_report
     export_path = DATA_DIR / "transactions_export.xlsx"
-    
     try:
         generate_excel_report(str(export_path))
         with open(export_path, 'rb') as f:
-            await update.message.reply_document(
+            await bot.send_document(
+                chat_id=chat.id,
                 document=f,
                 filename="transactions_export.xlsx",
-                caption="📊 Here is your transactions export."
+                caption="📊 *Here is your transactions Excel spreadsheet.*",
+                parse_mode='Markdown'
             )
-        # Cleanup
-        os.remove(export_path)
     except Exception as e:
-        logger.error(f"Export error: {e}")
-        await update.message.reply_text("❌ Failed to generate export.")
+        logger.error(f"Excel Export error: {e}", exc_info=True)
+        await bot.send_message(chat_id=chat.id, text="❌ Failed to generate Excel export.")
+    finally:
+        if os.path.exists(export_path):
+            try: os.remove(export_path)
+            except OSError: pass
+
+async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Exports transactions as a PDF Statement or Excel spreadsheet."""
+    if not await is_authorized(update): return
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    arg = (context.args[0].lower() if context.args else "")
+
+    if arg in ('pdf', 'statement', 'doc'):
+        await update.message.reply_text("⏳ Generating PDF statement...")
+        await send_pdf_report(update.effective_chat, context.bot)
+        return
+    elif arg in ('excel', 'xlsx', 'sheet'):
+        await update.message.reply_text("⏳ Generating Excel spreadsheet...")
+        await send_excel_report(update.effective_chat, context.bot)
+        return
+
+    # Interactive format selection
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📄 PDF Statement", callback_data="export_file:pdf"),
+            InlineKeyboardButton("📊 Excel Sheet", callback_data="export_file:excel")
+        ]
+    ])
+    await update.message.reply_text(
+        "📊 *Export Transactions & Reports*\n\nChoose your preferred format below:",
+        reply_markup=keyboard,
+        parse_mode='Markdown'
+    )
