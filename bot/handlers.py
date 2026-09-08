@@ -73,8 +73,22 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        # Perform OCR in background thread so asyncio event loop never freezes
-        raw_text = await asyncio.to_thread(perform_ocr, str(image_path))
+        # Perform OCR in background thread with a timeout so it can't hang forever
+        try:
+            raw_text = await asyncio.wait_for(
+                asyncio.to_thread(perform_ocr, str(image_path)),
+                timeout=60.0  # Hard 60-second limit
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"OCR timed out after 60s on {image_path}")
+            await deliver_response(status_msg, message, "⏱️ OCR took too long. The image might be too large or complex. Please try a clearer/smaller screenshot.")
+            # Clean up image on timeout too
+            try:
+                if os.path.exists(image_path):
+                    os.remove(image_path)
+            except OSError:
+                pass
+            return
 
         # Delete the image immediately after OCR — text is extracted, the file
         # is no longer needed.  This saves disk space on Render's free plan.

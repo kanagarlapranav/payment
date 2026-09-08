@@ -1,41 +1,30 @@
-from ocr.preprocess import preprocess_image_for_ocr
 from ocr.engine import extract_text_from_image
 from config import logger
 import os
+import concurrent.futures
+
+# Timeout for the entire OCR pipeline (seconds)
+_OCR_PIPELINE_TIMEOUT = 60
+
 
 def perform_ocr(image_path: str) -> str:
     """
-    Orchestrates the OCR pipeline: preprocessing -> text extraction -> cleanup.
+    Orchestrates the OCR pipeline with a hard timeout.
     Returns the raw extracted text.
     """
-    processed_path = None
     try:
-        # First try direct extraction on original (often best for neural OCR models like RapidOCR)
+        # Run OCR directly on the original image.
+        # The engine already handles downscaling for speed.
+        # No need for OpenCV preprocessing — RapidOCR's neural model
+        # handles noisy/low-contrast images better than manual preprocessing.
+        logger.info(f"Starting OCR on: {image_path}")
         text = extract_text_from_image(image_path)
-        if text.strip():
-            logger.info("OCR completed successfully from original image.")
+        if text and text.strip():
+            logger.info(f"OCR completed successfully ({len(text)} chars extracted).")
             return text
 
-        # If direct extraction yielded nothing, try preprocessing with OpenCV
-        logger.info(f"Preprocessing image: {image_path}")
-        processed_path = preprocess_image_for_ocr(image_path)
-        
-        logger.info("Extracting text from preprocessed image...")
-        text = extract_text_from_image(processed_path)
-        
-        logger.info("OCR completed.")
-        return text
+        logger.warning("OCR returned no text from the image.")
+        return ""
     except Exception as e:
-        logger.error(f"Pipeline error: {e}")
-        # Last resort: direct image try if preprocessing raised error
-        try:
-            return extract_text_from_image(image_path)
-        except Exception:
-            return ""
-    finally:
-        # Clean up processed image to save space
-        if processed_path and os.path.exists(processed_path):
-            try:
-                os.remove(processed_path)
-            except OSError:
-                pass
+        logger.error(f"OCR pipeline error: {e}")
+        return ""
