@@ -11,6 +11,22 @@ class GenericParser(BasePaymentParser):
         # Always return True as this is the fallback
         return True
 
+    # Lines containing these keywords are promotional/ad text and should be
+    # excluded from amount extraction so we don't pick up amounts like
+    # "Get up to ₹300 cashback" instead of the real payment amount.
+    PROMO_KEYWORDS = (
+        'cashback', 'download', 'offer', 'coupon', 'reward', 'earn',
+        'get up to', 'win up to', 'scratch card', 'bonus', 'promo',
+        'install', 'invite', 'refer', 'onelink', 'playstore', 'appstore',
+        'balance before', 'balance after', 'closing balance', 'available balance',
+    )
+
+    @staticmethod
+    def _is_promo_or_balance_line(line: str) -> bool:
+        """Returns True if the line is promotional/ad text or a balance line."""
+        ll = line.lower()
+        return any(kw in ll for kw in GenericParser.PROMO_KEYWORDS)
+
     def parse(self) -> Transaction:
         t = Transaction()
         t.ocr_text = self.raw_text
@@ -79,13 +95,27 @@ class GenericParser(BasePaymentParser):
             return False
 
         # Priority 2: Amount associated with primary action header (e.g. 'Money Received', 'Paid Successfully')
+        # Also catches BHIM-style headers where "Paid" appears alone and ₹4,000.00 is on the next line.
+        header_keywords = (
+            'money received', 'payment received', 'paid successfully',
+            'sent successfully', 'transferred successfully', 'payment to',
+            'paid to', 'received from', 'transfer to', 'money sent',
+        )
+        # Include single-word headers that BHIM uses (e.g. a line that is
+        # exactly "Paid" or "Received" or starts with "₹" / currency symbol)
         header_amount = 0.0
         for i, line in enumerate(self.lines):
-            line_l = line.lower()
-            if any(h in line_l for h in ('money received', 'payment received', 'paid successfully', 'sent successfully', 'transferred successfully', 'payment to', 'paid to', 'received from', 'transfer to', 'money sent')):
-                for offset in (0, 1, 2):
+            line_l = line.lower().strip()
+            is_header = any(h in line_l for h in header_keywords)
+            # BHIM-style: a line that is just "Paid" or "Received" (possibly with emoji/icon text)
+            if not is_header and re.match(r'^[^a-z]*(?:paid|received)[^a-z]*$', line_l):
+                is_header = True
+            if is_header:
+                for offset in (0, 1, 2, 3):
                     if i + offset < len(self.lines):
                         cand = self.lines[i + offset].strip()
+                        if self._is_promo_or_balance_line(cand):
+                            continue
                         if any(w in cand.lower() for w in ('bank', 'upi', 'from', 'to', 'ref', 'rupees', 'only')):
                             continue
                         m = re.search(r'(?:[₹$€£]|Rs\.?|INR)?\s*([\d,]+(?:\.\d{1,2})?)', cand, re.IGNORECASE)
@@ -100,8 +130,11 @@ class GenericParser(BasePaymentParser):
                     break
 
         # Priority 3: Look for currency symbols (₹, $, €, £, Rs, INR, or R prefix like R30,700)
+        # Skip promotional/ad lines so we don't pick up amounts like "₹300 cashback"
         currency_matches = []
         for line in self.lines:
+            if self._is_promo_or_balance_line(line):
+                continue
             for match in re.finditer(r'(?:[₹$€£]|Rs\.?|INR)\s*([\d,]+(?:\.\d{1,2})?)', line, re.IGNORECASE):
                 val_str = match.group(1).replace(',', '')
                 if not is_ignored_number(val_str, line):
@@ -128,14 +161,19 @@ class GenericParser(BasePaymentParser):
                         labeled_matches.append(amt)
 
         # Selection of best amount:
+        # Prefer the largest currency-symbol match when the header amount is
+        # small and a bigger candidate exists (protects against picking promo
+        # amounts that slip through, or status-bar fragments).
         if word_amount > 0:
             t.amount = word_amount
         elif header_amount > 0:
             t.amount = header_amount
         elif currency_matches:
-            t.amount = currency_matches[0]
+            # Use the largest currency-prefixed amount (the real payment
+            # amount is almost always the largest one on screen).
+            t.amount = max(currency_matches)
         elif labeled_matches:
-            t.amount = labeled_matches[0]
+            t.amount = max(labeled_matches)
         else:
             # Fallback: standalone numbers not belonging to bank accounts or upi
             cand_matches = []

@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Technical Audit & Architectural Review Report</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+  @page {
+    size: A4;
+    margin: 1.8cm 1.5cm 2cm 1.5cm;
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: 'Inter', sans-serif;
+      font-size: 8pt;
+      color: #718096;
+    }
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 9.5pt;
+    line-height: 1.55;
+    color: #2d3748;
+    background: #ffffff;
+    padding: 0;
+  }
+
+  .header {
+    border-bottom: 2px solid #3182ce;
+    padding-bottom: 16px;
+    margin-bottom: 22px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+  }
+
+  .title-area h1 {
+    font-size: 20pt;
+    font-weight: 800;
+    color: #1a202c;
+    letter-spacing: -0.5px;
+    margin-bottom: 4px;
+  }
+
+  .title-area .subtitle {
+    font-size: 11pt;
+    color: #4a5568;
+    font-weight: 500;
+  }
+
+  .meta-area {
+    text-align: right;
+    font-size: 8.5pt;
+    color: #718096;
+    line-height: 1.4;
+  }
+
+  .meta-area strong {
+    color: #2d3748;
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 7.5pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .badge-critical { background-color: #fed7d7; color: #9b2c2c; border: 1px solid #feb2b2; }
+  .badge-high { background-color: #feebc8; color: #9c4221; border: 1px solid #fbd38d; }
+  .badge-medium { background-color: #feefc3; color: #b7791f; border: 1px solid #f6e05e; }
+  .badge-low { background-color: #e2e8f0; color: #4a5568; border: 1px solid #cbd5e0; }
+  .badge-good { background-color: #c6f6d5; color: #22543d; border: 1px solid #9ae6b4; }
+
+  h2 {
+    font-size: 13pt;
+    font-weight: 700;
+    color: #1a365d;
+    margin-top: 20px;
+    margin-bottom: 10px;
+    border-left: 4px solid #3182ce;
+    padding-left: 8px;
+    letter-spacing: -0.2px;
+  }
+
+  h3 {
+    font-size: 10.5pt;
+    font-weight: 600;
+    color: #2b6cb0;
+    margin-top: 14px;
+    margin-bottom: 6px;
+  }
+
+  p {
+    margin-bottom: 9px;
+  }
+
+  .executive-box {
+    background: #ebf8ff;
+    border: 1px solid #bee3f8;
+    border-left: 4px solid #3182ce;
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin-bottom: 18px;
+  }
+
+  .executive-box p:last-child {
+    margin-bottom: 0;
+  }
+
+  .callout-alert {
+    background: #fff5f5;
+    border: 1px solid #fed7d7;
+    border-left: 4px solid #e53e3e;
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin: 10px 0;
+  }
+
+  .callout-info {
+    background: #f7fafc;
+    border: 1px solid #e2e8f0;
+    border-left: 4px solid #4a5568;
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin: 10px 0;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0;
+    font-size: 8.5pt;
+  }
+
+  th {
+    background-color: #edf2f7;
+    color: #2d3748;
+    font-weight: 700;
+    text-align: left;
+    padding: 7px 9px;
+    border: 1px solid #cbd5e0;
+  }
+
+  td {
+    padding: 6px 9px;
+    border: 1px solid #e2e8f0;
+    vertical-align: top;
+  }
+
+  tr:nth-child(even) {
+    background-color: #f7fafc;
+  }
+
+  code {
+    font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
+    font-size: 8pt;
+    background-color: #edf2f7;
+    color: #c53030;
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+
+  pre {
+    font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
+    font-size: 7.5pt;
+    background-color: #1a202c;
+    color: #e2e8f0;
+    padding: 8px 10px;
+    border-radius: 5px;
+    margin: 8px 0;
+    overflow-x: auto;
+    line-height: 1.4;
+  }
+
+  .page-break {
+    page-break-before: always;
+  }
+
+  .card {
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    background: #ffffff;
+  }
+
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+
+  .card-title {
+    font-weight: 700;
+    font-size: 10pt;
+    color: #1a202c;
+  }
+
+  ul, ol {
+    margin-left: 18px;
+    margin-bottom: 8px;
+  }
+
+  li {
+    margin-bottom: 3px;
+  }
+
+  .footer-note {
+    margin-top: 24px;
+    padding-top: 10px;
+    border-top: 1px solid #e2e8f0;
+    font-size: 8pt;
+    color: #a0aec0;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="title-area">
+    <h1>Codebase Audit & Architecture Review</h1>
+    <div class="subtitle">Personal Payment Tracker Bot (Telegram & Render Deployment)</div>
+  </div>
+  <div class="meta-area">
+    <strong>Target Repo:</strong> kanagarlapranav/payment<br>
+    <strong>Evaluation Date:</strong> September 2026<br>
+    <strong>Status:</strong> Evaluation & Risk Assessment
+  </div>
+</div>
+
+<div class="executive-box">
+  <h3 style="margin-top: 0; color: #2b6cb0;">Executive Verdict: Is an Upgrade Required?</h3>
+  <p>
+    <strong>Yes, a security & architectural upgrade is strongly recommended.</strong> 
+    Your friend’s review was thorough and identified <strong>real, high-impact security and architectural items</strong>. 
+    While the bot is currently functional for day-to-day use, there is an active <strong>credential leak in public Git history</strong>, an <strong>authorization bypass on interactive buttons</strong>, and an <strong>unhandled edge-case in database backups</strong>.
+  </p>
+  <p>
+    Below is a comprehensive technical breakdown of each point raised, verified against the actual repository source code, alongside clear solutions to guide your decision on when and how to upgrade.
+  </p>
+</div>
+
+<h2>1. Summary Review Matrix</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width: 28%;">Issue / Query</th>
+      <th style="width: 14%;">Friend's Claim</th>
+      <th style="width: 14%;">Code Verification</th>
+      <th style="width: 14%;">Severity</th>
+      <th style="width: 15%;">Upgrade Required?</th>
+      <th style="width: 15%;">Effort</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>1. Hardcoded Token</strong><br><code>check_messages.py</code>, <code>setup_env.py</code></td>
+      <td>Hardcoded in scripts & Git history</td>
+      <td><span class="badge badge-critical">Confirmed</span></td>
+      <td><span class="badge badge-critical">Critical</span></td>
+      <td><strong>Immediate</strong></td>
+      <td>5 mins</td>
+    </tr>
+    <tr>
+      <td><strong>2. Authorization Gaps</strong><br>Callback queries & group scope</td>
+      <td>Unchecked access to commands & actions</td>
+      <td><span class="badge badge-high">Partial Gap</span></td>
+      <td><span class="badge badge-high">High</span></td>
+      <td><strong>Yes</strong></td>
+      <td>10 mins</td>
+    </tr>
+    <tr>
+      <td><strong>3. Conflicting Deployments</strong><br>Render vs Vercel / Netlify</td>
+      <td>Architecturally incompatible entry points</td>
+      <td><span class="badge badge-high">Confirmed</span></td>
+      <td><span class="badge badge-medium">Medium</span></td>
+      <td><strong>Yes (Cleanup)</strong></td>
+      <td>5 mins</td>
+    </tr>
+    <tr>
+      <td><strong>4. Tesseract OCR on Render</strong><br>Missing OS binary on Render</td>
+      <td>Fails on Render without Docker</td>
+      <td><span class="badge badge-good">RapidOCR Active</span></td>
+      <td><span class="badge badge-low">Low</span></td>
+      <td>Optional</td>
+      <td>5 mins</td>
+    </tr>
+    <tr>
+      <td><strong>5. Database Persistence</strong><br>Ephemeral disk on Render free tier</td>
+      <td>Risk of transaction loss on restarts</td>
+      <td><span class="badge badge-medium">Partial Gap</span></td>
+      <td><span class="badge badge-medium">Medium</span></td>
+      <td><strong>Yes</strong></td>
+      <td>5 mins</td>
+    </tr>
+    <tr>
+      <td><strong>6. Self-Ping Keep-Alive</strong><br>Internal thread vs external monitor</td>
+      <td>Self-ping cannot recover dead service</td>
+      <td><span class="badge badge-medium">Confirmed</span></td>
+      <td><span class="badge badge-low">Low</span></td>
+      <td>Recommended</td>
+      <td>10 mins</td>
+    </tr>
+    <tr>
+      <td><strong>7. Script Redundancy</strong><br><code>check_messages.py</code> vs <code>setup_env.py</code></td>
+      <td>Near-duplicate setup utilities</td>
+      <td><span class="badge badge-low">Confirmed</span></td>
+      <td><span class="badge badge-low">Low</span></td>
+      <td>Optional</td>
+      <td>5 mins</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="page-break"></div>
+
+<h2>2. Deep-Dive Findings & Technical Verification</h2>
+
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">1. Hardcoded Bot Token in Source Files & Git History</div>
+    <span class="badge badge-critical">Critical Severity</span>
+  </div>
+  <p><strong>Friend's Observation:</strong> Real <code>TELEGRAM_BOT_TOKEN</code> is hardcoded in <code>check_messages.py</code> (line 6) and <code>setup_env.py</code> (line 6). Because these are standard <code>.py</code> files, <code>.gitignore</code> did not exclude them, leaving the token exposed in Git history.</p>
+  <p><strong>Code Verification:</strong></p>
+  <ul>
+    <li><code>check_messages.py:6</code>: <code>BOT_TOKEN = "8863268724:AAFcDfpdgTXas2E6OnNIQj9mRIwRzQ8WV94"</code></li>
+    <li><code>setup_env.py:6</code>: <code>BOT_TOKEN = "8863268724:AAFcDfpdgTXas2E6OnNIQj9mRIwRzQ8WV94"</code></li>
+    <li>Git Inspection: Both files were committed in commit <code>affae64155db5ab9eddcce8afe31bf6379790193</code> and pushed to <code>https://github.com/kanagarlapranav/payment.git</code>.</li>
+  </ul>
+  <div class="callout-alert">
+    <strong>Security Impact:</strong> Anyone who views the GitHub repository or commit log has full administrative access to your Telegram bot. They can read uploaded payment screenshots, intercept OCR data, and delete or falsify records.
+  </div>
+  <p><strong>Recommended Solution:</strong></p>
+  <ol>
+    <li>Open Telegram → <strong>@BotFather</strong> → <code>/mybots</code> → select your bot → <strong>API Token</strong> → <strong>Revoke current token</strong>. This instantly invalidates the leaked credential.</li>
+    <li>Update the new token in your Render Environment Variables and your local <code>.env</code>.</li>
+    <li>Refactor both scripts to load the token from the environment:
+      <pre>import os
+from dotenv import load_dotenv
+load_dotenv()
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("TELEGRAM_BOT_TOKEN is not set in environment or .env")</pre>
+    </li>
+  </ol>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">2. Authorization & Access Control Gaps</div>
+    <span class="badge badge-high">High Severity</span>
+  </div>
+  <p><strong>Friend's Observation:</strong> Check if user authorization actually protects sensitive financial data from strangers who find the bot username.</p>
+  <p><strong>Code Verification:</strong></p>
+  <ul>
+    <li><strong>The Good:</strong> All text commands (<code>/balance</code>, <code>/history</code>, <code>/delete</code>, etc.) and incoming photos check <code>is_authorized(update)</code> in <code>bot/commands.py</code>.</li>
+    <li><strong>Vulnerability A (Callback Handler):</strong> In <code>bot/handlers.py</code> (line 171), <code>handle_callback_query()</code> processes button presses without calling <code>is_authorized(update)</code>. Anyone with access to the chat or message can click <code>confirm_tx</code>, <code>cancel_tx</code>, or <code>delete_confirm</code>.</li>
+    <li><strong>Vulnerability B (Group Chat Broadness):</strong> <code>is_authorized()</code> authorizes any update where <code>chat_id == TELEGRAM_GROUP_ID</code>. If the bot is ever placed in a group with multiple users, other group members can trigger destructive actions like <code>/delete</code> or <code>/setbalance</code>.</li>
+  </ul>
+  <p><strong>Recommended Solution:</strong></p>
+  <ul>
+    <li>Add <code>if not await is_authorized(update): return</code> at line 174 of <code>bot/handlers.py</code>.</li>
+    <li>Ensure critical admin commands (<code>/setbalance</code>, <code>/delete</code>) strictly verify <code>user_id == TELEGRAM_USER_ID</code> rather than permitting any user in the group chat.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">3. Conflicting Deployment Architectures (Render vs Vercel / Netlify)</div>
+    <span class="badge badge-medium">Medium Severity</span>
+  </div>
+  <p><strong>Friend's Observation:</strong> Long-polling daemon (<code>app.py</code> + <code>render.yaml</code> + <code>Procfile</code>) is fundamentally incompatible with serverless functions (<code>vercel.json</code> + <code>netlify.toml</code> + <code>api/index.py</code>).</p>
+  <p><strong>Code Verification:</strong> Confirmed. The repository contains two opposing architectures:</p>
+  <ul>
+    <li><strong>Daemon Architecture (Render):</strong> <code>app.py</code> runs a persistent polling loop (<code>app.run_polling()</code>), startup restore hooks, and background keep-alive threads.</li>
+    <li><strong>Serverless Architecture (Vercel/Netlify):</strong> <code>api/index.py</code> runs stateless HTTP handlers. In serverless environments, SQLite files are ephemeral per-invocation, in-memory transaction states are lost, and 10s execution limits cause OCR timeouts.</li>
+    <li><strong>The Webhook Trap:</strong> Running <code>set_webhook.py</code> registers a Telegram webhook, which immediately halts long-polling on Render!</li>
+  </ul>
+  <p><strong>Recommended Solution:</strong> Standardize exclusively on Render. Delete <code>vercel.json</code>, <code>netlify.toml</code>, <code>api/index.py</code>, and <code>set_webhook.py</code> to prevent accidental misconfiguration.</p>
+</div>
+
+<div class="page-break"></div>
+
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">4. Tesseract OCR vs RapidOCR on Render Cloud</div>
+    <span class="badge badge-low">Low / Informational</span>
+  </div>
+  <p><strong>Friend's Observation:</strong> <code>requirements.txt</code> installs <code>pytesseract</code>, but Render's native Python runtime lacks the OS-level binary (<code>tesseract-ocr</code>), leading to potential <code>TesseractNotFoundError</code>.</p>
+  <p><strong>Code Verification:</strong></p>
+  <ul>
+    <li>Your codebase in <code>ocr/engine.py</code> is already smarter than your friend assumed. <strong>RapidOCR (ONNX Runtime) is the primary engine</strong> and executes without external OS binaries.</li>
+    <li>Tesseract is only invoked as a secondary fallback after checking <code>shutil.which('tesseract')</code> or <code>os.path.exists(TESSERACT_CMD)</code>. On Render, both return <code>False</code>, so it gracefully skips Tesseract without throwing uncaught exceptions.</li>
+    <li><strong>Housekeeping Note:</strong> <code>tesseract_setup.exe</code> (a 50 MB Windows executable) is sitting in your workspace root, and <code>pytesseract</code> is listed in <code>requirements.txt</code> unnecessarily.</li>
+  </ul>
+  <p><strong>Recommended Solution:</strong> Remove <code>tesseract_setup.exe</code> and consider removing <code>pytesseract</code> from production <code>requirements.txt</code> to speed up Render build times.</p>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">5. SQLite Database Persistence on Ephemeral Cloud Disks</div>
+    <span class="badge badge-medium">Medium Severity</span>
+  </div>
+  <p><strong>Friend's Observation:</strong> Render's free tier wipes local disk storage on redeploys and restarts. Confirm that cloud backups run after every write.</p>
+  <p><strong>Code Verification:</strong></p>
+  <ul>
+    <li>You have implemented an automated backup engine in <code>services/backup_service.py</code> that dumps SQLite to JSON and sends it to Telegram, with automatic restore on startup in <code>app.py</code>.</li>
+    <li><strong>Identified Gap:</strong> Backups are dispatched when new transactions are added or deleted, but <strong>NOT</strong> when running <code>/setbalance &lt;amount&gt;</code> in <code>bot/commands.py:530</code>. If Render restarts after you update the balance, your balance setting reverts to the previous backup state.</li>
+  </ul>
+  <p><strong>Recommended Solution:</strong> Add <code>asyncio.create_task(backup_to_telegram(context.bot))</code> inside <code>setbalance_command()</code>.</p>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">6. Self-Ping Keep-Alive vs External Uptime Monitoring</div>
+    <span class="badge badge-low">Low / Advisory</span>
+  </div>
+  <p><strong>Friend's Observation:</strong> Self-pinging every 10 minutes from within the same Python process cannot revive a crashed or frozen container; an external monitor is cleaner.</p>
+  <p><strong>Code Verification:</strong></p>
+  <ul>
+    <li><code>app.py:91-103</code> runs <code>start_keep_alive()</code> pinging <code>RENDER_EXTERNAL_URL</code> every 10 minutes.</li>
+    <li><strong>Render Quota Consideration:</strong> Render Free Web Services grant <strong>750 free instance hours per calendar month</strong>. Keeping a single service awake 24/7/365 burns 744 hours (99.2% of your monthly quota). If you have any other service running on the same free account, your instance will be suspended until the 1st of next month.</li>
+  </ul>
+  <p><strong>Recommended Solution:</strong> Set up a free external ping monitor on <a href="https://cron-job.org">cron-job.org</a> or <a href="https://uptimerobot.com">UptimeRobot</a> hitting your <code>/</code> endpoint. If you want to conserve Render free hours, set the ping schedule to active hours only.</p>
+</div>
+
+<h2>3. Prioritized Upgrade Roadmap</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width: 15%;">Phase</th>
+      <th style="width: 45%;">Tasks</th>
+      <th style="width: 25%;">Target Timing</th>
+      <th style="width: 15%;">Risk If Deferred</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Phase 1<br>(Security)</strong></td>
+      <td>
+        1. Revoke Telegram token via @BotFather.<br>
+        2. Clean token from <code>check_messages.py</code> & <code>setup_env.py</code>.<br>
+        3. Add auth check in <code>handle_callback_query()</code>.
+      </td>
+      <td><strong>Immediate</strong><br>(Next 24-48 hours)</td>
+      <td>Account & transaction takeover</td>
+    </tr>
+    <tr>
+      <td><strong>Phase 2<br>(Integrity)</strong></td>
+      <td>
+        1. Add backup call to <code>/setbalance</code>.<br>
+        2. Delete <code>vercel.json</code>, <code>netlify.toml</code>, <code>api/</code>, <code>set_webhook.py</code>.<br>
+        3. Delete 50MB <code>tesseract_setup.exe</code>.
+      </td>
+      <td><strong>When convenient</strong><br>(Next planned release)</td>
+      <td>Loss of balance adjustment on restart</td>
+    </tr>
+    <tr>
+      <td><strong>Phase 3<br>(Monitoring)</strong></td>
+      <td>
+        1. Hook up external uptime monitor.<br>
+        2. Consolidate setup scripts into <code>get_chat_ids.py</code>.
+      </td>
+      <td><strong>Optional</strong><br>(Maintenance phase)</td>
+      <td>Exhaustion of free tier hours</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="footer-note">
+  Generated for Pranav &middot; Personal Payment Tracker Bot Technical Evaluation &middot; All findings verified against active repository code
+</div>
+
+</body>
+</html>
