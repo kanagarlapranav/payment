@@ -67,54 +67,123 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None) -
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
-            # Get existing references and keys
-            cursor.execute("SELECT reference_number, amount, person_name, transaction_date FROM transactions")
-            existing = set()
+            # Map existing transactions by reference number and ID
+            cursor.execute("SELECT id, reference_number FROM transactions")
+            existing_by_ref = {}
+            existing_ids = set()
             for row in cursor.fetchall():
-                key = (row['reference_number'] or '', row['amount'], row['person_name'] or '', str(row['transaction_date'] or ''))
-                existing.add(key)
+                existing_ids.add(row['id'])
+                if row['reference_number']:
+                    existing_by_ref[row['reference_number']] = row['id']
                 
             inserted_count = 0
+            updated_count = 0
             for tx in transactions:
-                key = (tx.get('reference_number') or '', float(tx.get('amount', 0.0)), tx.get('person_name') or '', str(tx.get('transaction_date') or ''))
-                if key in existing:
-                    continue
-                    
-                cursor.execute('''
-                    INSERT INTO transactions (
-                        transaction_type, amount, person_name, sender_name, recipient_name,
-                        upi_id, phone_number, transaction_date, transaction_time, reference_number,
-                        transaction_id, payment_app, bank_name, bank_account, payment_status,
-                        balance_before, balance_after, ocr_text, original_image_path,
-                        telegram_message_id, telegram_chat_id, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    tx.get('transaction_type', 'RECEIVED'),
-                    float(tx.get('amount', 0.0)),
-                    tx.get('person_name', ''),
-                    tx.get('sender_name', ''),
-                    tx.get('recipient_name', ''),
-                    tx.get('upi_id', ''),
-                    tx.get('phone_number', ''),
-                    tx.get('transaction_date'),
-                    tx.get('transaction_time', ''),
-                    tx.get('reference_number', ''),
-                    tx.get('transaction_id', ''),
-                    tx.get('payment_app', ''),
-                    tx.get('bank_name', ''),
-                    tx.get('bank_account', ''),
-                    tx.get('payment_status', 'SUCCESS'),
-                    float(tx.get('balance_before', 0.0)),
-                    float(tx.get('balance_after', 0.0)),
-                    tx.get('ocr_text', ''),
-                    tx.get('original_image_path', ''),
-                    str(tx.get('telegram_message_id', '')),
-                    str(tx.get('telegram_chat_id', '')),
-                    tx.get('created_at', datetime.now().isoformat()),
-                    tx.get('updated_at', datetime.now().isoformat())
-                ))
-                inserted_count += 1
-                existing.add(key)
+                ref = tx.get('reference_number') or ''
+                tx_id = tx.get('id')
+                
+                # If existing by reference number, update it
+                if ref and ref in existing_by_ref:
+                    db_id = existing_by_ref[ref]
+                    cursor.execute('''
+                        UPDATE transactions SET
+                            transaction_type = ?, amount = ?, person_name = ?, sender_name = ?,
+                            recipient_name = ?, upi_id = ?, phone_number = ?, transaction_date = ?,
+                            transaction_time = ?, payment_app = ?, bank_name = ?, bank_account = ?,
+                            payment_status = ?, balance_before = ?, balance_after = ?, ocr_text = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                    ''', (
+                        tx.get('transaction_type', 'RECEIVED'),
+                        float(tx.get('amount', 0.0)),
+                        tx.get('person_name', ''),
+                        tx.get('sender_name', ''),
+                        tx.get('recipient_name', ''),
+                        tx.get('upi_id', ''),
+                        tx.get('phone_number', ''),
+                        tx.get('transaction_date'),
+                        tx.get('transaction_time', ''),
+                        tx.get('payment_app', ''),
+                        tx.get('bank_name', ''),
+                        tx.get('bank_account', ''),
+                        tx.get('payment_status', 'SUCCESS'),
+                        float(tx.get('balance_before', 0.0)),
+                        float(tx.get('balance_after', 0.0)),
+                        tx.get('ocr_text', ''),
+                        tx.get('updated_at', datetime.now().isoformat()),
+                        db_id
+                    ))
+                    updated_count += 1
+                elif tx_id and tx_id in existing_ids:
+                    # Update by ID
+                    cursor.execute('''
+                        UPDATE transactions SET
+                            transaction_type = ?, amount = ?, person_name = ?, sender_name = ?,
+                            recipient_name = ?, upi_id = ?, phone_number = ?, transaction_date = ?,
+                            transaction_time = ?, reference_number = ?, payment_app = ?, bank_name = ?,
+                            bank_account = ?, payment_status = ?, balance_before = ?, balance_after = ?,
+                            ocr_text = ?, updated_at = ?
+                        WHERE id = ?
+                    ''', (
+                        tx.get('transaction_type', 'RECEIVED'),
+                        float(tx.get('amount', 0.0)),
+                        tx.get('person_name', ''),
+                        tx.get('sender_name', ''),
+                        tx.get('recipient_name', ''),
+                        tx.get('upi_id', ''),
+                        tx.get('phone_number', ''),
+                        tx.get('transaction_date'),
+                        tx.get('transaction_time', ''),
+                        ref,
+                        tx.get('payment_app', ''),
+                        tx.get('bank_name', ''),
+                        tx.get('bank_account', ''),
+                        tx.get('payment_status', 'SUCCESS'),
+                        float(tx.get('balance_before', 0.0)),
+                        float(tx.get('balance_after', 0.0)),
+                        tx.get('ocr_text', ''),
+                        tx.get('updated_at', datetime.now().isoformat()),
+                        tx_id
+                    ))
+                    updated_count += 1
+                else:
+                    # Insert new record
+                    cursor.execute('''
+                        INSERT INTO transactions (
+                            transaction_type, amount, person_name, sender_name, recipient_name,
+                            upi_id, phone_number, transaction_date, transaction_time, reference_number,
+                            transaction_id, payment_app, bank_name, bank_account, payment_status,
+                            balance_before, balance_after, ocr_text, original_image_path,
+                            telegram_message_id, telegram_chat_id, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        tx.get('transaction_type', 'RECEIVED'),
+                        float(tx.get('amount', 0.0)),
+                        tx.get('person_name', ''),
+                        tx.get('sender_name', ''),
+                        tx.get('recipient_name', ''),
+                        tx.get('upi_id', ''),
+                        tx.get('phone_number', ''),
+                        tx.get('transaction_date'),
+                        tx.get('transaction_time', ''),
+                        ref,
+                        tx.get('transaction_id', ''),
+                        tx.get('payment_app', ''),
+                        tx.get('bank_name', ''),
+                        tx.get('bank_account', ''),
+                        tx.get('payment_status', 'SUCCESS'),
+                        float(tx.get('balance_before', 0.0)),
+                        float(tx.get('balance_after', 0.0)),
+                        tx.get('ocr_text', ''),
+                        tx.get('original_image_path', ''),
+                        str(tx.get('telegram_message_id', '')),
+                        str(tx.get('telegram_chat_id', '')),
+                        tx.get('created_at', datetime.now().isoformat()),
+                        tx.get('updated_at', datetime.now().isoformat())
+                    ))
+                    inserted_count += 1
+                    if ref:
+                        existing_by_ref[ref] = cursor.lastrowid
                 
             # Restore settings (like balance)
             for k, v in settings.items():
@@ -122,7 +191,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None) -
                 
             conn.commit()
             
-        logger.info(f"Imported {inserted_count} new transactions from JSON backup.")
+        logger.info(f"Imported database from JSON: {inserted_count} inserted, {updated_count} updated.")
         return True
     except Exception as e:
         logger.error(f"Error importing database from JSON: {e}", exc_info=True)

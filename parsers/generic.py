@@ -43,35 +43,37 @@ class GenericParser(BasePaymentParser):
         received_keywords = [
             'money received', 'moneyreceived', 'payment received', 'paymentreceived',
             'received successfully', 'received from', 'received at', 'receivedat',
-            'credited to', 'credited'
+            'credited to', 'credited', 'amount received', 'refund received'
         ]
         # Strong sent patterns
         sent_keywords = [
             'paid successfully', 'paidsuccessfully', 'payment successful', 'paymentsuccessful',
             'paid to', 'paidto', 'sent to', 'sentto', 'sent successfully', 'sentsuccessfully',
-            'transferred to', 'transfer to', 'debited from', 'debited'
+            'transferred to', 'transfer to', 'debited from', 'debited', 'transferred successfully',
+            'payment of'
         ]
         
-        is_received = any(kw in text_lower for kw in received_keywords)
-        is_sent = any(kw in text_lower for kw in sent_keywords)
+        is_received = any(kw in text_lower for kw in received_keywords) or bool(re.search(r'\b(received|credited|deposit(?:ed)?)\b', text_lower))
+        is_sent = any(kw in text_lower for kw in sent_keywords) or bool(re.search(r'\b(paid|sent|transfer(?:red)?|debited|spent)\b', text_lower))
         
         if is_received and not is_sent:
             t.transaction_type = 'RECEIVED'
         elif is_sent and not is_received:
             t.transaction_type = 'SENT'
         elif is_received and is_sent:
-            # If both, check if "received" is in the main heading / top lines
-            first_few = " ".join(self.lines[:5]).lower()
-            if any(kw in first_few for kw in received_keywords):
+            # If both, check priority of keywords in text
+            if any(kw in text_lower for kw in ('received from', 'money received', 'payment received', 'credited to')):
                 t.transaction_type = 'RECEIVED'
+            elif any(kw in text_lower for kw in ('paid to', 'sent to', 'transferred to', 'debited from', 'paid successfully')):
+                t.transaction_type = 'SENT'
             else:
-                t.transaction_type = 'SENT'
+                first_few = " ".join(self.lines[:5]).lower()
+                if any(kw in first_few for kw in received_keywords):
+                    t.transaction_type = 'RECEIVED'
+                else:
+                    t.transaction_type = 'SENT'
         else:
-            # Weaker fallback check
-            if 'received' in text_lower or 'credit' in text_lower:
-                t.transaction_type = 'RECEIVED'
-            elif 'paid' in text_lower or 'sent' in text_lower or 'debit' in text_lower:
-                t.transaction_type = 'SENT'
+            t.transaction_type = 'SENT' if any(w in text_lower for w in ('to', 'debit', 'spent')) else ('RECEIVED' if 'credit' in text_lower else '')
 
         # 2. Extract Amount
         # Priority 1: Check for explicit words like 'Rupees Six Hundred Only', 'INR Six Hundred Only'

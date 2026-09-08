@@ -4,6 +4,10 @@ from parsers.phonepe import PhonePeParser
 from parsers.generic import GenericParser
 from parsers.paytm import PaytmParser
 from parsers.googlepay import GooglePayParser
+from parsers.bhim import BhimParser
+from parsers.extended_upi import (
+    CredParser, SuperMoneyParser, NaviParser, YonoSbiParser, UnionEaseParser
+)
 from parsers import get_best_parser
 
 class TestParsers(unittest.TestCase):
@@ -112,6 +116,7 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(t.person_name, "Mohamata")
         self.assertEqual(t.bank_name, "State Bank of India")
         self.assertEqual(t.bank_account, "7751")
+
     def test_text_message_sent_yesterday(self):
         text = "Paid to balaji icic admin paid to him 5000 on yesterday"
         parser = get_best_parser(text)
@@ -145,8 +150,8 @@ class TestParsers(unittest.TestCase):
         t = parser.parse()
         
         self.assertEqual(t.transaction_type, "RECEIVED")
-        self.assertEqual(t.amount, 600.0) # MUST be 600.0, NOT 1185.0
-        self.assertEqual(t.person_name, "Patchigolla Lakshmi Vinay") # MUST include wrapped surname
+        self.assertEqual(t.amount, 600.0)
+        self.assertEqual(t.person_name, "Patchigolla Lakshmi Vinay")
         self.assertEqual(t.sender_name, "Patchigolla Lakshmi Vinay")
         self.assertEqual(t.recipient_name, "Kanagarla Pranav")
         self.assertEqual(t.reference_number, "756482083834")
@@ -197,7 +202,6 @@ class TestParsers(unittest.TestCase):
         /DownloadNow
         """
         parser = get_best_parser(text)
-        from parsers.bhim import BhimParser
         self.assertIsInstance(parser, BhimParser)
         t = parser.parse()
         
@@ -211,6 +215,78 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(t.payment_app, "BHIM")
         self.assertEqual(t.transaction_time, "01:44 PM")
         self.assertEqual(t.transaction_date, date(2026, 9, 8))
+
+    def test_cred_upi_parser(self):
+        text = """
+        CRED UPI
+        Paid to Ramesh
+        ₹1,500.00
+        CRED Protected
+        UTR: 987654321098
+        2026-09-08 02:30 PM
+        """
+        parser = get_best_parser(text)
+        self.assertIsInstance(parser, CredParser)
+        t = parser.parse()
+        self.assertEqual(t.transaction_type, "SENT")
+        self.assertEqual(t.amount, 1500.0)
+        self.assertEqual(t.payment_app, "CRED")
+        self.assertEqual(t.reference_number, "987654321098")
+
+    def test_supermoney_parser(self):
+        text = """
+        Super.money UPI
+        Paid successfully to Swiggy
+        ₹450
+        Ref: 123456789012
+        """
+        parser = get_best_parser(text)
+        self.assertIsInstance(parser, SuperMoneyParser)
+        t = parser.parse()
+        self.assertEqual(t.transaction_type, "SENT")
+        self.assertEqual(t.amount, 450.0)
+        self.assertEqual(t.payment_app, "Super.money")
+
+    def test_navipay_parser(self):
+        text = """
+        Navi UPI
+        Payment of ₹800 to Electricity Board Successful
+        Ref: 556677889900
+        """
+        parser = get_best_parser(text)
+        self.assertIsInstance(parser, NaviParser)
+        t = parser.parse()
+        self.assertEqual(t.transaction_type, "SENT")
+        self.assertEqual(t.amount, 800.0)
+        self.assertEqual(t.payment_app, "Navi")
+
+    def test_yono_sbi_parser(self):
+        text = """
+        YONO SBI
+        Transferred ₹2,500 to Mahesh
+        Ref No: 112233445566
+        """
+        parser = get_best_parser(text)
+        self.assertIsInstance(parser, YonoSbiParser)
+        t = parser.parse()
+        self.assertEqual(t.transaction_type, "SENT")
+        self.assertEqual(t.amount, 2500.0)
+        self.assertEqual(t.payment_app, "YONO SBI")
+        self.assertEqual(t.bank_name, "State Bank of India")
+
+    def test_union_ease_parser(self):
+        text = """
+        Union EASE
+        Payment of ₹3,200 Received from Suresh
+        Ref: 998877665544
+        """
+        parser = get_best_parser(text)
+        self.assertIsInstance(parser, UnionEaseParser)
+        t = parser.parse()
+        self.assertEqual(t.transaction_type, "RECEIVED")
+        self.assertEqual(t.amount, 3200.0)
+        self.assertEqual(t.payment_app, "Union EASE")
+        self.assertEqual(t.bank_name, "Union Bank of India")
 
 if __name__ == '__main__':
     unittest.main()

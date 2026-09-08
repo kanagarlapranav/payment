@@ -393,12 +393,19 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid ID format. Example: `/edit 3` or `/edit 1`", parse_mode='Markdown')
         return
         
-    tx = get_transaction_by_id(raw_num)
-    if not tx:
-        # Fallback: check if raw_num was a 1-based index of recent transactions
-        recent = get_recent_transactions(limit=10)
-        if 1 <= raw_num <= len(recent):
+    import asyncio
+    from services.backup_service import backup_to_telegram
+    
+    recent = get_recent_transactions(limit=10)
+    # Check if raw_num is a 1-based list index or direct ID
+    tx = None
+    if 1 <= raw_num <= len(recent) and raw_num not in [t['id'] for t in recent]:
+        tx = recent[raw_num - 1]
+    else:
+        tx = get_transaction_by_id(raw_num)
+        if not tx and 1 <= raw_num <= len(recent):
             tx = recent[raw_num - 1]
+            
     if not tx:
         await update.message.reply_text("❌ Transaction not found.", parse_mode='Markdown')
         return
@@ -464,6 +471,10 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if needs_recalc:
             new_bal = recalculate_all_balances()
             bal_msg = f"\n💰 Updated Current Balance: {format_currency(new_bal)}"
+        try:
+            asyncio.create_task(backup_to_telegram(context.bot))
+        except Exception:
+            pass
         await update.message.reply_text(f"✅ Transaction updated successfully!{bal_msg}", parse_mode='Markdown')
     else:
         await update.message.reply_text("❌ Failed to update transaction.")
@@ -504,11 +515,15 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid ID format. Example: `/delete 3` or `/delete 1`", parse_mode='Markdown')
         return
         
-    tx = get_transaction_by_id(raw_num)
-    if not tx:
-        recent = get_recent_transactions(limit=10)
-        if 1 <= raw_num <= len(recent):
+    recent = get_recent_transactions(limit=10)
+    tx = None
+    if 1 <= raw_num <= len(recent) and raw_num not in [t['id'] for t in recent]:
+        tx = recent[raw_num - 1]
+    else:
+        tx = get_transaction_by_id(raw_num)
+        if not tx and 1 <= raw_num <= len(recent):
             tx = recent[raw_num - 1]
+            
     if not tx:
         await update.message.reply_text("❌ Transaction not found.", parse_mode='Markdown')
         return
@@ -529,17 +544,25 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update): return
+    import asyncio
+    from services.balance_service import set_explicit_balance
+    from services.backup_service import backup_to_telegram
     
     if not context.args:
         await update.message.reply_text("Usage: /setbalance <amount>")
         return
         
     try:
-        new_balance = float(context.args[0].replace(',', ''))
-        update_balance_setting(new_balance)
-        await update.message.reply_text(f"✅ Balance set to {format_currency(new_balance)}")
+        new_balance = float(context.args[0].replace(',', '').replace('₹', '').strip())
+        final_bal = set_explicit_balance(new_balance)
+        try:
+            asyncio.create_task(backup_to_telegram(context.bot))
+        except Exception:
+            pass
+        await update.message.reply_text(f"✅ Balance set to {format_currency(final_bal)}")
     except ValueError:
         await update.message.reply_text("❌ Invalid amount format. Example: /setbalance 50000")
+
 
 async def send_pdf_report(chat, bot):
     from services.export_service import generate_pdf_statement

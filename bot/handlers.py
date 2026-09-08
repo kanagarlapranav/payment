@@ -590,11 +590,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         clean_id_str = text.replace('#', '').strip()
         if clean_id_str.isdigit():
             num = int(clean_id_str)
-            tx = get_transaction_by_id(num)
+            recent_ids = context.user_data.get('recent_edit_ids') or [t['id'] for t in get_recent_transactions(limit=10)]
+            tx = None
+            if 1 <= num <= len(recent_ids):
+                tx = get_transaction_by_id(recent_ids[num - 1])
             if not tx:
-                recent_ids = context.user_data.get('recent_edit_ids') or [t['id'] for t in get_recent_transactions(limit=10)]
-                if 1 <= num <= len(recent_ids):
-                    tx = get_transaction_by_id(recent_ids[num - 1])
+                tx = get_transaction_by_id(num)
             if tx:
                 tx_id = tx['id']
                 context.user_data.pop('action', None)
@@ -612,18 +613,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(msg, reply_markup=get_edit_fields_keyboard(tx_id), parse_mode='Markdown')
                 return
             else:
-                await update.message.reply_text("❌ Transaction not found. Please send a valid number or ID:")
+                await update.message.reply_text("❌ Transaction not found. Please send a valid number (1-6) or ID:")
                 return
                 
     elif pending_action == 'waiting_delete_id':
         clean_id_str = text.replace('#', '').strip()
         if clean_id_str.isdigit():
             num = int(clean_id_str)
-            tx = get_transaction_by_id(num)
+            recent_ids = context.user_data.get('recent_delete_ids') or [t['id'] for t in get_recent_transactions(limit=10)]
+            tx = None
+            if 1 <= num <= len(recent_ids):
+                tx = get_transaction_by_id(recent_ids[num - 1])
             if not tx:
-                recent_ids = context.user_data.get('recent_delete_ids') or [t['id'] for t in get_recent_transactions(limit=10)]
-                if 1 <= num <= len(recent_ids):
-                    tx = get_transaction_by_id(recent_ids[num - 1])
+                tx = get_transaction_by_id(num)
             if tx:
                 tx_id = tx['id']
                 context.user_data.pop('action', None)
@@ -641,7 +643,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(msg, reply_markup=get_delete_confirm_keyboard(tx_id), parse_mode='Markdown')
                 return
             else:
-                await update.message.reply_text("❌ Transaction not found. Please send a valid number or ID:")
+                await update.message.reply_text("❌ Transaction not found. Please send a valid number (1-6) or ID:")
                 return
                 
     elif pending_action == 'waiting_edit_value':
@@ -691,6 +693,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if needs_recalc:
                 new_bal = recalculate_all_balances()
                 bal_msg = f"\n💰 Updated Current Balance: {format_currency(new_bal)}"
+            try:
+                from services.backup_service import backup_to_telegram
+                asyncio.create_task(backup_to_telegram(context.bot))
+            except Exception:
+                pass
             await update.message.reply_text(f"✅ Transaction updated successfully!{bal_msg}", parse_mode='Markdown')
             return
         else:

@@ -89,3 +89,26 @@ def recalculate_all_balances() -> float:
         pass
         
     return running_balance
+
+def set_explicit_balance(new_balance: float) -> float:
+    """
+    Sets the current balance to new_balance, updates initial_balance anchor accordingly,
+    and recalculates all transaction balance records so everything remains completely consistent.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT transaction_type, amount FROM transactions ORDER BY transaction_date ASC, created_at ASC, id ASC")
+        txs = cursor.fetchall()
+        net_delta = 0.0
+        for tx in txs:
+            if tx['transaction_type'] == 'SENT':
+                net_delta -= tx['amount']
+            elif tx['transaction_type'] == 'RECEIVED':
+                net_delta += tx['amount']
+        
+        calc_initial = new_balance - net_delta
+        cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('initial_balance', ?, CURRENT_TIMESTAMP)", (str(calc_initial),))
+        conn.commit()
+    
+    return recalculate_all_balances()
+

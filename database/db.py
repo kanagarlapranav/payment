@@ -92,7 +92,7 @@ def setup_database():
 
             cursor.execute('SELECT value FROM settings WHERE key = ?', ('current_balance',))
             row = cursor.fetchone()
-            if not row or float(row[0]) < 32500.0:
+            if not row:
                 cursor.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ('current_balance', '32500.0'))
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('initial_balance', '0.0'))
             
