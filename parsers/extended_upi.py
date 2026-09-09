@@ -73,3 +73,55 @@ class UnionEaseParser(GenericParser):
         if not t.bank_name:
             t.bank_name = "Union Bank of India"
         return t
+
+
+class WhatsAppPayParser(GenericParser):
+    """Parser specifically tuned for WhatsApp Pay UPI receipts and screenshots."""
+
+    def can_parse(self) -> bool:
+        text_l = self.raw_text.lower()
+        return "whatsapp" in text_l or "@waaxis" in text_l or "@wahdfcbank" in text_l or "@waicici" in text_l or "@wasbi" in text_l
+
+    def parse(self) -> Transaction:
+        t = super().parse()
+        t.payment_app = "WhatsApp Pay"
+        return t
+
+
+class MobikwikParser(GenericParser):
+    """Parser specifically tuned for Mobikwik UPI receipts and screenshots."""
+
+    def can_parse(self) -> bool:
+        text_l = self.raw_text.lower()
+        return "mobikwik" in text_l or "@ikwik" in text_l
+
+    def parse(self) -> Transaction:
+        t = super().parse()
+        t.payment_app = "MobiKwik"
+        return t
+
+
+class SliceParser(GenericParser):
+    """Parser specifically tuned for Slice UPI receipts and screenshots."""
+
+    def can_parse(self) -> bool:
+        text_l = self.raw_text.lower()
+        return "slice" in text_l or "@slice" in text_l
+
+    def parse(self) -> Transaction:
+        t = super().parse()
+        t.payment_app = "Slice"
+        return t
+
+
+class JupiterParser(GenericParser):
+    """Parser specifically tuned for Jupiter / Federal Bank UPI receipts and screenshots."""
+
+    def can_parse(self) -> bool:
+        text_l = self.raw_text.lower()
+        return "jupiter" in text_l or "@jupiteraxis" in text_l
+
+    def parse(self) -> Transaction:
+        t = super().parse()
+        t.payment_app = "Jupiter"
+        return t
