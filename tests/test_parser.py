@@ -391,6 +391,52 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(t.payment_app, "Union EASE")
         self.assertEqual(t.bank_name, "Union Bank of India")
 
+    def test_amazon_pay_sent_extraction(self):
+        text = """
+        amazon pay
+        Paid successfully
+        ₹5,000
+        Paid to
+        KS
+        KANAGARLA SAI AKHIL
+        9346896729@ybl
+        Paid from
+        Amazon Pay UPI
+        State Bank of India ****7751
+        8688701141@apl
+        UPI transaction ID 625214795239
+        Amazon reference ID APLAP0889bbd84228783be1c8d347226ad0
+        Date and time 9 Sept 2026, 12:17 PM
+        Powered by UPI
+        """
+        parser = get_best_parser(text)
+        from parsers.amazonpay import AmazonPayParser
+        self.assertIsInstance(parser, AmazonPayParser)
+        t = parser.parse()
+        self.assertEqual(t.transaction_type, "SENT")
+        self.assertEqual(t.amount, 5000.0)
+        self.assertEqual(t.person_name, "Kanagarla Sai Akhil")
+        self.assertEqual(t.recipient_name, "Kanagarla Sai Akhil")
+        self.assertEqual(t.bank_name, "State Bank Of India")
+        self.assertEqual(t.bank_account, "7751")
+        self.assertEqual(t.reference_number, "625214795239")
+        self.assertEqual(t.transaction_date, date(2026, 9, 9))
+        self.assertEqual(t.transaction_time, "12:17 PM")
+
+    def test_whatsapp_pay_extraction(self):
+        text = """
+        WhatsApp
+        Paid ₹750 to Ramesh
+        Ref: 998811223344
+        """
+        parser = get_best_parser(text)
+        from parsers.extended_upi import WhatsAppPayParser
+        self.assertIsInstance(parser, WhatsAppPayParser)
+        t = parser.parse()
+        self.assertEqual(t.transaction_type, "SENT")
+        self.assertEqual(t.amount, 750.0)
+        self.assertEqual(t.payment_app, "WhatsApp Pay")
+
     def test_currency_ocr_artifacts(self):
         test_amounts = [
             ('3,500', 3500.0),
