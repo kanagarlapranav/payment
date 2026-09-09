@@ -16,19 +16,28 @@ from utils.currency import format_currency
 pending_transactions = {}
 
 async def deliver_response(status_msg, message, text: str, reply_markup=None, parse_mode=None):
-    """Safely updates status_msg or sends a new reply if edit_text fails or is flood controlled."""
+    """Safely updates status_msg or sends a new reply if edit_text fails, ensuring no stuck status messages."""
     try:
         await status_msg.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return
     except Exception as err:
-        logger.warning(f"Could not edit status message ({err}); falling back to new reply.")
+        logger.warning(f"Could not edit status message with parse_mode={parse_mode}: {err}. Retrying without formatting...")
         try:
-            await message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-        except Exception:
-            # Fallback without parse_mode if formatting entity error occurred
+            await status_msg.edit_text(text, reply_markup=reply_markup)
+            return
+        except Exception as edit_err:
+            logger.warning(f"Could not edit status message without formatting ({edit_err}); deleting status and sending reply.")
             try:
-                await message.reply_text(text, reply_markup=reply_markup)
-            except Exception as final_err:
-                logger.error(f"Failed to deliver message: {final_err}")
+                await status_msg.delete()
+            except Exception:
+                pass
+            try:
+                await message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            except Exception:
+                try:
+                    await message.reply_text(text, reply_markup=reply_markup)
+                except Exception as final_err:
+                    logger.error(f"Failed to deliver message: {final_err}")
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles incoming images (screenshots) with non-blocking OCR and resilient responses."""
