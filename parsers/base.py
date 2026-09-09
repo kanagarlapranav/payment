@@ -14,30 +14,45 @@ def split_camel_case(text: str) -> str:
 
 APP_NAME_BLACKLIST = {
     'phonepe', 'phone pe', 'paytm', 'google pay', 'googlepay', 'gpay',
-    'bhim', 'cred', 'amazon pay', 'bank', 'upi', 'payment', 'phonepe payment'
+    'bhim', 'cred', 'amazon pay', 'bank', 'upi', 'payment', 'phonepe payment',
+    'paytm payments bank', 'state bank of india', 'union bank of india',
+    'hdfc bank', 'icici bank', 'axis bank', 'money sent', 'money received',
+    'paid successfully', 'payment successful', 'transaction successful',
+    'transfer successful', 'download latest app', 'view history', 'check balance',
+    'transfer details', 'phonepe transaction id', 'transaction id', 'credited to',
+    'debited from', 'payment details', 'utr', 'hide details', 'share', 'process details'
 }
 
 def clean_person_name(name: str) -> str:
     """Cleans extracted person name by removing noise keywords and punctuation."""
     if not name or '@' in name:
         return ""
-    # Remove leading/trailing non-alphanumeric except spaces
+    # Remove leading/trailing non-alphanumeric except spaces and periods
     cleaned = re.sub(r'^[^a-zA-Z0-9]+|[^a-zA-Z0-9\s.]+$', '', name)
-    # Remove common noise words
-    noise = ['paid to', 'received from', 'transfer to', 'payment to', 'money sent to', 'to', 'from', 'edit', 'pay', 'view history', 'payment from']
-    for n in noise:
-        cleaned = re.sub(rf'^{n}\s*[:.-]*\s*', '', cleaned, flags=re.IGNORECASE)
+    # Remove common noise prefixes with word boundaries
+    noise_prefixes = [
+        'paid to', 'received from', 'transfer to', 'transferred to', 'payment to',
+        'money sent to', 'money received from', 'to', 'from', 'edit', 'pay',
+        'view history', 'payment from', 'sent to'
+    ]
+    for n in noise_prefixes:
+        cleaned = re.sub(rf'^{n}\b\s*[:.-]*\s*', '', cleaned, flags=re.IGNORECASE)
+        
     cleaned = split_camel_case(cleaned)
     # Remove trailing badge letters/digits (like 'PV', '8', 'LV')
     cleaned = re.sub(r'\s+[A-Z0-9]{1,2}$', '', cleaned)
-    # Remove trailing noise words like 'via', 'from', 'to'
+    # Remove trailing noise words like 'via', 'from', 'to', 'on', 'using', 'on phonepe', 'via paytm'
+    cleaned = re.sub(r'\s+(?:via|from|to|on|using|for)\s+(?:phonepe|paytm|gpay|google pay|upi|bhim|bank).*$', '', cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r'\s+(?:via|from|to|on|using)\s*$', '', cleaned, flags=re.IGNORECASE)
-    cleaned = cleaned.strip()
+    cleaned = cleaned.strip(' -–:.,')
     
     # If it's a short noise string (like "LV" or single letter), return empty
-    if len(cleaned.replace(' ', '')) <= 2 and cleaned.isupper():
+    if len(cleaned.replace(' ', '').replace('.', '')) <= 2 and cleaned.isupper():
         return ""
     if cleaned.lower() in APP_NAME_BLACKLIST:
+        return ""
+    # If string contains digits and is not a legitimate name
+    if re.search(r'\d{3,}', cleaned):
         return ""
     return cleaned.title()
 

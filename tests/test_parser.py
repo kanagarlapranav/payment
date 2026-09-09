@@ -9,6 +9,7 @@ from parsers.extended_upi import (
     CredParser, SuperMoneyParser, NaviParser, YonoSbiParser, UnionEaseParser
 )
 from parsers import get_best_parser
+from utils.currency import parse_amount, extract_amounts_from_line
 
 class TestParsers(unittest.TestCase):
 
@@ -77,6 +78,108 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(t.transaction_time, "10:02 AM")
         self.assertEqual(t.bank_account, "1185")
         self.assertGreaterEqual(parser.get_confidence(t), 80)
+
+    def test_paytm_sent_3500_exact_user_screenshot(self):
+        text = """
+        Paytm
+        Kanagarla Sai Akhil
+        9346896729@ybl on PhonePe
+        ₹3,500
+        Three Thousand Five Hundred Rupees
+        Paid Successfully
+        From
+        Kanagarla Pranav
+        Union Bank of India - 1185
+        9 Sep, 10:58 AM | Ref No: 6252 4624 3251
+        """
+        parser = get_best_parser(text)
+        self.assertIsInstance(parser, PaytmParser)
+        t = parser.parse()
+        
+        self.assertEqual(t.transaction_type, "SENT")
+        self.assertEqual(t.amount, 3500.0)
+        self.assertEqual(t.person_name, "Kanagarla Sai Akhil")
+        self.assertEqual(t.recipient_name, "Kanagarla Sai Akhil")
+        self.assertEqual(t.sender_name, "Kanagarla Pranav")
+        self.assertEqual(t.reference_number, "625246243251")
+        self.assertEqual(t.bank_name, "Union Bank of India")
+        self.assertEqual(t.bank_account, "1185")
+        self.assertEqual(t.transaction_date, date(2026, 9, 9))
+        self.assertEqual(t.transaction_time, "10:58 AM")
+
+    def test_paytm_sent_dot_separator_and_spaces(self):
+        # When OCR returns dot e.g. 3.500 or space e.g. ₹3, 500
+        variations = [
+            """
+            Paytm
+            Kanagarla Sai Akhil
+            9346896729@ybl on PhonePe
+            3.500
+            Paid Successfully
+            From
+            Kanagarla Pranav
+            Union Bank of India - 1185
+            9 Sep, 10:58 AM | Ref No: 6252 4624 3251
+            """,
+            """
+            Paytm
+            Kanagarla Sai Akhil
+            9346896729@ybl on PhonePe
+            ₹3, 500
+            Paid Successfully
+            From
+            Kanagarla Pranav
+            Union Bank of India - 1185
+            9 Sep, 10:58 AM | Ref No: 6252 4624 3251
+            """,
+            """
+            Paytm
+            Kanagarla Sai Akhil
+            9346896729@ybl on PhonePe
+            ₹3 500
+            Paid Successfully
+            From
+            Kanagarla Pranav
+            Union Bank of India - 1185
+            9 Sep, 10:58 AM | Ref No: 6252 4624 3251
+            """
+        ]
+        for var in variations:
+            parser = get_best_parser(var)
+            t = parser.parse()
+            self.assertEqual(t.transaction_type, "SENT")
+            self.assertEqual(t.amount, 3500.0)
+            self.assertEqual(t.person_name, "Kanagarla Sai Akhil")
+            self.assertEqual(t.recipient_name, "Kanagarla Sai Akhil")
+            self.assertEqual(t.reference_number, "625246243251")
+
+    def test_phonepe_received_4900_screenshot(self):
+        text = """
+        Transaction Successful
+        10:44 AM on 09 Sep 2026
+
+        Received from
+        XXXXXXXX3377
+        ₹4,900
+
+        Transfer Details
+        PhonePe Transaction ID
+        T2609091044496419927143
+
+        Credited to
+        paytm • XXXXXX1141@ptyes
+        ₹4,900
+        UTR: 020250271371
+        """
+        parser = get_best_parser(text)
+        self.assertIsInstance(parser, PhonePeParser)
+        t = parser.parse()
+        
+        self.assertEqual(t.transaction_type, "RECEIVED")
+        self.assertEqual(t.amount, 4900.0)
+        self.assertEqual(t.reference_number, "020250271371")
+        self.assertEqual(t.transaction_date, date(2026, 9, 9))
+        self.assertEqual(t.transaction_time, "10:44 AM")
 
     def test_googlepay_sent_extraction(self):
         text = """
@@ -287,6 +390,33 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(t.amount, 3200.0)
         self.assertEqual(t.payment_app, "Union EASE")
         self.assertEqual(t.bank_name, "Union Bank of India")
+
+    def test_currency_ocr_artifacts(self):
+        test_amounts = [
+            ('3,500', 3500.0),
+            ('3.500', 3500.0),
+            ('₹3,500', 3500.0),
+            ('₹3.500', 3500.0),
+            ('₹3, 500', 3500.0),
+            ('₹3 500', 3500.0),
+            ('3,500.00', 3500.0),
+            ('3.500,00', 3500.0),
+            ('35,000', 35000.0),
+            ('35.000', 35000.0),
+            ('1,00,000', 100000.0),
+            ('1.00.000', 100000.0),
+            ('R30,700', 30700.0),
+            ('F4000', 4000.0),
+            ('?4,000.00', 4000.0),
+            ('4,900', 4900.0),
+            ('4900.00', 4900.0),
+            ('Three Thousand Five Hundred Rupees', 3500.0),
+            ('Rupees Thirty Thousand Seven Hundred Only', 30700.0),
+            ('₹600', 600.0),
+            ('600', 600.0),
+        ]
+        for raw, expected in test_amounts:
+            self.assertEqual(parse_amount(raw), expected, f"Failed for {raw}")
 
 if __name__ == '__main__':
     unittest.main()
