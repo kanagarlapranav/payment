@@ -66,58 +66,118 @@ class PaytmParser(GenericParser):
                             break
 
         # 3. Extract Names (Sender vs Recipient)
-        # Scan Paytm layout
+        # Paytm layout: The recipient/sender name appears as the prominent name
+        # at the top of the payment card, often on the same line as or just above
+        # their UPI ID (e.g. "M S Prashanth Kumar 7036046070@upi").
+
+        # Helper: strip UPI IDs and phone-like digits from a line to isolate the name part
+        def _extract_name_near_upi(line_text):
+            """Strips UPI IDs and trailing digits/noise from a line, returns cleaned name or empty string."""
+            # Remove UPI IDs like user@upi, user@paytm etc.
+            stripped = re.sub(r'\s*[a-zA-Z0-9*._-]+@[a-zA-Z]+\b', '', line_text).strip()
+            # Remove standalone phone numbers (10-digit)
+            stripped = re.sub(r'\b\d{10,}\b', '', stripped).strip()
+            # Remove currency symbols and amounts
+            stripped = re.sub(r'[₹$€£]\s*[\d,]+', '', stripped).strip()
+            stripped = stripped.strip(' -–:.,')
+            if stripped:
+                return clean_person_name(stripped)
+            return ""
+
+        # Strategy A: Scan the card header area (top ~10 lines) for the prominent name
+        # In Paytm screenshots, the name appears above or alongside the UPI ID
         top_name_candidate = None
-        for i, line in enumerate(lines[:6]):
-            line_l = line.lower().strip()
-            # Skip app headers, status bar, and amount lines
-            if any(k in line_l for k in ('paytm', 'money', 'received', 'paid', 'sent', 'amount', 'success', 'http', 'download', '9346', 'union', 'bank')):
-                continue
-            if '@' in line or re.search(r'\d', line) or '₹' in line:
-                continue
-            cleaned = clean_person_name(line)
-            if cleaned and len(cleaned) > 2:
-                top_name_candidate = cleaned
+        upi_line_idx = -1
+
+        # First, find the UPI ID line to anchor our search
+        for i, line in enumerate(lines[:12]):
+            if re.search(r'[a-zA-Z0-9*._-]+@(?:paytm|ptyes|ptaxis|pthdfc|ptsbi|upi|ybl|ibl|axl|okhdfcbank|okaxis|okicici|oksbi)', line, re.IGNORECASE):
+                upi_line_idx = i
                 break
 
-        # Extract From block
+        if upi_line_idx >= 0:
+            # Check if the name is on the SAME line as the UPI ID (OCR merged them)
+            name_from_upi_line = _extract_name_near_upi(lines[upi_line_idx])
+            if name_from_upi_line and len(name_from_upi_line) > 2:
+                top_name_candidate = name_from_upi_line
+            # Check the line ABOVE the UPI ID (separate lines)
+            if not top_name_candidate and upi_line_idx > 0:
+                prev_line = lines[upi_line_idx - 1].strip()
+                prev_l = prev_line.lower()
+                if not any(k in prev_l for k in ('paytm', 'money', 'received', 'paid', 'sent', 'success', 'http', 'download', '₹', 'balance')):
+                    if '@' not in prev_line and '₹' not in prev_line:
+                        cleaned = clean_person_name(prev_line)
+                        if cleaned and len(cleaned) > 2:
+                            top_name_candidate = cleaned
+
+        # Fallback: scan top lines for any standalone name (no digits, no @, no app keywords)
+        if not top_name_candidate:
+            for i, line in enumerate(lines[:8]):
+                line_l = line.lower().strip()
+                if any(k in line_l for k in ('paytm', 'money', 'received', 'paid', 'sent', 'amount', 'success', 'http', 'download', 'union', 'bank', 'balance', 'thousand', 'hundred', 'rupees')):
+                    continue
+                if '₹' in line:
+                    continue
+                # If line contains @, try to extract name portion
+                if '@' in line:
+                    name_part = _extract_name_near_upi(line)
+                    if name_part and len(name_part) > 2:
+                        top_name_candidate = name_part
+                        break
+                    continue
+                # Skip pure digit lines
+                if re.match(r'^[\d\s,.:+%-]+$', line.strip()):
+                    continue
+                cleaned = clean_person_name(line)
+                if cleaned and len(cleaned) > 2:
+                    top_name_candidate = cleaned
+                    break
+
+        # Strategy B: Extract "From" block name
         from_name = None
         for i, line in enumerate(lines):
             line_clean = line.strip()
             if re.match(r'^from\b', line_clean, re.IGNORECASE):
                 first_part = re.sub(r'^from\s*[:.-]*\s*', '', line_clean, flags=re.IGNORECASE).strip()
+                # Remove any UPI ID from the "From" line itself
+                first_part = re.sub(r'\s*[a-zA-Z0-9*._-]+@[a-zA-Z]+\b', '', first_part).strip()
                 name_parts = [first_part] if first_part else []
+                # Look at the next line for the name (common Paytm layout: "From\nKanagarla Pranav")
                 if i + 1 < len(lines):
                     next_l = lines[i + 1].strip()
-                    if not re.match(r'^(?:upi|to|from|bank|ref|a/c|account|union|state|hdfc|icici|axis|9\s*sep|\d)\b', next_l, re.IGNORECASE) and '@' not in next_l:
-                        name_parts.append(next_l)
+                    if not re.match(r'^(?:upi|to|from|bank|ref|a/c|account|\d)', next_l, re.IGNORECASE) and '@' not in next_l:
+                        # Don't skip lines with bank names here — they are separate from the person name
+                        if not re.match(r'^(?:union|state|hdfc|icici|axis|punjab|kotak|bob|canara|indian)\b', next_l, re.IGNORECASE):
+                            name_parts.append(next_l)
                 from_name = clean_person_name(' '.join(name_parts))
                 if from_name:
                     break
 
-        # Extract To block
+        # Strategy C: Extract "To" block name
         to_name = None
         for i, line in enumerate(lines):
             line_clean = line.strip()
             if re.match(r'^to\b', line_clean, re.IGNORECASE):
                 first_part = re.sub(r'^to\s*[:.-]*\s*', '', line_clean, flags=re.IGNORECASE).strip()
+                first_part = re.sub(r'\s*[a-zA-Z0-9*._-]+@[a-zA-Z]+\b', '', first_part).strip()
                 name_parts = [first_part] if first_part else []
                 if i + 1 < len(lines):
                     next_l = lines[i + 1].strip()
-                    if not re.match(r'^(?:upi|to|from|bank|ref|a/c|account|union|state|hdfc|icici|axis|\d)\b', next_l, re.IGNORECASE) and '@' not in next_l:
-                        name_parts.append(next_l)
+                    if not re.match(r'^(?:upi|to|from|bank|ref|a/c|account|\d)', next_l, re.IGNORECASE) and '@' not in next_l:
+                        if not re.match(r'^(?:union|state|hdfc|icici|axis|punjab|kotak|bob|canara|indian)\b', next_l, re.IGNORECASE):
+                            name_parts.append(next_l)
                 to_name = clean_person_name(' '.join(name_parts))
                 if to_name:
                     break
 
-        # Map according to Paytm Transaction Type:
+        # Map names according to Paytm Transaction Type:
         if t.transaction_type == "SENT":
-            # In SENT: Top card has the recipient (person you paid)!
+            # In SENT: Top card has the recipient (person you paid)
             t.recipient_name = to_name or top_name_candidate or t.recipient_name
             t.sender_name = from_name or t.sender_name
             t.person_name = t.recipient_name or t.person_name
         else: # RECEIVED
-            # In RECEIVED: From has the sender (person who paid you)!
+            # In RECEIVED: From has the sender (person who paid you)
             t.sender_name = from_name or top_name_candidate or t.sender_name
             t.recipient_name = to_name or t.recipient_name
             t.person_name = t.sender_name or t.person_name
