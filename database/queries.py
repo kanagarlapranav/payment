@@ -63,6 +63,13 @@ def get_all_transactions():
         cursor.execute("SELECT * FROM transactions ORDER BY transaction_date DESC, created_at DESC")
         return [dict(row) for row in cursor.fetchall()]
 
+def get_all_transactions_asc():
+    """Fetches all transactions in ascending order (oldest first, ID #1 first)."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM transactions ORDER BY transaction_date ASC, created_at ASC, id ASC")
+        return [dict(row) for row in cursor.fetchall()]
+
 def search_transactions(
     query_text: str = "",
     target_date = None,
