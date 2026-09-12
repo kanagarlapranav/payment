@@ -45,6 +45,26 @@ def get_today_summary() -> TransactionSummary:
         summary.net_change = summary.total_received - summary.total_sent
         return summary
 
+def get_overall_summary() -> TransactionSummary:
+    """Calculates summary across ALL transactions."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT transaction_type, amount FROM transactions")
+        rows = cursor.fetchall()
+        
+        summary = TransactionSummary()
+        summary.current_balance = get_balance_setting()
+        summary.transaction_count = len(rows)
+        
+        for row in rows:
+            if row['transaction_type'] == 'SENT':
+                summary.total_sent += row['amount']
+            elif row['transaction_type'] == 'RECEIVED':
+                summary.total_received += row['amount']
+                
+        summary.net_change = summary.total_received - summary.total_sent
+        return summary
+
 def recalculate_all_balances() -> float:
     """
     Recalculates balance_before and balance_after for all transactions in chronological order.

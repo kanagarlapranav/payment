@@ -6,7 +6,7 @@ from database.queries import (
     get_transaction_by_id, update_transaction, delete_transaction,
     search_transactions, get_monthly_summary, get_all_transactions_asc
 )
-from services.balance_service import get_today_summary, recalculate_all_balances
+from services.balance_service import get_today_summary, get_overall_summary, recalculate_all_balances
 from services.export_service import generate_excel_report
 from utils.currency import format_currency, parse_amount
 from utils.dates import parse_date, get_current_time_in_tz, format_display_date
@@ -81,16 +81,22 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update): return
     
     balance = get_balance_setting()
-    summary = get_today_summary()
+    overall = get_overall_summary()
+    today = get_today_summary()
     
     text = (
         f"💰 *Current Balance*\n"
         f"`{format_currency(balance)}`\n\n"
-        f"Today's Summary:\n"
-        f"Money Sent: {format_currency(summary.total_sent)}\n"
-        f"Money Received: {format_currency(summary.total_received)}\n"
-        f"Net: {format_currency(summary.net_change)}\n\n"
-        f"Total Transactions Today: {summary.transaction_count}"
+        f"📊 *Overall Summary:*\n"
+        f"🔴 Total Sent: {format_currency(overall.total_sent)}\n"
+        f"🟢 Total Received: {format_currency(overall.total_received)}\n"
+        f"📈 Net: {format_currency(overall.net_change)}\n"
+        f"🔢 Total Transactions: {overall.transaction_count}\n\n"
+        f"📅 *Today's Summary:*\n"
+        f"🔴 Money Sent: {format_currency(today.total_sent)}\n"
+        f"🟢 Money Received: {format_currency(today.total_received)}\n"
+        f"📈 Net: {format_currency(today.net_change)}\n"
+        f"🔢 Transactions Today: {today.transaction_count}"
     )
     await update.message.reply_text(text, parse_mode='Markdown')
 
