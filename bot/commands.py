@@ -4,7 +4,7 @@ from config import TELEGRAM_USER_ID, TELEGRAM_GROUP_ID, DATA_DIR, logger
 from database.queries import (
     get_balance_setting, get_recent_transactions, update_balance_setting,
     get_transaction_by_id, update_transaction, delete_transaction,
-    search_transactions, get_monthly_summary
+    search_transactions, get_monthly_summary, get_all_transactions_asc
 )
 from services.balance_service import get_today_summary, recalculate_all_balances
 from services.export_service import generate_excel_report
@@ -107,10 +107,16 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await details_command(update, context)
         return
         
-    transactions = get_recent_transactions(limit=10)
+    transactions = get_all_transactions_asc()
     if not transactions:
         await update.message.reply_text("No recent transactions found.")
         return
+    
+    # Calculate summary
+    total_sent = sum(t['amount'] for t in transactions if t['transaction_type'] == 'SENT')
+    total_received = sum(t['amount'] for t in transactions if t['transaction_type'] == 'RECEIVED')
+    net = total_received - total_sent
+    tx_count = len(transactions)
         
     text = "📜 *Recent Transactions*\n\n"
     for t in transactions:
@@ -125,14 +131,38 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💵 {format_currency(t['amount'])}\n"
             f"Balance: {format_currency(t['balance_after'])}\n\n"
         )
-        
-    await update.message.reply_text(text, parse_mode='Markdown')
+    
+    # Add summary at the end
+    text += (
+        f"📊 *Summary*\n"
+        f"🔴 Total Sent: {format_currency(total_sent)}\n"
+        f"🟢 Total Received: {format_currency(total_received)}\n"
+        f"📈 Net: {format_currency(net)}\n"
+        f"🔢 Total Transactions: {tx_count}"
+    )
+    
+    # Split message if too long for Telegram (4096 char limit)
+    if len(text) > 4096:
+        parts = []
+        current = ""
+        for line in text.split("\n"):
+            if len(current) + len(line) + 1 > 4000:
+                parts.append(current)
+                current = line
+            else:
+                current += "\n" + line if current else line
+        if current:
+            parts.append(current)
+        for part in parts:
+            await update.message.reply_text(part, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(text, parse_mode='Markdown')
 
 async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays transactions WITH IDs and full technical details on demand."""
     if not await is_authorized(update): return
     
-    transactions = get_recent_transactions(limit=10)
+    transactions = get_all_transactions_asc()
     if not transactions:
         await update.message.reply_text("No recent transactions found.")
         return
@@ -155,7 +185,23 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔢 Ref/UTR: `{ref}`\n"
             f"💰 Balance: {format_currency(t['balance_after'])}\n\n"
         )
-    await update.message.reply_text(text, parse_mode='Markdown')
+    
+    # Split message if too long for Telegram (4096 char limit)
+    if len(text) > 4096:
+        parts = []
+        current = ""
+        for line in text.split("\n"):
+            if len(current) + len(line) + 1 > 4000:
+                parts.append(current)
+                current = line
+            else:
+                current += "\n" + line if current else line
+        if current:
+            parts.append(current)
+        for part in parts:
+            await update.message.reply_text(part, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(text, parse_mode='Markdown')
 
 async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows transactions for a specific date e.g. /date 05/09/2026 or /date yesterday."""
