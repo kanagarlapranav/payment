@@ -50,7 +50,13 @@ class GenericParser(BasePaymentParser):
             return True
         if any(k in line_l for k in ('bank', 'biarik', 'a/c', 'acct', 'account', 'ending in')) and re.search(r'[-?*xX\s]+' + str(val_int) + r'\b', line_str):
             return True
+        # Ignore day numbers in date strings (e.g., 15 in "September 15 at 1:41 PM") if no currency symbol present
+        month_kw = r'\b(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b'
+        if re.search(month_kw, line_l) and not any(c in line_str for c in ('₹', 'Rs', 'RS', 'INR', 'inr')):
+            if re.search(r'\b' + str(val_int) + r'\b', line_str):
+                return True
         return False
+
 
     def parse(self) -> Transaction:
         t = Transaction()
