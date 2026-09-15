@@ -71,11 +71,16 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /monthly (or /stats) — Monthly total spent, income, net savings & top recipient\n"
         "• /filter — Interactive filter buttons (Today, Yesterday, Month, Sent, Received)\n"
         "• /sort — Interactive sorting menu (Amount High ➔ Low, Low ➔ High, Date)\n\n"
-        "⚙️ <b>6. Management & Edits</b>\n"
+        "🍽️ <b>6. Cafeteria Vegetarian System</b>\n"
+        "• /menu — Full vegetarian cafeteria menu with prices & add-ons\n"
+        "• /cafestats — Cafeteria monthly spend totals & most ordered items\n"
+        "• /cafeedit — Re-tag or edit items for recent cafeteria payments\n"
+        "• <i>Features:</i> 1-item mode, 2-items combos, Plate Builder cart, custom ice cream amounts & +₹5 packing\n\n"
+        "⚙️ <b>7. Management & Edits</b>\n"
         "• /edit — Interactive 1-tap menu to edit amount, name, date, type, or UTR\n"
         "• /delete — Interactive 1-tap menu to delete record & auto-recalculate\n"
         "• /setbalance &lt;amt&gt; — Set starting balance (e.g. <code>/setbalance 50000</code>)\n\n"
-        "📄 <b>7. Reports & Export</b>\n"
+        "📄 <b>8. Reports & Export</b>\n"
         "• /export (or /report, /statement) — Download official <b>PDF Statement</b> or <b>Excel Sheet (.xlsx)</b>\n\n"
         "☁️ <b>Cloud Reliability:</b>\n"
         "• Every transaction, edit, and deletion is automatically backed up and synced 24/7."
@@ -836,5 +841,45 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from services.cafeteria_service import format_full_menu
     menu_text = format_full_menu()
     await update.message.reply_text(menu_text, parse_mode='HTML')
+
+async def cafestats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays monthly spending insights and top ordered veg items at the cafeteria."""
+    if not await is_authorized(update): return
+    from services.cafeteria_service import format_cafeteria_stats
+    stats_text = format_cafeteria_stats()
+    await update.message.reply_text(stats_text, parse_mode='HTML')
+
+async def cafeedit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Opens the interactive cafeteria item selector for the most recent or specified cafeteria payment."""
+    if not await is_authorized(update): return
+    from database.queries import get_cafeteria_transactions, get_transaction_by_id
+    from bot.keyboards import get_cafeteria_selection_keyboard
+    import html
+    
+    target_tx = None
+    if context.args:
+        clean_id = context.args[0].replace('#', '').strip()
+        if clean_id.isdigit():
+            target_tx = get_transaction_by_id(int(clean_id))
+            
+    if not target_tx:
+        cafe_txs = get_cafeteria_transactions(limit=1)
+        if cafe_txs:
+            target_tx = cafe_txs[0]
+            
+    if not target_tx:
+        await update.message.reply_text("❌ No recent cafeteria payments found to edit. Scan a receipt or use <code>/edit</code>.", parse_mode='HTML')
+        return
+        
+    tx_id = target_tx['id']
+    amt = float(target_tx['amount'])
+    await update.message.reply_text(
+        f"✏️ <b>Edit Cafeteria Order #{tx_id} (Paid {html.escape(format_currency(amt))}):</b>\n\n"
+        f"<b>How many items or what did you order?</b>\n"
+        f"Select an option below to update what you ordered:",
+        reply_markup=get_cafeteria_selection_keyboard(tx_id, amt),
+        parse_mode='HTML'
+    )
+
 
 

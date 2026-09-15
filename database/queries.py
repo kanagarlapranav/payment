@@ -325,3 +325,19 @@ def get_daily_summary_stats(target_date_str: str):
             'transactions': transactions
         }
 
+def get_cafeteria_transactions(limit: int = 50):
+    """Fetches transactions related to Vikraman Nair / Cafeteria."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM transactions 
+            WHERE lower(person_name) LIKE '%vikraman%' 
+               OR lower(person_name) LIKE '%cafeteria%' 
+               OR lower(person_name) LIKE '%canteen%'
+               OR lower(upi_id) LIKE '%vikraman%'
+            ORDER BY transaction_date DESC, id DESC
+            LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in cursor.fetchall()]
+
+

@@ -47,5 +47,38 @@ class TestCafeteriaService(unittest.TestCase):
         self.assertIn("Plain Dosa", text)
         self.assertIn("Chilly Bajji", text)
 
+    def test_format_cafeteria_stats(self):
+        from services.cafeteria_service import format_cafeteria_stats
+        stats = format_cafeteria_stats()
+        self.assertIn("CAFETERIA SPENDING INSIGHTS", stats)
+        self.assertIn("VIKRAMAN NAIR K", stats)
+
+    def test_cafeteria_keyboards(self):
+        from bot.keyboards import (
+            get_cafeteria_selection_keyboard, get_cafeteria_single_item_keyboard,
+            get_cafeteria_two_items_keyboard, get_cafeteria_cart_keyboard,
+            get_cafeteria_tagged_keyboard
+        )
+        # Initial selection
+        kb1 = get_cafeteria_selection_keyboard(1, 20.0)
+        self.assertTrue(len(kb1.inline_keyboard) > 0)
+        
+        # Single item
+        kb_single = get_cafeteria_single_item_keyboard(1, 20.0)
+        self.assertTrue(len(kb_single.inline_keyboard) > 0)
+        
+        # Two items
+        kb_two = get_cafeteria_two_items_keyboard(1, 20.0)
+        self.assertTrue(len(kb_two.inline_keyboard) > 0)
+        
+        # Cart / Plate builder
+        kb_cart = get_cafeteria_cart_keyboard(1, 20.0, [{'name': 'Plain Dosa', 'price': 10.0}])
+        self.assertTrue(len(kb_cart.inline_keyboard) > 0)
+        
+        # Tagged order keyboard
+        kb_tagged = get_cafeteria_tagged_keyboard(1)
+        self.assertEqual(len(kb_tagged.inline_keyboard), 2)
+
 if __name__ == '__main__':
     unittest.main()
+

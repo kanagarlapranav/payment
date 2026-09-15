@@ -166,3 +166,57 @@ def format_full_menu() -> str:
     text += "<i>Tip: When you pay Vikraman Nair, the bot will auto-suggest items matching your exact bill!</i>"
     return text
 
+def format_cafeteria_stats() -> str:
+    """Computes and formats cafeteria spending insights and top ordered veg items."""
+    import html
+    from database.queries import get_cafeteria_transactions
+    from utils.currency import format_currency
+    from collections import Counter
+    import datetime
+
+    txs = get_cafeteria_transactions(limit=200)
+    if not txs:
+        return (
+            "🍽️ <b>CAFETERIA SPENDING INSIGHTS</b>\n"
+            "🏪 <b>Merchant:</b> VIKRAMAN NAIR K\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "<i>No cafeteria payments recorded yet. Scan a receipt or log a payment to see insights!</i>"
+        )
+
+    now = datetime.datetime.now()
+    curr_month_str = now.strftime("%Y-%m")
+
+    month_txs = [t for t in txs if str(t.get('transaction_date', '')).startswith(curr_month_str)]
+    month_total = sum(float(t.get('amount') or 0.0) for t in month_txs)
+    all_time_total = sum(float(t.get('amount') or 0.0) for t in txs)
+    
+    # Extract item tags
+    item_counts = Counter()
+    for t in txs:
+        p_name = str(t.get('person_name') or "")
+        if "Cafeteria:" in p_name:
+            tag = p_name.split("Cafeteria:", 1)[1].rstrip(')').strip()
+            item_counts[tag] += 1
+
+    month_name = now.strftime("%B %Y")
+    avg_bill = month_total / len(month_txs) if month_txs else (all_time_total / len(txs) if txs else 0.0)
+
+    text = "🍽️ <b>CAFETERIA SPENDING INSIGHTS</b>\n"
+    text += "🏪 <b>Merchant:</b> VIKRAMAN NAIR K (<code>vikramannair066@fbl</code>)\n"
+    text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    text += f"📅 <b>{month_name} Spends:</b> <b>{html.escape(format_currency(month_total))}</b> ({len(month_txs)} visits)\n"
+    text += f"💰 <b>All-Time Cafeteria Total:</b> <b>{html.escape(format_currency(all_time_total))}</b> ({len(txs)} orders)\n"
+    text += f"📊 <b>Average Spend / Visit:</b> <b>{html.escape(format_currency(avg_bill))}</b>\n\n"
+
+    if item_counts:
+        text += "🏆 <b>MOST ORDERED VEG ITEMS:</b>\n"
+        for item, count in item_counts.most_common(5):
+            times_str = f"{count} times" if count > 1 else "1 time"
+            text += f"• 🍽️ <b>{html.escape(item)}</b> — {times_str}\n"
+        text += "\n"
+
+    text += "━━━━━━━━━━━━━━━━━━━━\n"
+    text += "<i>Tip: Use <code>/menu</code> to view the full vegetarian menu or <code>/cafeedit</code> to edit tagged items.</i>"
+    return text
+
+
