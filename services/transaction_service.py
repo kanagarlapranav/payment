@@ -9,17 +9,22 @@ _PROMO_PATTERNS = (
     'cashback', 'download now', 'onelink', 'playstore', 'appstore',
     'get up to', 'win up to', 'scratch card', 'refer and earn',
     'invite and earn', 'install now', 'bit.ly/', 'goo.gl/',
+    'link.super.money', 'sent you payment via upi',
+    'let me know when you get it', 'monthlybudgetpace',
+    'pinned message', 'auto-backup', '#payment_tracker_backup',
+    'paymentsent', 'paymentreceived'
 )
 
 def _strip_promo_lines(text: str) -> str:
-    """Removes promotional / ad lines so their amounts don't pollute parsing."""
+    """Removes promotional, URL, and previous bot chat history lines so they don't pollute parsing."""
     cleaned = []
     for line in text.split('\n'):
-        ll = line.lower()
-        if any(kw in ll for kw in _PROMO_PATTERNS):
+        ll = line.lower().replace(' ', '').replace('_', '')
+        if any(kw.replace(' ', '') in ll for kw in _PROMO_PATTERNS):
             continue
         cleaned.append(line)
     return '\n'.join(cleaned)
+
 
 
 def process_transaction(raw_text: str, image_path: str, message_id: str, chat_id: str, caption: str = "") -> tuple[Transaction, int]:

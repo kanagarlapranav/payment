@@ -14,13 +14,13 @@ def is_gemini_available() -> bool:
     return bool(GEMINI_API_KEY and GEMINI_API_KEY.strip())
 
 def _prepare_image_b64(image_path: str) -> tuple[str, str]:
-    """Resizes and compresses image in memory to max 1024px to ensure fast API upload."""
+    """Resizes and compresses image in memory to max 800px for lightning-fast API upload."""
     try:
         with Image.open(image_path) as img:
             img = img.convert("RGB")
-            img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+            img.thumbnail((800, 800), Image.Resampling.LANCZOS)
             buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=85, optimize=True)
+            img.save(buf, format="JPEG", quality=80, optimize=True)
             b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
             return b64, "image/jpeg"
     except Exception as img_err:
@@ -49,24 +49,29 @@ def extract_transaction_with_gemini(image_path: str, caption: str = "") -> tuple
 
         prompt = (
             "You are an expert Indian UPI & Banking Receipt OCR extractor.\n"
-            "Analyze this payment receipt screenshot (e.g. from Super.money, Google Pay, PhonePe, Paytm, CRED, BHIM, Amazon Pay, Navi, YONO SBI, Axis, Federal Bank, HDFC, ICICI, etc.).\n"
-            "Extract the transaction details accurately and return ONLY a valid JSON object with the following fields:\n"
-            "- amount (number/float, strictly the exact transaction bill/transfer amount, e.g. 20.0, 400.0, 5000.0. Do NOT return promo/cashback/item count numbers)\n"
-            "- transaction_type ('SENT' if money was sent/paid/debited, 'RECEIVED' if money was received/credited)\n"
-            "- person_name (string: name of the recipient or sender, e.g. 'VIKRAMAN NAIR K' or 'Kanagarla Pranav')\n"
-            "- payment_app (string: 'Super.money', 'Google Pay', 'PhonePe', 'Paytm', 'CRED', 'Amazon Pay', 'Navi', 'YONO SBI', 'Generic')\n"
-            "- transaction_date (string: 'YYYY-MM-DD' or formatted date string)\n"
+            "Analyze this payment receipt screenshot (from apps like Super.money, Google Pay, PhonePe, Paytm, CRED, BHIM, Amazon Pay, Navi, YONO SBI, etc.).\n"
+            "CRITICAL INSTRUCTIONS:\n"
+            "1. Extract details ONLY from the main payment receipt at the TOP (e.g. amount ₹20 under 'Payment Successful').\n"
+            "2. IGNORE any chat history, previous Telegram bot reply bubbles, or URLs at the bottom of the image.\n"
+            "3. Return ONLY a valid JSON object with the following fields:\n"
+            "- amount (float: exact bill amount paid/received e.g. 20.0, strictly positive)\n"
+            "- transaction_type ('SENT' if money was sent/paid/debited, 'RECEIVED' if credited)\n"
+            "- person_name (string: name of the recipient or sender, e.g. 'VIKRAMAN NAIR K')\n"
+            "- payment_app (string: 'Super.money', 'Google Pay', 'PhonePe', 'Paytm', 'CRED', 'Amazon Pay', 'Navi', 'Generic')\n"
+            "- transaction_date (string: 'YYYY-MM-DD' or formatted date)\n"
             "- transaction_time (string: e.g. '1:41 PM')\n"
-            "- bank_name (string: bank name if visible, e.g. 'Federal Bank', 'YES BANK', or null)\n"
-            "- reference_number (string: 12-digit UTR or UPI Reference ID, or null)\n"
-            "- raw_text (string: text content from the receipt)\n"
+            "- bank_name (string: bank name if visible, e.g. 'Federal Bank', 'YES BANK')\n"
+            "- reference_number (string: 12-digit UTR / UPI Ref ID e.g. '662474885797')\n"
+            "- raw_text (string: text content)\n"
             "- confidence (integer 90-100)\n\n"
             f"Optional user caption: '{caption}'\n"
             "Return ONLY the JSON object, without markdown code fences or quotes."
         )
 
-        candidate_models = [GEMINI_MODEL, "gemini-3.6-flash", "gemini-flash-latest", "gemini-2.5-flash"]
-        # Deduplicate while preserving order
+        candidate_models = ["gemini-flash-latest", "gemini-3.6-flash", "gemini-3.7-flash"]
+        if GEMINI_MODEL and GEMINI_MODEL not in candidate_models:
+            candidate_models.insert(0, GEMINI_MODEL)
+
         models_to_try = []
         for m in candidate_models:
             if m and m not in models_to_try:

@@ -839,8 +839,9 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the full vegetarian cafeteria menu with prices & add-ons."""
     if not await is_authorized(update): return
     from services.cafeteria_service import format_full_menu
+    from bot.keyboards import get_menu_view_keyboard
     menu_text = format_full_menu()
-    await update.message.reply_text(menu_text, parse_mode='HTML')
+    await update.message.reply_text(menu_text, reply_markup=get_menu_view_keyboard(), parse_mode='HTML')
 
 async def cafestats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays monthly spending insights and top ordered veg items at the cafeteria."""
@@ -880,6 +881,121 @@ async def cafeedit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_cafeteria_selection_keyboard(tx_id, amt),
         parse_mode='HTML'
     )
+
+async def addmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Adds a custom item to the cafeteria menu."""
+    if not await is_authorized(update): return
+    from services.cafeteria_service import add_custom_menu_item
+    import html
+
+    args = context.args
+    if not args:
+        context.user_data['action'] = 'waiting_add_menu_item'
+        await update.message.reply_text(
+            "➕ <b>Add Custom Cafeteria Menu Item</b>\n\n"
+            "Please send the item in this format:\n"
+            "<code>Item Name, Price, Category</code>\n\n"
+            "<i>Examples:</i>\n"
+            "• <code>Paneer Roll, 45, Snacks</code>\n"
+            "• <code>Mango Shake, 30, Beverages</code>\n"
+            "• <code>Veg Noodles, 50, Chinese</code>",
+            parse_mode='HTML'
+        )
+        return
+
+    full_arg = " ".join(args)
+    name, price, category = None, None, "Custom"
+    if "," in full_arg:
+        parts = [p.strip() for p in full_arg.split(",")]
+        name = parts[0]
+        if len(parts) > 1:
+            try:
+                price = float(parts[1])
+            except ValueError:
+                price = None
+        if len(parts) > 2:
+            category = parts[2]
+    else:
+        tokens = args
+        price_idx = -1
+        for idx, tok in enumerate(tokens):
+            try:
+                p_val = float(tok)
+                if p_val > 0:
+                    price = p_val
+                    price_idx = idx
+                    break
+            except ValueError:
+                continue
+
+        if price_idx != -1:
+            name = " ".join(tokens[:price_idx])
+            cat_tokens = tokens[price_idx+1:]
+            if cat_tokens:
+                category = " ".join(cat_tokens)
+            else:
+                category = "Custom"
+        else:
+            name = full_arg
+
+    if not name or price is None or price <= 0:
+        await update.message.reply_text(
+            "❌ <b>Invalid format!</b>\n\n"
+            "Usage: <code>/addmenu &lt;Item Name&gt; &lt;Price&gt; [Category]</code>\n"
+            "Or: <code>/addmenu Paneer Roll, 45, Snacks</code>",
+            parse_mode='HTML'
+        )
+        return
+
+    success, msg = add_custom_menu_item(name, price, category, is_veg=True)
+    if success:
+        await update.message.reply_text(
+            f"✅ <b>Custom Menu Item Added!</b>\n\n"
+            f"• <b>Item:</b> 🍽️ <b>{html.escape(name)}</b>\n"
+            f"• <b>Price:</b> <b>₹{price:.0f}</b>\n"
+            f"• <b>Category:</b> {html.escape(category)}\n"
+            f"• <b>Type:</b> 🟢 Pure Veg\n\n"
+            f"This item is now available in your cafeteria auto-suggestions and plate builder! Use <code>/menu</code> to see full menu.",
+            parse_mode='HTML'
+        )
+    else:
+        await update.message.reply_text(f"❌ Could not add item: {html.escape(msg)}", parse_mode='HTML')
+
+
+async def delmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Removes a custom item from the cafeteria menu."""
+    if not await is_authorized(update): return
+    from services.cafeteria_service import delete_custom_menu_item
+    from database.db import get_custom_menu_items
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    import html
+
+    args = context.args
+    custom_items = get_custom_menu_items()
+
+    if not custom_items:
+        await update.message.reply_text("ℹ️ No custom menu items found to delete. Standard predefined menu items cannot be deleted.", parse_mode='HTML')
+        return
+
+    if not args:
+        keyboard = []
+        for it in custom_items:
+            keyboard.append([InlineKeyboardButton(f"🗑️ Delete {it['name']} (₹{it['price']:.0f})", callback_data=f"cafe_del_item:{it['id']}")])
+        keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cafe_del_cancel")])
+        await update.message.reply_text(
+            "🗑️ <b>Select Custom Menu Item to Remove:</b>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
+        return
+
+    name_query = " ".join(args).strip()
+    success, msg = delete_custom_menu_item(name_query)
+    if success:
+        await update.message.reply_text(f"✅ {html.escape(msg)}", parse_mode='HTML')
+    else:
+        await update.message.reply_text(f"❌ {html.escape(msg)}", parse_mode='HTML')
+
 
 
 

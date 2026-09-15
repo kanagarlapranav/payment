@@ -254,10 +254,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     
     data = query.data
-    if ":" not in data:
-        return
-        
-    parts = data.split(":")
+    parts = data.split(":") if ":" in data else [data]
     action = parts[0]
     
     # 1. OCR Confirmation / Cancellation
@@ -777,8 +774,68 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif action == "cafe_view_menu":
         from services.cafeteria_service import format_full_menu
+        from bot.keyboards import get_menu_view_keyboard
         menu_text = format_full_menu()
-        await query.message.reply_text(menu_text, parse_mode='HTML')
+        await query.message.reply_text(menu_text, reply_markup=get_menu_view_keyboard(), parse_mode='HTML')
+
+    elif action == "cafe_menu_add_prompt":
+        context.user_data['action'] = 'waiting_add_menu_item'
+        await query.message.reply_text(
+            "➕ <b>Add Custom Menu Item</b>\n\n"
+            "Please send the item details in this format:\n"
+            "<code>Item Name, Price, Category</code>\n\n"
+            "<i>Examples:</i>\n"
+            "• <code>Paneer Roll, 45, Snacks</code>\n"
+            "• <code>Mango Lassi, 35, Beverages</code>\n"
+            "• <code>Veg Noodles, 50, Chinese</code>",
+            parse_mode='HTML'
+        )
+
+    elif action == "cafe_menu_del_prompt":
+        from database.db import get_custom_menu_items
+        custom_items = get_custom_menu_items()
+        if not custom_items:
+            await query.message.reply_text("ℹ️ No custom menu items found to delete. Predefined standard items cannot be removed.", parse_mode='HTML')
+        else:
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            keyboard = []
+            for it in custom_items:
+                keyboard.append([InlineKeyboardButton(f"🗑️ Delete {it['name']} (₹{it['price']:.0f})", callback_data=f"cafe_del_item:{it['id']}")])
+            keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cafe_del_cancel")])
+            await query.message.reply_text(
+                "🗑️ <b>Select Custom Menu Item to Remove:</b>",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='HTML'
+            )
+
+    elif action == "cafe_del_item":
+        item_id = int(parts[1])
+        from database.db import delete_custom_menu_item_by_id
+        success, name = delete_custom_menu_item_by_id(item_id)
+        if success:
+            await query.edit_message_text(f"✅ Removed custom item: <b>{html.escape(name)}</b> from cafeteria menu.", parse_mode='HTML')
+        else:
+            await query.edit_message_text("❌ Failed to remove menu item.", parse_mode='HTML')
+
+    elif action == "cafe_del_cancel":
+        await query.edit_message_text("❌ Menu item deletion cancelled.")
+
+    elif action == "cafe_edit_last":
+        from database.queries import get_cafeteria_transactions
+        from bot.keyboards import get_cafeteria_selection_keyboard
+        cafe_txs = get_cafeteria_transactions(limit=1)
+        if cafe_txs:
+            tx = cafe_txs[0]
+            tx_id = tx['id']
+            amt = float(tx['amount'])
+            await query.message.reply_text(
+                f"✏️ <b>Edit Cafeteria Order #{tx_id} (Paid {html.escape(format_currency(amt))}):</b>\n\n"
+                f"Select an option below to update your order:",
+                reply_markup=get_cafeteria_selection_keyboard(tx_id, amt),
+                parse_mode='HTML'
+            )
+        else:
+            await query.message.reply_text("❌ No recent cafeteria payments found.")
 
     elif action == "cafe_skip":
         tx_id = int(parts[1])
@@ -1104,6 +1161,74 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
         await update.message.reply_text(f"🍽️ Tagged cafeteria order: <b>{html.escape(text)}</b>", parse_mode='HTML')
+        return
+
+    elif pending_action == 'waiting_add_menu_item':
+        context.user_data.pop('action', None)
+        from services.cafeteria_service import add_custom_menu_item
+        full_arg = text.strip()
+        name, price, category = None, None, "Custom"
+        if "," in full_arg:
+            parts = [p.strip() for p in full_arg.split(",")]
+            name = parts[0]
+            if len(parts) > 1:
+                try:
+                    price = float(parts[1])
+                except ValueError:
+                    price = None
+            if len(parts) > 2:
+                category = parts[2]
+        else:
+            tokens = full_arg.split()
+            price_idx = -1
+            for idx, tok in enumerate(tokens):
+                try:
+                    p_val = float(tok)
+                    if p_val > 0:
+                        price = p_val
+                        price_idx = idx
+                        break
+                except ValueError:
+                    continue
+            if price_idx != -1:
+                name = " ".join(tokens[:price_idx])
+                cat_tokens = tokens[price_idx+1:]
+                category = " ".join(cat_tokens) if cat_tokens else "Custom"
+            else:
+                name = full_arg
+
+        if not name or price is None or price <= 0:
+            await update.message.reply_text(
+                "❌ <b>Invalid format!</b>\n\n"
+                "Please send: <code>Item Name, Price, Category</code>\n"
+                "Example: <code>Paneer Roll, 45, Snacks</code>",
+                parse_mode='HTML'
+            )
+            return
+
+        success, msg = add_custom_menu_item(name, price, category, is_veg=True)
+        if success:
+            await update.message.reply_text(
+                f"✅ <b>Custom Menu Item Added!</b>\n\n"
+                f"• <b>Item:</b> 🍽️ <b>{html.escape(name)}</b>\n"
+                f"• <b>Price:</b> <b>₹{price:.0f}</b>\n"
+                f"• <b>Category:</b> {html.escape(category)}\n"
+                f"• <b>Type:</b> 🟢 Pure Veg\n\n"
+                f"Use <code>/menu</code> to view updated menu!",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(f"❌ {html.escape(msg)}", parse_mode='HTML')
+        return
+
+    elif pending_action == 'waiting_del_menu_item':
+        context.user_data.pop('action', None)
+        from services.cafeteria_service import delete_custom_menu_item
+        success, msg = delete_custom_menu_item(text.strip())
+        if success:
+            await update.message.reply_text(f"✅ {html.escape(msg)}", parse_mode='HTML')
+        else:
+            await update.message.reply_text(f"❌ {html.escape(msg)}", parse_mode='HTML')
         return
 
     # Try parsing text as a transaction

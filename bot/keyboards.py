@@ -226,8 +226,8 @@ def get_cafeteria_cart_keyboard(tx_id: int, bill_amount: float, cart_items: list
 
 def get_cafeteria_category_keyboard(tx_id: int, category: str):
     """Shows all items in a specific cafeteria category."""
-    from services.cafeteria_service import VEG_MENU
-    items = [it for it in VEG_MENU if it.category == category]
+    from services.cafeteria_service import get_all_menu_items
+    items = [it for it in get_all_menu_items() if it.category == category]
     
     keyboard = []
     row = []
@@ -260,5 +260,20 @@ def get_cafeteria_tagged_keyboard(tx_id: int):
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+def get_menu_view_keyboard():
+    """Inline keyboard for /menu display."""
+    keyboard = [
+        [
+            InlineKeyboardButton("➕ Add Menu Item", callback_data="cafe_menu_add_prompt"),
+            InlineKeyboardButton("🗑️ Manage / Delete Item", callback_data="cafe_menu_del_prompt")
+        ],
+        [
+            InlineKeyboardButton("📊 Cafeteria Analytics", callback_data="cafe_stats"),
+            InlineKeyboardButton("✏️ Edit Last Order", callback_data="cafe_edit_last")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 
 

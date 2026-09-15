@@ -95,6 +95,72 @@ ADD_ONS = {
     "Extra Spicy": 5.0
 }
 
+def get_all_menu_items() -> List[MenuItem]:
+    """Returns the complete menu combining default items and custom user-added items from SQLite."""
+    items = list(VEG_MENU)
+    try:
+        from database.db import get_db_connection
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name, price, category, is_veg FROM custom_menu_items ORDER BY id ASC")
+            for row in cursor.fetchall():
+                items.append(MenuItem(
+                    name=str(row['name']),
+                    price=float(row['price']),
+                    category=str(row['category'] or 'Snacks & Tea'),
+                    is_veg=bool(row['is_veg'])
+                ))
+    except Exception:
+        pass
+    return items
+
+def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea", is_veg: bool = True) -> Tuple[bool, str]:
+    """Adds a new custom vegetarian item to the cafeteria menu database."""
+    name_clean = name.strip().title()
+    if not name_clean:
+        return False, "Item name cannot be empty."
+    if price <= 0:
+        return False, "Price must be greater than 0."
+
+    # Strict Pure Vegetarian Policy Check
+    non_veg_keywords = ["chicken", "egg", "omelette", "omlet", "fish", "meat", "mutton", "beef", "pork", "prawn", "crab"]
+    if any(nvk in name_clean.lower() for nvk in non_veg_keywords) or not is_veg:
+        return False, "⚠️ Only vegetarian items are permitted in this cafeteria tracker."
+
+    # Prevent duplicates
+    all_items = get_all_menu_items()
+    if any(it.name.lower() == name_clean.lower() for it in all_items):
+        return False, f"Item '<b>{name_clean}</b>' already exists in the menu."
+
+    try:
+        from database.db import get_db_connection
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO custom_menu_items (name, price, category, is_veg) VALUES (?, ?, ?, 1)",
+                (name_clean, float(price), category)
+            )
+            conn.commit()
+        return True, f"✅ Added '<b>{name_clean}</b>' (₹{price:.0f}) to {category}!"
+    except Exception as e:
+        return False, f"Database error: {e}"
+
+
+def delete_custom_menu_item(name: str) -> Tuple[bool, str]:
+    """Deletes a custom item from the menu."""
+    try:
+        from database.db import get_db_connection
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM custom_menu_items WHERE lower(name) = lower(?)", (name.strip(),))
+            if cursor.rowcount > 0:
+                conn.commit()
+                return True, f"🗑️ Removed '<b>{name}</b>' from menu."
+            else:
+                return False, f"Item '<b>{name}</b>' not found in custom items."
+    except Exception as e:
+        return False, f"Error deleting item: {e}"
+
 def is_cafeteria_payment(person_name: str = "", upi_id: str = "", ocr_text: str = "") -> bool:
     """Checks if a payment was made to Vikraman Nair / Cafeteria."""
     clean = f"{person_name or ''} {upi_id or ''} {ocr_text or ''}".lower()
@@ -104,25 +170,27 @@ def is_cafeteria_payment(person_name: str = "", upi_id: str = "", ocr_text: str 
 
 def find_exact_items(amount: float) -> List[MenuItem]:
     """Finds all single menu items matching the exact amount."""
-    return [item for item in VEG_MENU if abs(item.price - amount) < 0.01]
+    menu = get_all_menu_items()
+    return [item for item in menu if abs(item.price - amount) < 0.01]
 
 def find_combinations(amount: float, max_items: int = 2) -> List[str]:
     """Finds valid vegetarian combinations (or items + add-ons) that sum to the exact amount."""
     combos = []
+    menu = get_all_menu_items()
     
     # 1. Item + Add-on (Packing / Extra Spicy)
     for add_on_name, add_on_price in ADD_ONS.items():
         rem = amount - add_on_price
-        for item in VEG_MENU:
+        for item in menu:
             if abs(item.price - rem) < 0.01:
                 combos.append(f"{item.name} + {add_on_name} (₹{amount:.0f})")
 
     # 2. Pair of 2 Items
-    for i, item1 in enumerate(VEG_MENU):
+    for i, item1 in enumerate(menu):
         rem = amount - item1.price
         if rem <= 0:
             continue
-        for item2 in VEG_MENU[i:]:
+        for item2 in menu[i:]:
             if abs(item2.price - rem) < 0.01:
                 combos.append(f"{item1.name} + {item2.name} (₹{amount:.0f})")
 
@@ -131,7 +199,7 @@ def find_combinations(amount: float, max_items: int = 2) -> List[str]:
 def get_menu_by_category() -> Dict[str, List[MenuItem]]:
     """Groups the entire vegetarian menu by category."""
     cats = {}
-    for item in VEG_MENU:
+    for item in get_all_menu_items():
         cats.setdefault(item.category, []).append(item)
     return cats
 
