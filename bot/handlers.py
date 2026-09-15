@@ -143,19 +143,13 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             transaction, confidence = process_transaction(raw_text, str(image_path), message_id, chat_id, caption=caption)
 
-        # Tier 3: Asynchronously archive receipt to Google Drive if available
-        if is_gdrive_available():
-            try:
-                asyncio.create_task(asyncio.to_thread(upload_receipt_to_drive, str(image_path)))
-            except Exception as gd_err:
-                logger.warning(f"Background Google Drive upload could not be scheduled: {gd_err}")
-        else:
-            # Clean up local image immediately if not archiving to Drive
-            try:
-                if os.path.exists(image_path):
-                    os.remove(image_path)
-            except OSError:
-                pass
+        # Always clean up temporary image file immediately after text/data extraction
+        try:
+            if os.path.exists(image_path):
+                os.remove(image_path)
+                logger.info(f"Cleaned up temporary image after OCR: {image_path}")
+        except OSError as cleanup_err:
+            logger.warning(f"Could not delete temp image {image_path}: {cleanup_err}")
         
         # Basic validation
         if not transaction.amount or transaction.amount <= 0:
