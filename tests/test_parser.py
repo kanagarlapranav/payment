@@ -494,5 +494,32 @@ class TestParsers(unittest.TestCase):
         for raw, expected in test_amounts:
             self.assertEqual(parse_amount(raw), expected, f"Failed for {raw}")
 
+    def test_supermoney_payment_successful_20(self):
+        text = """
+        super.
+        money
+        Payment Successful
+        20
+        September 15 at 1:41PM
+        TO:VIKRAMANNAIRK
+        vikramannair066@fbl
+        FederalBank
+        FrOm:KANAGARLAPRANAV
+        8688701141@superyes
+        UPIreferenceID:662474885797
+        """
+        parser = get_best_parser(text)
+        self.assertIsInstance(parser, SuperMoneyParser)
+        t = parser.parse()
+        self.assertEqual(t.transaction_type, "SENT")
+        self.assertEqual(t.amount, 20.0)
+        self.assertEqual(t.person_name, "Vikramannairk")
+        self.assertEqual(t.reference_number, "662474885797")
+        self.assertEqual(t.payment_app, "Super.money")
+
+        from services.cafeteria_service import is_cafeteria_payment
+        self.assertTrue(is_cafeteria_payment(t.person_name, t.upi_id, t.ocr_text))
+
 if __name__ == '__main__':
     unittest.main()
+

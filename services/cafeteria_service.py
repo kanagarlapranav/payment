@@ -95,10 +95,12 @@ ADD_ONS = {
     "Extra Spicy": 5.0
 }
 
-def is_cafeteria_payment(person_name: str, upi_id: str = "", ocr_text: str = "") -> bool:
+def is_cafeteria_payment(person_name: str = "", upi_id: str = "", ocr_text: str = "") -> bool:
     """Checks if a payment was made to Vikraman Nair / Cafeteria."""
-    combined = f"{person_name} {upi_id} {ocr_text}".lower()
-    return any(name in combined for name in CAFETERIA_MERCHANT_NAMES)
+    clean = f"{person_name or ''} {upi_id or ''} {ocr_text or ''}".lower()
+    clean_nospace = clean.replace(" ", "").replace("_", "").replace("-", "").replace(".", "")
+    targets = ["vikramannair", "vikramnair", "vikramannair066@fbl", "cafeteria", "canteen"]
+    return any(t in clean_nospace for t in targets)
 
 def find_exact_items(amount: float) -> List[MenuItem]:
     """Finds all single menu items matching the exact amount."""

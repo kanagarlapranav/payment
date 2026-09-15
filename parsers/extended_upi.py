@@ -24,11 +24,100 @@ class SuperMoneyParser(GenericParser):
 
     def can_parse(self) -> bool:
         text_l = self.raw_text.lower()
-        return "supermoney" in text_l or "super.money" in text_l or "@supermoney" in text_l or "@super.money" in text_l
+        return (
+            "supermoney" in text_l or "super.money" in text_l or 
+            "@supermoney" in text_l or "@super.money" in text_l or 
+            "@superyes" in text_l or "@superaxis" in text_l or
+            ("super" in text_l and "money" in text_l)
+        )
 
     def parse(self) -> Transaction:
-        t = super().parse()
+        t = Transaction()
+        t.ocr_text = self.raw_text
         t.payment_app = "Super.money"
+        t.transaction_type = "SENT"
+        
+        text_l = self.raw_text.lower()
+        lines = [l.strip() for l in self.raw_text.split('\n') if l.strip()]
+        
+        # 1. Transaction Type
+        if "received" in text_l or "credited" in text_l:
+            t.transaction_type = "RECEIVED"
+            
+        # 2. Extract Amount
+        # In Super.money, amount is right after "Payment Successful" / "Paid Successfully"
+        from utils.currency import extract_amounts_from_line
+        for i, line in enumerate(lines):
+            ll = line.lower()
+            if "payment successful" in ll or "paid successfully" in ll or "transferred successfully" in ll:
+                for offset in (1, 2, 3):
+                    if i + offset < len(lines):
+                        cand_line = lines[i + offset]
+                        cands = extract_amounts_from_line(cand_line)
+                        valid_cands = [c for c in cands if not self.is_invalid_amount(c, cand_line)]
+                        if valid_cands:
+                            t.amount = valid_cands[0]
+                            break
+                if t.amount > 0:
+                    break
+                    
+        # Fallback to general amount extraction if not found
+        if not t.amount or t.amount <= 0:
+            gen_t = super().parse()
+            t.amount = gen_t.amount
+            if not t.person_name:
+                t.person_name = gen_t.person_name
+            if not t.reference_number:
+                t.reference_number = gen_t.reference_number
+                
+        # 3. Extract Recipient / Sender Name & UPI ID
+        for line in lines:
+            line_clean = line.strip()
+            # To: VIKRAMAN NAIR K or TO:VIKRAMANNAIRK
+            m_to = re.search(r'\bto\s*[:\-]?\s*([A-Za-z\s]+)', line_clean, re.IGNORECASE)
+            if m_to and not t.recipient_name:
+                name_cand = m_to.group(1).strip()
+                if len(name_cand) >= 2 and not any(kw in name_cand.lower() for kw in ('super', 'money', 'upi', 'bank', 'successful', 'amount')):
+                    t.recipient_name = split_camel_case(clean_person_name(name_cand))
+                    
+            # From: KANAGARLA PRANAV
+            m_from = re.search(r'\bfrom\s*[:\-]?\s*([A-Za-z\s]+)', line_clean, re.IGNORECASE)
+            if m_from and not t.sender_name:
+                name_cand = m_from.group(1).strip()
+                if len(name_cand) >= 2 and not any(kw in name_cand.lower() for kw in ('super', 'money', 'upi', 'bank')):
+                    t.sender_name = split_camel_case(clean_person_name(name_cand))
+
+            # UPI ID
+            m_upi = re.search(r'([a-zA-Z0-9.\-_]+@[a-zA-Z0-9]+)', line_clean)
+            if m_upi and not t.upi_id:
+                t.upi_id = m_upi.group(1)
+
+            # Reference Number / UTR
+            m_ref = re.search(r'(?:UPI\s*reference\s*ID|ref\s*(?:no|id)?|UTR)\s*[:\-]?\s*(\d{10,16})', line_clean, re.IGNORECASE)
+            if m_ref and not t.reference_number:
+                t.reference_number = m_ref.group(1)
+                
+            # Date & Time e.g. "September 15 at 1:41PM"
+            if not t.transaction_date or t.transaction_date.strftime("%Y-%m-%d") == parse_date("Today").strftime("%Y-%m-%d"):
+                m_dt = re.search(r'([A-Za-z]+\s+\d{1,2}(?:\s*,\s*\d{4})?)\s+at\s+(\d{1,2}:\d{2}\s*(?:AM|PM)?)', line_clean, re.IGNORECASE)
+                if m_dt:
+                    parsed_d = parse_date(m_dt.group(1))
+                    if parsed_d:
+                        t.transaction_date = parsed_d
+                    t.transaction_time = m_dt.group(2).strip()
+
+        if t.transaction_type == "SENT":
+            t.person_name = t.recipient_name or t.person_name or "Unknown"
+        else:
+            t.person_name = t.sender_name or t.person_name or "Unknown"
+
+        # Bank Name
+        for line in lines:
+            ll = line.lower()
+            if any(b in ll for b in ('federal bank', 'hdfc', 'sbi', 'icici', 'axis', 'yes bank', 'kotak')):
+                t.bank_name = line.strip()
+                break
+
         return t
 
 
