@@ -313,7 +313,7 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(t.recipient_name, "Kanagarla Sai Akhil")
         self.assertEqual(t.sender_name, "Kanagarla Pranav")
         self.assertEqual(t.reference_number, "134446412863")
-        self.assertEqual(t.bank_name, "State Bank Of India")
+        self.assertEqual(t.bank_name, "State Bank of India")
         self.assertEqual(t.bank_account, "X7751")
         self.assertEqual(t.payment_app, "BHIM")
         self.assertEqual(t.transaction_time, "01:44 PM")
@@ -417,11 +417,41 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(t.amount, 5000.0)
         self.assertEqual(t.person_name, "Kanagarla Sai Akhil")
         self.assertEqual(t.recipient_name, "Kanagarla Sai Akhil")
-        self.assertEqual(t.bank_name, "State Bank Of India")
+        self.assertEqual(t.bank_name, "State Bank of India")
         self.assertEqual(t.bank_account, "7751")
         self.assertEqual(t.reference_number, "625214795239")
         self.assertEqual(t.transaction_date, date(2026, 9, 9))
         self.assertEqual(t.transaction_time, "12:17 PM")
+
+    def test_amazonpay_400_exact_user_receipt(self):
+        text = """
+        amazonpay
+        Paid successfully
+        ₹400
+        Pald to
+        KS KANAGARLA SAI AKHIL
+        9346896729@ybl
+        Paid from
+        Amazon Pay Upi
+        State Bank of India ****7751
+        8688701141@apl
+        UPI transaction ID 625827208126
+        Amazon reference ID APLAP3b23ac089f86db085a039c33738fff
+        Date and time 15 Sept 2026, 7:54 PM
+        """
+        parser = get_best_parser(text)
+        from parsers.amazonpay import AmazonPayParser
+        self.assertIsInstance(parser, AmazonPayParser)
+        t = parser.parse()
+        self.assertEqual(t.transaction_type, "SENT")
+        self.assertEqual(t.amount, 400.0)
+        self.assertEqual(t.person_name, "Kanagarla Sai Akhil")
+        self.assertEqual(t.recipient_name, "Kanagarla Sai Akhil")
+        self.assertEqual(t.bank_name, "State Bank of India")
+        self.assertEqual(t.bank_account, "7751")
+        self.assertEqual(t.reference_number, "625827208126")
+        self.assertEqual(t.transaction_date, date(2026, 9, 15))
+        self.assertIn(t.transaction_time, ("07:54 PM", "7:54 PM"))
 
     def test_whatsapp_pay_extraction(self):
         text = """
