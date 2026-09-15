@@ -560,6 +560,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 pass
             amt_s = format_currency(tx['amount'])
             bal_s = format_currency(tx['balance_after'])
+            from bot.keyboards import get_cafeteria_tagged_keyboard
             await query.edit_message_text(
                 f"🍽️ <b>Cafeteria Order Tagged!</b>\n\n"
                 f"• <b>Ordered Item:</b> 🍽️ <b>{html.escape(item_name)}</b>\n"
@@ -568,10 +569,145 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 f"• <b>Category:</b> 🍔 Food & Dining\n"
                 f"• <b>Balance:</b> {html.escape(bal_s)}\n\n"
                 f"✅ Successfully saved to your transaction record!",
+                reply_markup=get_cafeteria_tagged_keyboard(tx_id),
                 parse_mode='HTML'
             )
         else:
             await query.edit_message_text(f"🍽️ Tagged order: <b>{html.escape(item_name)}</b>", parse_mode='HTML')
+
+    elif action == "cafe_mode":
+        tx_id = int(parts[1])
+        mode = parts[2]
+        tx = get_transaction_by_id(tx_id)
+        amt = float(tx['amount']) if tx else 0.0
+        
+        if mode == "1":
+            from bot.keyboards import get_cafeteria_single_item_keyboard
+            await query.edit_message_text(
+                f"🍽️ <b>Single Item Selection (Paid {html.escape(format_currency(amt))}):</b>\n\n"
+                f"Pick the single item you ordered below or enter custom amount:",
+                reply_markup=get_cafeteria_single_item_keyboard(tx_id, amt),
+                parse_mode='HTML'
+            )
+        elif mode == "2":
+            from bot.keyboards import get_cafeteria_two_items_keyboard
+            await query.edit_message_text(
+                f"🍽️ <b>Two Items Mode (Paid {html.escape(format_currency(amt))}):</b>\n\n"
+                f"Pick your combination below or open the plate builder:",
+                reply_markup=get_cafeteria_two_items_keyboard(tx_id, amt),
+                parse_mode='HTML'
+            )
+        elif mode == "cart":
+            from bot.keyboards import get_cafeteria_cart_keyboard
+            cart = context.user_data.get(f'cafe_cart_{tx_id}', [])
+            total_cart = sum(it['price'] for it in cart)
+            cart_lines = "\n".join([f"• {it['name']} — ₹{it['price']:.0f}" for it in cart]) if cart else "<i>(Plate is empty. Tap items below to add)</i>"
+            await query.edit_message_text(
+                f"🛒 <b>CAFETERIA PLATE BUILDER</b>\n"
+                f"Paid Bill: <b>{html.escape(format_currency(amt))}</b>\n\n"
+                f"<b>Items in Plate:</b>\n{cart_lines}\n\n"
+                f"<b>Plate Sum:</b> <b>{html.escape(format_currency(total_cart))}</b> / {html.escape(format_currency(amt))}\n\n"
+                f"Tap items below to add to your plate:",
+                reply_markup=get_cafeteria_cart_keyboard(tx_id, amt, cart),
+                parse_mode='HTML'
+            )
+        elif mode == "browse":
+            from bot.keyboards import get_cafeteria_selection_keyboard
+            await query.edit_message_text(
+                f"📋 <b>Browse Cafeteria Menu (Paid {html.escape(format_currency(amt))}):</b>\n\n"
+                f"Select a category below to see all items:",
+                reply_markup=get_cafeteria_selection_keyboard(tx_id, amt),
+                parse_mode='HTML'
+            )
+
+    elif action == "cafe_custom_prompt":
+        tx_id = int(parts[1])
+        item_type = parts[2]
+        context.user_data['action'] = 'waiting_cafe_custom_amount'
+        context.user_data['cafe_tx_id'] = tx_id
+        context.user_data['cafe_item'] = item_type
+        icon = "🍨" if "ice" in item_type.lower() else "✏️"
+        await query.edit_message_text(
+            f"{icon} <b>Enter Amount for {html.escape(item_type)}:</b>\n\n"
+            f"Please reply with the amount (e.g. <code>40</code>, <code>60</code>, <code>120</code>) or item name with price:",
+            parse_mode='HTML'
+        )
+
+    elif action == "cafe_cart_add":
+        tx_id = int(parts[1])
+        item_name = parts[2]
+        item_price = float(parts[3])
+        tx = get_transaction_by_id(tx_id)
+        amt = float(tx['amount']) if tx else 0.0
+        
+        cart_key = f'cafe_cart_{tx_id}'
+        if cart_key not in context.user_data:
+            context.user_data[cart_key] = []
+        context.user_data[cart_key].append({'name': item_name, 'price': item_price})
+        
+        cart = context.user_data[cart_key]
+        total_cart = sum(it['price'] for it in cart)
+        cart_lines = "\n".join([f"• {it['name']} — ₹{it['price']:.0f}" for it in cart])
+        
+        from bot.keyboards import get_cafeteria_cart_keyboard
+        await query.edit_message_text(
+            f"🛒 <b>CAFETERIA PLATE BUILDER</b>\n"
+            f"Paid Bill: <b>{html.escape(format_currency(amt))}</b>\n\n"
+            f"<b>Items in Plate ({len(cart)}):</b>\n{cart_lines}\n\n"
+            f"<b>Plate Sum:</b> <b>{html.escape(format_currency(total_cart))}</b> / {html.escape(format_currency(amt))}\n\n"
+            f"Tap more items or tap <b>Save Plate</b> when done:",
+            reply_markup=get_cafeteria_cart_keyboard(tx_id, amt, cart),
+            parse_mode='HTML'
+        )
+
+    elif action == "cafe_cart_clear":
+        tx_id = int(parts[1])
+        tx = get_transaction_by_id(tx_id)
+        amt = float(tx['amount']) if tx else 0.0
+        context.user_data[f'cafe_cart_{tx_id}'] = []
+        from bot.keyboards import get_cafeteria_cart_keyboard
+        await query.edit_message_text(
+            f"🛒 <b>Plate Cleared!</b>\n"
+            f"Paid Bill: <b>{html.escape(format_currency(amt))}</b>\n\n"
+            f"Tap items below to build your plate:",
+            reply_markup=get_cafeteria_cart_keyboard(tx_id, amt, []),
+            parse_mode='HTML'
+        )
+
+    elif action == "cafe_cart_done":
+        tx_id = int(parts[1])
+        cart = context.user_data.pop(f'cafe_cart_{tx_id}', [])
+        tx = get_transaction_by_id(tx_id)
+        if tx and cart:
+            item_names = " + ".join([it['name'] for it in cart])
+            new_name = f"VIKRAMAN NAIR K (Cafeteria: {item_names})"
+            update_transaction(tx_id, {'person_name': new_name, 'category': 'Food & Dining'})
+            try:
+                from services.backup_service import backup_to_telegram
+                asyncio.create_task(backup_to_telegram(context.bot))
+            except Exception:
+                pass
+            amt_s = format_currency(tx['amount'])
+            bal_s = format_currency(tx['balance_after'])
+            from bot.keyboards import get_cafeteria_tagged_keyboard
+            await query.edit_message_text(
+                f"🍽️ <b>Cafeteria Plate Saved!</b>\n\n"
+                f"• <b>Ordered Items:</b> 🍽️ <b>{html.escape(item_names)}</b>\n"
+                f"• <b>Merchant:</b> VIKRAMAN NAIR K\n"
+                f"• <b>Bill Amount:</b> <b>{html.escape(amt_s)}</b>\n"
+                f"• <b>Category:</b> 🍔 Food & Dining\n"
+                f"• <b>Balance:</b> {html.escape(bal_s)}\n\n"
+                f"✅ Successfully saved to your transaction record!",
+                reply_markup=get_cafeteria_tagged_keyboard(tx_id),
+                parse_mode='HTML'
+            )
+        elif tx:
+            from bot.keyboards import get_cafeteria_selection_keyboard
+            await query.edit_message_text(
+                "⚠️ No items were in the plate. Choose an item below:",
+                reply_markup=get_cafeteria_selection_keyboard(tx_id, float(tx['amount'])),
+                parse_mode='HTML'
+            )
 
     elif action == "cafe_cat":
         tx_id = int(parts[1])
@@ -594,7 +730,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         amt = float(tx['amount']) if tx else 0.0
         await query.edit_message_text(
             f"🍽️ <b>Cafeteria Menu Selection (Paid {html.escape(format_currency(amt))}):</b>\n\n"
-            f"Select the item(s) you ordered or choose a category below:",
+            f"<b>How many items or what did you order?</b>\n"
+            f"Select an option below to tag your order:",
             reply_markup=get_cafeteria_selection_keyboard(tx_id, amt),
             parse_mode='HTML'
         )
@@ -607,22 +744,54 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             current_name = tx['person_name'] or "VIKRAMAN NAIR K (Cafeteria)"
             updated_name = f"{current_name} + {addon}"
             update_transaction(tx_id, {'person_name': updated_name, 'category': 'Food & Dining'})
+            from bot.keyboards import get_cafeteria_tagged_keyboard
             await query.edit_message_text(
                 f"🍽️ <b>Add-on Tagged:</b> +₹5 {html.escape(addon)}\n"
+                f"• Updated Merchant: {html.escape(updated_name)}\n"
                 f"• Total Amount: <b>{html.escape(format_currency(tx['amount']))}</b>\n\n"
                 f"✅ Updated record!",
+                reply_markup=get_cafeteria_tagged_keyboard(tx_id),
                 parse_mode='HTML'
             )
+
+    elif action == "cafe_edit":
+        tx_id = int(parts[1])
+        tx = get_transaction_by_id(tx_id)
+        if tx:
+            from bot.keyboards import get_cafeteria_selection_keyboard
+            amt = float(tx['amount'])
+            await query.edit_message_text(
+                f"✏️ <b>Edit Cafeteria Order for Transaction #{tx_id} (Paid {html.escape(format_currency(amt))}):</b>\n\n"
+                f"<b>How many items or what did you order?</b>\n"
+                f"Select an option below to update your order:",
+                reply_markup=get_cafeteria_selection_keyboard(tx_id, amt),
+                parse_mode='HTML'
+            )
+        else:
+            await query.edit_message_text("❌ Transaction not found.")
+
+    elif action == "cafe_stats":
+        from services.cafeteria_service import format_cafeteria_stats
+        stats_text = format_cafeteria_stats()
+        await query.message.reply_text(stats_text, parse_mode='HTML')
+
+    elif action == "cafe_view_menu":
+        from services.cafeteria_service import format_full_menu
+        menu_text = format_full_menu()
+        await query.message.reply_text(menu_text, parse_mode='HTML')
 
     elif action == "cafe_skip":
         tx_id = int(parts[1])
         tx = get_transaction_by_id(tx_id)
         amt_s = format_currency(tx['amount']) if tx else ""
+        from bot.keyboards import get_cafeteria_tagged_keyboard
         await query.edit_message_text(
             f"✅ <b>Cafeteria Payment Recorded</b> ({html.escape(amt_s)})\n"
             f"Tagged as: 🍔 <b>Food & Dining</b> (General)",
+            reply_markup=get_cafeteria_tagged_keyboard(tx_id),
             parse_mode='HTML'
         )
+
 
 
 
@@ -725,6 +894,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     elif cmd_lower in (r'\\details', 'details', '/details', 'ids', '/ids'):
         await details_command(update, context)
+        return
+    elif cmd_lower in (r'\\menu', 'menu', '/menu', 'cafeteria', '/cafeteria', 'canteen', '/canteen'):
+        from bot.commands import menu_command
+        await menu_command(update, context)
+        return
+    elif cmd_lower in (r'\\cafestats', 'cafestats', '/cafestats', 'cafespends', '/cafespends'):
+        from bot.commands import cafestats_command
+        await cafestats_command(update, context)
+        return
+    elif cmd_lower.startswith((r'\\cafeedit', 'cafeedit', '/cafeedit', 'editcafe', '/editcafe')):
+        parts = text.split(maxsplit=1)
+        context.args = [parts[1]] if len(parts) > 1 else []
+        from bot.commands import cafeedit_command
+        await cafeedit_command(update, context)
         return
         
     # Quick standalone amount search: if user just sends a number like "5000" or "400"
@@ -881,6 +1064,47 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ Failed to update transaction.")
             return
+
+    elif pending_action == 'waiting_cafe_custom_amount':
+        tx_id = context.user_data.pop('cafe_tx_id', None)
+        item_type = context.user_data.pop('cafe_item', 'Custom')
+        context.user_data.pop('action', None)
+        
+        parsed_amt = parse_amount(text)
+        custom_note = text.strip()
+        
+        if tx_id:
+            tx = get_transaction_by_id(tx_id)
+            if tx:
+                if parsed_amt > 0:
+                    tag_desc = f"{item_type} (₹{parsed_amt:.0f})" if item_type != 'Custom' else f"Custom Item (₹{parsed_amt:.0f})"
+                else:
+                    tag_desc = f"{item_type}: {custom_note}"
+                    
+                new_name = f"VIKRAMAN NAIR K (Cafeteria: {tag_desc})"
+                update_transaction(tx_id, {'person_name': new_name, 'category': 'Food & Dining'})
+                try:
+                    from services.backup_service import backup_to_telegram
+                    asyncio.create_task(backup_to_telegram(context.bot))
+                except Exception:
+                    pass
+                amt_s = format_currency(tx['amount'])
+                bal_s = format_currency(tx['balance_after'])
+                from bot.keyboards import get_cafeteria_tagged_keyboard
+                await update.message.reply_text(
+                    f"🍽️ <b>Cafeteria Order Tagged!</b>\n\n"
+                    f"• <b>Custom Item:</b> 🍽️ <b>{html.escape(tag_desc)}</b>\n"
+                    f"• <b>Merchant:</b> VIKRAMAN NAIR K\n"
+                    f"• <b>Bill Amount:</b> <b>{html.escape(amt_s)}</b>\n"
+                    f"• <b>Category:</b> 🍔 Food & Dining\n"
+                    f"• <b>Balance:</b> {html.escape(bal_s)}\n\n"
+                    f"✅ Successfully updated your cafeteria record!",
+                    reply_markup=get_cafeteria_tagged_keyboard(tx_id),
+                    parse_mode='HTML'
+                )
+                return
+        await update.message.reply_text(f"🍽️ Tagged cafeteria order: <b>{html.escape(text)}</b>", parse_mode='HTML')
+        return
 
     # Try parsing text as a transaction
     try:

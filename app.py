@@ -15,7 +15,8 @@ from bot.commands import (
     edit_command, delete_command, date_command, search_command,
     monthly_command, filter_command, sort_command, details_command,
     setbalance_command, export_command, help_command, chatid_command, amount_command,
-    insights_command, budget_command, setbudget_command, digest_command, dashboard_command, menu_command
+    insights_command, budget_command, setbudget_command, digest_command, dashboard_command, menu_command,
+    cafestats_command, cafeedit_command
 )
 from bot.handlers import handle_image, handle_callback_query, handle_text
 from services.scheduler_service import scheduler
@@ -92,6 +93,10 @@ def build_application():
     app.add_handler(CommandHandler("dashboard", dashboard_command))
     app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(CommandHandler("cafeteria", menu_command))
+    app.add_handler(CommandHandler("cafestats", cafestats_command))
+    app.add_handler(CommandHandler("cafespends", cafestats_command))
+    app.add_handler(CommandHandler("cafeedit", cafeedit_command))
+    app.add_handler(CommandHandler("editcafe", cafeedit_command))
 
 
     # Image handler (photos and documents)
