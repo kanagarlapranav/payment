@@ -5,21 +5,22 @@ from config import logger
 
 def insert_transaction(t: Transaction) -> int:
     """Inserts a new transaction into the database."""
+    category = getattr(t, 'category', 'General') or 'General'
     query = '''
         INSERT INTO transactions (
             transaction_type, amount, person_name, sender_name, recipient_name,
             upi_id, phone_number, transaction_date, transaction_time, reference_number,
             transaction_id, payment_app, bank_name, bank_account, payment_status,
-            balance_before, balance_after, ocr_text, original_image_path,
+            category, balance_before, balance_after, ocr_text, original_image_path,
             telegram_message_id, telegram_chat_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     '''
     
     values = (
         t.transaction_type, t.amount, t.person_name, t.sender_name, t.recipient_name,
         t.upi_id, t.phone_number, t.transaction_date, t.transaction_time, t.reference_number,
         t.transaction_id, t.payment_app, t.bank_name, t.bank_account, t.payment_status,
-        t.balance_before, t.balance_after, t.ocr_text, t.original_image_path,
+        category, t.balance_before, t.balance_after, t.ocr_text, t.original_image_path,
         t.telegram_message_id, t.telegram_chat_id
     )
     
@@ -223,7 +224,7 @@ def update_balance_setting(new_balance: float):
     """Updates the current balance in the settings table."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = 'current_balance'", (str(new_balance),))
+        cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('current_balance', ?, CURRENT_TIMESTAMP)", (str(new_balance),))
         conn.commit()
 
 def get_balance_setting() -> float:
@@ -233,3 +234,94 @@ def get_balance_setting() -> float:
         cursor.execute("SELECT value FROM settings WHERE key = 'current_balance'")
         row = cursor.fetchone()
         return float(row['value']) if row else 0.0
+
+def get_budget_setting() -> float:
+    """Gets the monthly budget limit from the settings table."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = 'monthly_budget'")
+        row = cursor.fetchone()
+        return float(row['value']) if row else 0.0
+
+def set_budget_setting(amount: float):
+    """Sets the monthly budget limit in the settings table."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('monthly_budget', ?, CURRENT_TIMESTAMP)", (str(amount),))
+        conn.commit()
+
+def get_monthly_spending(year: int, month: int) -> float:
+    """Gets the total SENT amount for a given month."""
+    month_str = f"{year:04d}-{month:02d}"
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT SUM(amount) as total
+            FROM transactions
+            WHERE strftime('%Y-%m', transaction_date) = ? AND transaction_type = 'SENT'
+        """, (month_str,))
+        row = cursor.fetchone()
+        return float(row['total']) if (row and row['total'] is not None) else 0.0
+
+def get_category_summary(year: int, month: int):
+    """Gets breakdown of spending (SENT) and income (RECEIVED) by category for a month."""
+    month_str = f"{year:04d}-{month:02d}"
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                category,
+                transaction_type,
+                COUNT(*) as count,
+                SUM(amount) as total_amount
+            FROM transactions
+            WHERE strftime('%Y-%m', transaction_date) = ?
+            GROUP BY category, transaction_type
+            ORDER BY total_amount DESC
+        """, (month_str,))
+        return [dict(row) for row in cursor.fetchall()]
+
+def get_daily_summary_stats(target_date_str: str):
+    """Calculates summary statistics for a specific date (YYYY-MM-DD)."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                transaction_type,
+                COUNT(*) as count,
+                SUM(amount) as total_amount
+            FROM transactions 
+            WHERE transaction_date = ?
+            GROUP BY transaction_type
+        """, (target_date_str,))
+        rows = cursor.fetchall()
+        
+        total_sent = 0.0
+        total_received = 0.0
+        tx_count = 0
+        
+        for r in rows:
+            tx_count += r['count']
+            if r['transaction_type'] == 'SENT':
+                total_sent = float(r['total_amount'] or 0.0)
+            elif r['transaction_type'] == 'RECEIVED':
+                total_received = float(r['total_amount'] or 0.0)
+                
+        # Get list of transactions for the day
+        cursor.execute("""
+            SELECT id, transaction_type, amount, person_name, category, payment_app, transaction_time, balance_after
+            FROM transactions
+            WHERE transaction_date = ?
+            ORDER BY id ASC
+        """, (target_date_str,))
+        transactions = [dict(row) for row in cursor.fetchall()]
+        
+        return {
+            'date': target_date_str,
+            'total_sent': total_sent,
+            'total_received': total_received,
+            'net_change': total_received - total_sent,
+            'tx_count': tx_count,
+            'transactions': transactions
+        }
+

@@ -73,6 +73,11 @@ When you upload a receipt screenshot in Telegram:
 | **`/filter`** | `/filter` | Interactive button menu (Today, Yesterday, This Month, Sent Only, Received Only) |
 | **`/sort`** | `/sort` | Sorts transactions by amount (High ➔ Low / Low ➔ High) or date |
 | **`/monthly`** | `/monthly` (or `/stats`) | Monthly financial analytics: total sent, received, net savings, and top recipient |
+| **`/insights`** | `/insights` | AI-powered category breakdown, spending percentages (`🍔 Food`, `🛒 Groceries`, `🚕 Travel`), & smart advice |
+| **`/budget`** | `/budget` | Monthly budget progress bar (`[██████░░░░] 60%`), remaining funds & health indicator |
+| **`/setbudget <amt>`** | `/setbudget 20000` | Sets monthly spending limit with proactive threshold warnings (at 50%, 80%, 100%) |
+| **`/digest`** | `/digest`<br>`/digest 2026-09-15` | Generates closing financial digest on demand (also automated at 9:00 PM IST daily) |
+| **`/dashboard`** | `/dashboard` | Interactive Dark-Mode Web Dashboard with live Chart.js charts, donut categories & cash flow bars |
 | **`/edit`** | `/edit`<br>`/edit 1` | Interactive menu to edit amount, name, date, type, or UTR with real-time balance recalculation |
 | **`/delete`** | `/delete`<br>`/delete 1` | Deletes transaction, automatically resequences remaining IDs (no gaps), and recalculates balances |
 | **`/setbalance <amt>`** | `/setbalance 50000` | Sets starting balance anchor and recalculates entire transaction history consistently |
@@ -87,12 +92,13 @@ When you upload a receipt screenshot in Telegram:
 ✅ <b>🔴 Payment Sent</b>
 
 👤 <b>To:</b> Kanagarlasaiakhil
-💵 <b>Amount:</b> <b>₹400</b> • <i>Amazon Pay</i>
+💵 <b>Amount:</b> <b>₹400.00</b> • <i>Amazon Pay</i>
 📅 <b>Date:</b> 15 Sep 2026 (7:54 PM)
+🏷️ <b>Category:</b> 👥 Transfers & P2P
 🏦 <b>Bank:</b> Statebankof India
 🔢 <b>Ref / UTR:</b> <code>625827208126</code>
 
-💰 <b>Balance:</b> ₹7,400 ➔ <b>₹7,000</b>
+💰 <b>Balance:</b> ₹7,400.00 ➔ <b>₹7,000.00</b>
 ```
 
 ---
@@ -103,21 +109,40 @@ When you upload a receipt screenshot in Telegram:
 - Multimodal parsing using **Gemini 3.6 Flash**.
 - Extracts amount, transaction type, recipient/sender, payment app, bank name, UTR, and timestamp in structured JSON.
 
-### 2. Automatic ID Re-Sequencing Engine (`services/balance_service.py`)
+### 2. Smart Auto-Categorization & Insights (`services/category_service.py`)
+- Automatically classifies payments into `Food & Dining`, `Groceries`, `Shopping`, `Travel & Transport`, `Bills & Utilities`, `Entertainment`, `Health & Medical`, and `Transfers & P2P`.
+- Computes spending shares, category percentages, and financial health advice.
+
+### 3. Proactive Budget Tracking (`services/budget_service.py`)
+- Real-time monitoring against monthly limits.
+- Generates 10-block visual progress bars and attaches threshold warnings (50%, 80%, 100%) directly to receipt confirmations.
+
+### 4. Automated 9:00 PM IST Closing Digest (`services/scheduler_service.py`)
+- Background timer delivers daily financial briefings in Indian Standard Time (IST) summarizing money in, money out, net flow, and closing balance.
+
+### 5. Interactive Dark-Mode Web Analytics Dashboard (`web/templates/dashboard.html`)
+- Built-in HTTP server on port `$PORT` serving `/dashboard` and `/api/data` JSON with Chart.js donut and bar graphs.
+
+### 6. Automatic ID Re-Sequencing Engine (`services/balance_service.py`)
 - Deleting any transaction (e.g. `#13`) automatically re-numbers remaining records sequentially (`1..N`) without gaps and resets the autoincrement sequence.
 
-### 3. Real-Time Dynamic Balance Propagation Engine
+### 7. Real-Time Dynamic Balance Propagation Engine
 - When any past transaction is edited or deleted, `recalculate_all_balances()` cascades balance updates across all subsequent transactions to guarantee exact ledger balance math.
 
-### 4. Zero Data Loss Telegram Cloud Sync (`services/backup_service.py`)
+### 8. Zero Data Loss Telegram Cloud Sync (`services/backup_service.py`)
 - Pinned `#PAYMENT_TRACKER_BACKUP` in Telegram guarantees 100% data persistence across Render server restarts and redeployments.
 
 ---
 
 ## 🧪 Test Suite
 
-All **31 unit tests** are automated and passing:
+All **47 unit tests** are automated and passing:
 - `tests/test_gemini_vision.py` ✅
+- `tests/test_category_service.py` ✅
+- `tests/test_budget_service.py` ✅
+- `tests/test_scheduler_service.py` ✅
+- `tests/test_dashboard_api.py` ✅
 - `tests/test_gdrive_service.py` ✅
 - `tests/test_parsers.py` ✅
 - `tests/test_resequence.py` ✅
+

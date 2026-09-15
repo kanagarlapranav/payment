@@ -42,6 +42,15 @@ def process_transaction(raw_text: str, image_path: str, message_id: str, chat_id
     confidence = parser.get_confidence(transaction)
     logger.info(f"Parsed transaction with confidence: {confidence}")
     
+    # Auto-predict category
+    from services.category_service import predict_category
+    if not getattr(transaction, 'category', None) or transaction.category == 'General':
+        transaction.category = predict_category(
+            text=full_text,
+            person_name=transaction.person_name or "",
+            tx_type=transaction.transaction_type or ""
+        )
+    
     return transaction, confidence
 
 def commit_transaction(transaction: Transaction) -> bool:
@@ -54,6 +63,15 @@ def commit_transaction(transaction: Transaction) -> bool:
         if is_duplicate(transaction):
             logger.warning("Duplicate transaction detected during commit.")
             return False
+            
+        # Ensure category is populated
+        if not getattr(transaction, 'category', None) or transaction.category == 'General':
+            from services.category_service import predict_category
+            transaction.category = predict_category(
+                text=transaction.ocr_text or "",
+                person_name=transaction.person_name or "",
+                tx_type=transaction.transaction_type or ""
+            )
             
         # Update balance
         transaction = update_balance_for_transaction(transaction)

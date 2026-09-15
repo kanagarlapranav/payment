@@ -535,7 +535,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 def format_success_message(t) -> str:
-    """Formats transaction confirmation message in clean, robust HTML."""
+    """Formats transaction confirmation message in clean, robust HTML with category badge & budget alerts."""
     icon = "🔴 Payment Sent" if t.transaction_type == 'SENT' else "🟢 Payment Received"
     person_label = "To" if t.transaction_type == 'SENT' else "From"
     person_name = html.escape(str(t.person_name or "Unknown"))
@@ -553,18 +553,30 @@ def format_success_message(t) -> str:
     ref_part = f"\n🔢 <b>Ref / UTR:</b> <code>{html.escape(str(t.reference_number))}</code>" if t.reference_number else ""
     app_part = f" • <i>{html.escape(t.payment_app)}</i>" if t.payment_app and t.payment_app not in ('Generic', '') else ""
 
+    # Category styling
+    from services.category_service import get_category_icon
+    cat_val = getattr(t, 'category', 'General') or 'General'
+    cat_icon = get_category_icon(cat_val)
+    cat_part = f"\n🏷️ <b>Category:</b> {cat_icon} {html.escape(cat_val)}"
+
     bal_before = html.escape(format_currency(t.balance_before))
     bal_after = html.escape(format_currency(t.balance_after))
     amt = html.escape(format_currency(t.amount))
+
+    # Proactive budget alert check
+    from services.budget_service import check_budget_alert
+    budget_alert = check_budget_alert(t.amount, t.transaction_type)
 
     return (
         f"✅ <b>{icon}</b>\n\n"
         f"👤 <b>{person_label}:</b> {person_name}\n"
         f"💵 <b>Amount:</b> <b>{amt}</b>{app_part}\n"
         f"📅 <b>Date:</b> {date_str}{time_part}"
+        f"{cat_part}"
         f"{bank_part}"
         f"{ref_part}\n\n"
         f"💰 <b>Balance:</b> {bal_before} ➔ <b>{bal_after}</b>"
+        f"{budget_alert}"
     )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):

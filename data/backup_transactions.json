@@ -1,10 +1,11 @@
 {
   "version": 1,
-  "exported_at": "2026-09-15T21:24:32.210193",
+  "exported_at": "2026-09-15T23:11:09.960764",
   "transaction_count": 4,
   "settings": {
     "initial_balance": "0.0",
-    "current_balance": "32500.0"
+    "current_balance": "32500.0",
+    "monthly_budget": "25000.0"
   },
   "transactions": [
     {
@@ -31,7 +32,8 @@
       "telegram_message_id": "9",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-06 12:21:57",
-      "updated_at": "2026-09-06 12:21:57"
+      "updated_at": "2026-09-06 12:21:57",
+      "category": "Transfers & P2P"
     },
     {
       "id": 2,
@@ -57,7 +59,8 @@
       "telegram_message_id": "21",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-06 12:29:23",
-      "updated_at": "2026-09-06 12:29:23"
+      "updated_at": "2026-09-06 12:29:23",
+      "category": "Transfers & P2P"
     },
     {
       "id": 3,
@@ -83,7 +86,8 @@
       "telegram_message_id": "33",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-06 15:00:52",
-      "updated_at": "2026-09-06 15:00:52"
+      "updated_at": "2026-09-06 15:00:52",
+      "category": "Bills & Utilities"
     },
     {
       "id": 4,
@@ -109,7 +113,8 @@
       "telegram_message_id": "37",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-06 23:35:00",
-      "updated_at": "2026-09-06 23:35:00"
+      "updated_at": "2026-09-06 23:35:00",
+      "category": "Transfers & P2P"
     }
   ]
 }
