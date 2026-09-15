@@ -996,6 +996,33 @@ async def delmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"❌ {html.escape(msg)}", parse_mode='HTML')
 
+async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Restores database transactions from clean text JSON backup file."""
+    if not await is_authorized(update): return
+    from services.backup_service import import_database_from_json, BACKUP_JSON_PATH
+    from services.balance_service import resequence_transaction_ids, recalculate_all_balances
+    from database.queries import get_all_transactions
+    import html
+
+    if not BACKUP_JSON_PATH.exists():
+        await update.message.reply_text("❌ No text backup file found to restore from.", parse_mode='HTML')
+        return
+
+    await update.message.reply_text("⏳ Restoring text transactions from backup...")
+    success = import_database_from_json()
+    resequence_transaction_ids()
+    recalculate_all_balances()
+    txs = get_all_transactions()
+    await update.message.reply_text(
+        f"✅ <b>Database Restored Successfully!</b>\n\n"
+        f"• Restored <b>{len(txs)}</b> text transactions from JSON backup.\n"
+        f"• All transaction IDs resequenced consecutively (`1..N`).\n"
+        f"• Running balances & starting balance recalculated.\n\n"
+        f"Use <code>/history</code> or <code>/balance</code> to view restored transactions.",
+        parse_mode='HTML'
+    )
+
+
 
 
 

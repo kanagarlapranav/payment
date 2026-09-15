@@ -34,13 +34,20 @@ def is_gemini_available() -> bool:
     return bool(get_effective_gemini_api_key())
 
 def _prepare_image_b64(image_path: str) -> tuple[str, str]:
-    """Resizes and compresses image in memory to max 800px for lightning-fast API upload."""
+    """Crops status bar/chat bars and compresses image in memory to max 800px for lightning-fast API upload."""
     try:
         with Image.open(image_path) as img:
             img = img.convert("RGB")
+            w, h = img.size
+            # If tall phone screenshot, crop top 8% (status bar) and bottom 15% (chat UI)
+            if h > w * 1.3:
+                top = int(h * 0.08)
+                bottom = int(h * 0.85)
+                img = img.crop((0, top, w, bottom))
+
             img.thumbnail((800, 800), Image.Resampling.LANCZOS)
             buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=80, optimize=True)
+            img.save(buf, format="JPEG", quality=85, optimize=True)
             b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
             return b64, "image/jpeg"
     except Exception as img_err:
@@ -54,7 +61,7 @@ def _prepare_image_b64(image_path: str) -> tuple[str, str]:
 def extract_transaction_with_gemini(image_path: str, caption: str = "") -> tuple[Transaction | None, int]:
     """
     Analyzes payment receipt screenshot using Google Gemini Vision API.
-    Uses thumbnail compression and multi-model fallback for maximum speed and reliability.
+    Uses thumbnail compression, receipt cropping, and multi-model fallback for maximum speed and reliability.
     Returns (Transaction, confidence_score) or (None, 0) if failed/unavailable.
     """
     api_key = get_effective_gemini_api_key()
@@ -118,7 +125,8 @@ def extract_transaction_with_gemini(image_path: str, caption: str = "") -> tuple
 
             try:
                 logger.info(f"Invoking Gemini Vision API ({model_name}) for {image_path}...")
-                response = requests.post(url, json=payload, timeout=20.0)
+                response = requests.post(url, json=payload, timeout=6.0)
+
 
                 if response.status_code == 200:
                     data = response.json()
