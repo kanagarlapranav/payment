@@ -21,6 +21,7 @@ class Transaction:
     bank_name: str = ""
     bank_account: str = ""
     payment_status: str = ""
+    category: str = "General"
     balance_before: float = 0.0
     balance_after: float = 0.0
     ocr_text: str = ""

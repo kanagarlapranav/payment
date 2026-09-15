@@ -42,40 +42,45 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update): return
     
     help_text = (
-        "👑 *Payment Tracker Bot — Complete Guide*\n\n"
-        "Automatically log expenses, scan receipts from any UPI app, track balances, and generate financial statements.\n\n"
-        "📸 *1. Receipt Upload & Scanning (OCR)*\n"
-        "• Send a *screenshot* or *shared receipt* (image + text caption) from any app:\n"
-        "  `BHIM`, `Paytm`, `PhonePe`, `Google Pay`, `CRED`, `Super.money`, `NaviPay`, `YONO SBI`, `Union EASE / Vyom`.\n"
-        "• The bot instantly extracts Amount, Person, Date, Bank, & UTR Ref No.\n\n"
-        "💬 *2. Natural Text Tracking*\n"
+        "👑 <b>Payment Tracker Bot — Complete Guide</b>\n\n"
+        "Automatically log expenses, scan receipts from any UPI app, track balances, manage budgets, and view live visual dashboards.\n\n"
+        "📸 <b>1. Receipt Upload & Scanning (AI Engine)</b>\n"
+        "• Send a <b>screenshot</b> or <b>shared receipt</b> (image + text caption) from any app:\n"
+        "  <code>BHIM</code>, <code>Paytm</code>, <code>PhonePe</code>, <code>Google Pay</code>, <code>CRED</code>, <code>Super.money</code>, <code>NaviPay</code>, <code>YONO SBI</code>, <code>Vyom</code>.\n"
+        "• Instantly extracts Amount, Person, Date, Bank, & UTR Ref No.\n"
+        "• <i>Ephemeral Image Privacy:</i> Receipt images are deleted right after scanning.\n\n"
+        "💬 <b>2. Natural Text Tracking</b>\n"
         "• Simply type what you spent or received:\n"
-        "  `Paid 500 to Ramesh`\n"
-        "  `Received 6200 from Johnson`\n"
-        "  `Paid 5000 to Balaji yesterday`\n\n"
-        "📊 *3. Balance & Daily Summary*\n"
-        "• `/balance` — Current balance, total sent/received today & net flow\n"
-        "• `/today` — Today's quick financial summary\n\n"
-        "📜 *4. History & Transaction Lookup*\n"
-        "• `/history` — Clean list of recent transactions with dates & amounts\n"
-        "• `/details` (or `/ids`) — Detailed view with database IDs & UTR numbers\n"
-        "• `/date <date>` — View transactions on a specific date (e.g. `/date yesterday` or `/date 06 Sep 2026`)\n"
-        "• `/search <query>` — Search by person name, bank, or UTR (e.g. `/search Balaji`)\n"
-        "• `/amount <number>` — Search by exact amount (e.g. `/amount 5000` or simply type `5000`)\n\n"
-        "📈 *5. Analytics & Organization*\n"
-        "• `/monthly` (or `/stats`) — Monthly total spent, income, net savings & top recipient\n"
-        "• `/filter` — Interactive filter buttons (Today, Yesterday, This Month, Sent, Received)\n"
-        "• `/sort` — Interactive sorting menu (Amount High ➔ Low, Low ➔ High, Date)\n\n"
-        "⚙️ *6. Management & Edits*\n"
-        "• `/edit` — Interactive 1-tap menu to edit amount, name, date, type, or UTR\n"
-        "• `/delete` — Interactive 1-tap menu to delete any record & auto-recalculate balance\n"
-        "• `/setbalance <amt>` — Set starting balance (e.g. `/setbalance 50000`)\n\n"
-        "📄 *7. Reports & Export*\n"
-        "• `/export` (or `/report`, `/statement`) — Download official **PDF Statement** or **Excel Sheet (.xlsx)**\n\n"
-        "☁️ *Cloud Reliability:*\n"
-        "• Every transaction, edit, and deletion is automatically backed up to Telegram and synced 24/7 across server restarts."
+        "  <code>Paid 500 to Ramesh</code>\n"
+        "  <code>Received 6200 from Johnson</code>\n"
+        "  <code>Paid 5000 to Balaji yesterday</code>\n\n"
+        "🎯 <b>3. Budget & Financial Health</b>\n"
+        "• /budget — View monthly budget progress, remaining funds & status bar\n"
+        "• /setbudget &lt;amt&gt; — Set monthly spending target (e.g. <code>/setbudget 20000</code>)\n"
+        "• /insights — AI-powered category breakdown, spending percentages & advice\n"
+        "• /digest — Generate today's closing financial digest (or <code>/digest YYYY-MM-DD</code>)\n"
+        "• /dashboard — View interactive dark-mode charts & live web analytics\n\n"
+        "📊 <b>4. Balance & History</b>\n"
+        "• /balance — Current balance, total sent/received today & net flow\n"
+        "• /history — Clean sequential transaction list with dates & amounts\n"
+        "• /details — Detailed view with database IDs & UTR numbers\n"
+        "• /date &lt;date&gt; — View transactions on a specific date\n"
+        "• /search &lt;query&gt; — Search by person name, bank, or UTR\n"
+        "• /amount &lt;number&gt; — Search by exact amount\n\n"
+        "📈 <b>5. Analytics & Organization</b>\n"
+        "• /monthly (or /stats) — Monthly total spent, income, net savings & top recipient\n"
+        "• /filter — Interactive filter buttons (Today, Yesterday, Month, Sent, Received)\n"
+        "• /sort — Interactive sorting menu (Amount High ➔ Low, Low ➔ High, Date)\n\n"
+        "⚙️ <b>6. Management & Edits</b>\n"
+        "• /edit — Interactive 1-tap menu to edit amount, name, date, type, or UTR\n"
+        "• /delete — Interactive 1-tap menu to delete record & auto-recalculate\n"
+        "• /setbalance &lt;amt&gt; — Set starting balance (e.g. <code>/setbalance 50000</code>)\n\n"
+        "📄 <b>7. Reports & Export</b>\n"
+        "• /export (or /report, /statement) — Download official <b>PDF Statement</b> or <b>Excel Sheet (.xlsx)</b>\n\n"
+        "☁️ <b>Cloud Reliability:</b>\n"
+        "• Every transaction, edit, and deletion is automatically backed up and synced 24/7."
     )
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+    await update.message.reply_text(help_text, parse_mode='HTML')
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update): return
@@ -719,3 +724,109 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=keyboard,
         parse_mode='Markdown'
     )
+
+async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generates AI spending insights and category analytics."""
+    if not await is_authorized(update): return
+    from services.category_service import format_spending_insights
+    from datetime import datetime
+    
+    now = datetime.now()
+    year = now.year
+    month = now.month
+    
+    if context.args:
+        arg = context.args[0]
+        if arg.isdigit() and 1 <= int(arg) <= 12:
+            month = int(arg)
+        if len(context.args) > 1 and context.args[1].isdigit():
+            year = int(context.args[1])
+            
+    text = format_spending_insights(year, month)
+    await update.message.reply_text(text, parse_mode='HTML')
+
+async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays the monthly budget status and progress bar."""
+    if not await is_authorized(update): return
+    from services.budget_service import format_budget_status
+    from datetime import datetime
+    
+    now = datetime.now()
+    year = now.year
+    month = now.month
+    
+    if context.args:
+        arg = context.args[0]
+        if arg.isdigit() and 1 <= int(arg) <= 12:
+            month = int(arg)
+        if len(context.args) > 1 and context.args[1].isdigit():
+            year = int(context.args[1])
+            
+    text = format_budget_status(year, month)
+    await update.message.reply_text(text, parse_mode='HTML')
+
+async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sets the monthly spending budget target."""
+    if not await is_authorized(update): return
+    from services.budget_service import set_budget
+    from services.backup_service import backup_to_telegram
+    import asyncio
+    
+    if not context.args:
+        await update.message.reply_text(
+            "🎯 <b>Set Monthly Budget</b>\n\n"
+            "Usage: <code>/setbudget &lt;amount&gt;</code>\n\n"
+            "Examples:\n"
+            "• <code>/setbudget 15000</code>\n"
+            "• <code>/setbudget 25000</code>\n"
+            "• <code>/setbudget 0</code> <i>(to disable budget)</i>",
+            parse_mode='HTML'
+        )
+        return
+        
+    raw_amt = "".join(context.args).replace(',', '').replace('₹', '').replace('rs', '').strip()
+    try:
+        amt = float(raw_amt)
+        msg = set_budget(amt)
+        try:
+            asyncio.create_task(backup_to_telegram(context.bot))
+        except Exception:
+            pass
+        await update.message.reply_text(msg, parse_mode='HTML')
+    except ValueError:
+        await update.message.reply_text("❌ Invalid amount format. Example: <code>/setbudget 20000</code>", parse_mode='HTML')
+
+async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generates the daily financial closing digest on demand."""
+    if not await is_authorized(update): return
+    from services.scheduler_service import format_daily_digest
+    
+    target_date = None
+    if context.args:
+        from utils.dates import parse_date
+        raw_d = " ".join(context.args).strip()
+        parsed = parse_date(raw_d)
+        if parsed:
+            target_date = parsed.strftime("%Y-%m-%d")
+            
+    digest_text = format_daily_digest(target_date)
+    await update.message.reply_text(digest_text, parse_mode='HTML')
+
+async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Provides a live link to the interactive web dashboard & visual charts."""
+    if not await is_authorized(update): return
+    import os
+    
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "https://payment-3-kldp.onrender.com").rstrip('/')
+    dash_url = f"{render_url}/dashboard"
+    
+    msg = (
+        f"📊 <b>LIVE FINANCIAL DASHBOARD</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"View your interactive Dark-Mode Charts, Donut Category Breakdowns, and Cash Flow Graphs:\n\n"
+        f"🔗 <a href=\"{dash_url}\"><b>Open Web Dashboard</b></a>\n"
+        f"<code>{dash_url}</code>\n\n"
+        f"<i>✨ Features: Live sync, Chart.js visualizations, Category distribution, & recent activity.</i>"
+    )
+    await update.message.reply_text(msg, parse_mode='HTML', disable_web_page_preview=False)
+
