@@ -29,7 +29,7 @@ def get_best_parser(raw_text: str) -> BasePaymentParser:
         return GooglePayParser(raw_text)
     elif 'cred' in top_few or 'cred' in text_lower:
         return CredParser(raw_text)
-    elif 'supermoney' in text_lower or 'super.money' in text_lower:
+    elif 'supermoney' in text_lower or 'super.money' in text_lower or '@superyes' in text_lower or '@superaxis' in text_lower or ('super' in text_lower and 'money' in text_lower):
         return SuperMoneyParser(raw_text)
     elif 'navi' in text_lower or 'navipay' in text_lower:
         return NaviParser(raw_text)

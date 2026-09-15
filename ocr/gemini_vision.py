@@ -6,13 +6,35 @@ from config import GEMINI_API_KEY, GEMINI_MODEL, logger
 from database.models import Transaction
 from utils.dates import parse_date
 
+import io
+from PIL import Image
+
 def is_gemini_available() -> bool:
     """Returns True if Gemini API key is configured."""
     return bool(GEMINI_API_KEY and GEMINI_API_KEY.strip())
 
+def _prepare_image_b64(image_path: str) -> tuple[str, str]:
+    """Resizes and compresses image in memory to max 1024px to ensure fast API upload."""
+    try:
+        with Image.open(image_path) as img:
+            img = img.convert("RGB")
+            img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85, optimize=True)
+            b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+            return b64, "image/jpeg"
+    except Exception as img_err:
+        logger.warning(f"Could not resize image with PIL ({img_err}), using raw file.")
+        with open(image_path, "rb") as f:
+            raw_b64 = base64.b64encode(f.read()).decode("utf-8")
+        ext = os.path.splitext(image_path)[1].lower()
+        mime = "image/png" if ext == ".png" else "image/jpeg"
+        return raw_b64, mime
+
 def extract_transaction_with_gemini(image_path: str, caption: str = "") -> tuple[Transaction | None, int]:
     """
-    Analyzes payment receipt screenshot using Google Gemini 1.5 Flash Vision API.
+    Analyzes payment receipt screenshot using Google Gemini Vision API.
+    Uses thumbnail compression and multi-model fallback for maximum speed and reliability.
     Returns (Transaction, confidence_score) or (None, 0) if failed/unavailable.
     """
     if not is_gemini_available():
@@ -23,113 +45,124 @@ def extract_transaction_with_gemini(image_path: str, caption: str = "") -> tuple
         return None, 0
 
     try:
-        # Read and base64-encode the image
-        with open(image_path, "rb") as f:
-            image_bytes = f.read()
-        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-
-        # Determine MIME type
-        ext = os.path.splitext(image_path)[1].lower()
-        mime_type = "image/png" if ext == ".png" else "image/jpeg"
+        image_b64, mime_type = _prepare_image_b64(image_path)
 
         prompt = (
-            "Analyze this Indian payment / UPI receipt screenshot (from apps like PhonePe, Google Pay, Paytm, Amazon Pay, CRED, BHIM, YONO SBI, etc.).\n"
-            "Extract the exact transaction details and return ONLY a valid JSON object with the following fields:\n"
-            "- amount (number/float, e.g. 400.0 or 5000.0, strictly positive)\n"
-            "- transaction_type ('SENT' if money was paid/debited/sent, 'RECEIVED' if money was credited/received/added)\n"
-            "- person_name (string: name of the recipient or sender, e.g. 'Kanagarlasaiakhil' or 'Balaji')\n"
-            "- payment_app (string: name of the app e.g. 'Amazon Pay', 'PhonePe', 'Google Pay', 'Paytm', 'CRED', 'SBI', 'Generic')\n"
-            "- transaction_date (string: in YYYY-MM-DD format if date is found, or 'Today')\n"
-            "- transaction_time (string: e.g. '7:54 PM' or '10:02 AM')\n"
-            "- bank_name (string: name of bank involved, e.g. 'Statebankof India', 'HDFC Bank', 'ICICI Bank', or null)\n"
-            "- reference_number (string: UTR or UPI Reference Number, 12 digits or alphanumeric string, or null)\n"
-            "- raw_text (string: all readable text extracted from the receipt)\n"
-            "- confidence (integer from 0 to 100 indicating extraction confidence)\n\n"
-            f"Optional context caption from user: '{caption}'\n"
-            "Return ONLY the JSON object, with no markdown code fences or backticks."
+            "You are an expert Indian UPI & Banking Receipt OCR extractor.\n"
+            "Analyze this payment receipt screenshot (e.g. from Super.money, Google Pay, PhonePe, Paytm, CRED, BHIM, Amazon Pay, Navi, YONO SBI, Axis, Federal Bank, HDFC, ICICI, etc.).\n"
+            "Extract the transaction details accurately and return ONLY a valid JSON object with the following fields:\n"
+            "- amount (number/float, strictly the exact transaction bill/transfer amount, e.g. 20.0, 400.0, 5000.0. Do NOT return promo/cashback/item count numbers)\n"
+            "- transaction_type ('SENT' if money was sent/paid/debited, 'RECEIVED' if money was received/credited)\n"
+            "- person_name (string: name of the recipient or sender, e.g. 'VIKRAMAN NAIR K' or 'Kanagarla Pranav')\n"
+            "- payment_app (string: 'Super.money', 'Google Pay', 'PhonePe', 'Paytm', 'CRED', 'Amazon Pay', 'Navi', 'YONO SBI', 'Generic')\n"
+            "- transaction_date (string: 'YYYY-MM-DD' or formatted date string)\n"
+            "- transaction_time (string: e.g. '1:41 PM')\n"
+            "- bank_name (string: bank name if visible, e.g. 'Federal Bank', 'YES BANK', or null)\n"
+            "- reference_number (string: 12-digit UTR or UPI Reference ID, or null)\n"
+            "- raw_text (string: text content from the receipt)\n"
+            "- confidence (integer 90-100)\n\n"
+            f"Optional user caption: '{caption}'\n"
+            "Return ONLY the JSON object, without markdown code fences or quotes."
         )
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-        
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": prompt},
-                        {
-                            "inline_data": {
-                                "mime_type": mime_type,
-                                "data": image_b64
+        candidate_models = [GEMINI_MODEL, "gemini-3.6-flash", "gemini-flash-latest", "gemini-2.5-flash"]
+        # Deduplicate while preserving order
+        models_to_try = []
+        for m in candidate_models:
+            if m and m not in models_to_try:
+                models_to_try.append(m)
+
+        last_error = None
+        for model_name in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+            payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt},
+                            {
+                                "inline_data": {
+                                    "mime_type": mime_type,
+                                    "data": image_b64
+                                }
                             }
-                        }
-                    ]
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "response_mime_type": "application/json",
+                    "temperature": 0.1
                 }
-            ],
-            "generationConfig": {
-                "response_mime_type": "application/json",
-                "temperature": 0.1
             }
-        }
 
-        logger.info(f"Invoking Gemini Vision API ({GEMINI_MODEL}) for {image_path}...")
-        response = requests.post(url, json=payload, timeout=25.0)
+            try:
+                logger.info(f"Invoking Gemini Vision API ({model_name}) for {image_path}...")
+                response = requests.post(url, json=payload, timeout=20.0)
 
-        if response.status_code != 200:
-            logger.warning(f"Gemini API returned status {response.status_code}: {response.text}")
-            return None, 0
+                if response.status_code == 200:
+                    data = response.json()
+                    candidates = data.get("candidates", [])
+                    if not candidates:
+                        continue
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if not parts:
+                        continue
 
-        data = response.json()
-        
-        # Extract text from response candidates
-        candidates = data.get("candidates", [])
-        if not candidates:
-            return None, 0
+                    json_str = parts[0].get("text", "").strip()
+                    # Clean potential markdown wrapping
+                    if json_str.startswith("```"):
+                        json_str = json_str.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
-        parts = candidates[0].get("content", {}).get("parts", [])
-        if not parts:
-            return None, 0
+                    parsed = json.loads(json_str)
+                    amount = float(parsed.get("amount") or 0.0)
+                    tx_type = str(parsed.get("transaction_type") or "").upper()
+                    if tx_type not in ("SENT", "RECEIVED"):
+                        tx_type = "SENT"
 
-        json_str = parts[0].get("text", "").strip()
-        parsed = json.loads(json_str)
+                    person = parsed.get("person_name") or "Unknown"
+                    payment_app = parsed.get("payment_app") or "Generic"
+                    raw_date = parsed.get("transaction_date")
+                    date_obj = parse_date(str(raw_date)) if raw_date else parse_date("Today")
+                    
+                    time_str = parsed.get("transaction_time") or ""
+                    bank = parsed.get("bank_name") or ""
+                    ref_no = str(parsed.get("reference_number") or "").strip()
+                    if ref_no.lower() in ("null", "none", "n/a", ""):
+                        ref_no = None
 
-        amount = float(parsed.get("amount") or 0.0)
-        tx_type = str(parsed.get("transaction_type") or "").upper()
-        if tx_type not in ("SENT", "RECEIVED"):
-            tx_type = "SENT"
+                    confidence = int(parsed.get("confidence") or 95)
+                    if amount > 0 and person != "Unknown":
+                        confidence = max(confidence, 90)
 
-        person = parsed.get("person_name") or "Unknown"
-        payment_app = parsed.get("payment_app") or "Generic"
-        raw_date = parsed.get("transaction_date")
-        date_obj = parse_date(str(raw_date)) if raw_date else parse_date("Today")
-        
-        time_str = parsed.get("transaction_time") or ""
-        bank = parsed.get("bank_name") or ""
-        ref_no = str(parsed.get("reference_number") or "").strip()
-        if ref_no.lower() in ("null", "none", "n/a", ""):
-            ref_no = None
+                    transaction = Transaction(
+                        transaction_type=tx_type,
+                        amount=amount,
+                        person_name=person,
+                        sender_name=person if tx_type == "RECEIVED" else "",
+                        recipient_name=person if tx_type == "SENT" else "",
+                        payment_app=payment_app,
+                        transaction_date=date_obj,
+                        transaction_time=time_str,
+                        bank_name=bank,
+                        reference_number=ref_no or "",
+                        ocr_text=parsed.get("raw_text") or json_str,
+                        payment_status="SUCCESS"
+                    )
 
-        confidence = int(parsed.get("confidence") or 95)
-        if amount > 0 and person != "Unknown":
-            confidence = max(confidence, 90)
+                    logger.info(f"Gemini Vision ({model_name}) successfully parsed receipt: {tx_type} Rs. {amount} to/from {person} (Confidence: {confidence}%)")
+                    return transaction, confidence
+                else:
+                    logger.warning(f"Gemini model {model_name} returned status {response.status_code}: {response.text[:200]}")
+                    last_error = f"Status {response.status_code}"
+            except requests.RequestException as req_err:
+                logger.warning(f"Gemini model {model_name} request failed/timed out: {req_err}")
+                last_error = str(req_err)
+                continue
 
-        transaction = Transaction(
-            transaction_type=tx_type,
-            amount=amount,
-            person_name=person,
-            sender_name=person if tx_type == "RECEIVED" else "",
-            recipient_name=person if tx_type == "SENT" else "",
-            payment_app=payment_app,
-            transaction_date=date_obj,
-            transaction_time=time_str,
-            bank_name=bank,
-            reference_number=ref_no or "",
-            ocr_text=parsed.get("raw_text") or json_str,
-            payment_status="SUCCESS"
-        )
-
-        logger.info(f"Gemini Vision successfully parsed receipt: {tx_type} Rs. {amount} to/from {person} (Confidence: {confidence}%)")
-        return transaction, confidence
+        logger.warning(f"All Gemini Vision models failed or timed out: {last_error}")
+        return None, 0
 
     except Exception as e:
         logger.error(f"Error during Gemini Vision processing: {e}", exc_info=True)
         return None, 0
+
