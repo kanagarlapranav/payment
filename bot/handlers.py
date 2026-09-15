@@ -193,10 +193,22 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Confidence check
         if confidence >= 80:
             # High confidence, save automatically
+            from services.cafeteria_service import is_cafeteria_payment
+            from bot.keyboards import get_cafeteria_selection_keyboard
+            
+            # Ensure category is Food & Dining if cafeteria
+            if is_cafeteria_payment(transaction.person_name, transaction.upi_id, transaction.ocr_text):
+                transaction.category = "Food & Dining"
+
             success = commit_transaction(transaction)
             if success:
                 response = format_success_message(transaction)
-                await deliver_response(status_msg, message, response, parse_mode='HTML')
+                markup = None
+                if is_cafeteria_payment(transaction.person_name, transaction.upi_id, transaction.ocr_text):
+                    markup = get_cafeteria_selection_keyboard(transaction.id, transaction.amount)
+                    response += "\n\n🍽️ <b>Cafeteria Bill Detected!</b> Select your menu item below:"
+
+                await deliver_response(status_msg, message, response, reply_markup=markup, parse_mode='HTML')
                 try:
                     asyncio.create_task(backup_to_telegram(context.bot))
                 except Exception:
@@ -533,6 +545,86 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
         await query.edit_message_text(text, reply_markup=get_sort_keyboard(), parse_mode='HTML')
 
+    # 7. Cafeteria Menu Callbacks
+    elif action == "cafe_pick":
+        tx_id = int(parts[1])
+        item_name = parts[2]
+        tx = get_transaction_by_id(tx_id)
+        if tx:
+            new_name = f"VIKRAMAN NAIR K (Cafeteria: {item_name})"
+            update_transaction(tx_id, {'person_name': new_name, 'category': 'Food & Dining'})
+            try:
+                from services.backup_service import backup_to_telegram
+                asyncio.create_task(backup_to_telegram(context.bot))
+            except Exception:
+                pass
+            amt_s = format_currency(tx['amount'])
+            bal_s = format_currency(tx['balance_after'])
+            await query.edit_message_text(
+                f"🍽️ <b>Cafeteria Order Tagged!</b>\n\n"
+                f"• <b>Ordered Item:</b> 🍽️ <b>{html.escape(item_name)}</b>\n"
+                f"• <b>Merchant:</b> VIKRAMAN NAIR K\n"
+                f"• <b>Amount:</b> <b>{html.escape(amt_s)}</b>\n"
+                f"• <b>Category:</b> 🍔 Food & Dining\n"
+                f"• <b>Balance:</b> {html.escape(bal_s)}\n\n"
+                f"✅ Successfully saved to your transaction record!",
+                parse_mode='HTML'
+            )
+        else:
+            await query.edit_message_text(f"🍽️ Tagged order: <b>{html.escape(item_name)}</b>", parse_mode='HTML')
+
+    elif action == "cafe_cat":
+        tx_id = int(parts[1])
+        cat_name = parts[2]
+        from bot.keyboards import get_cafeteria_category_keyboard
+        tx = get_transaction_by_id(tx_id)
+        amt_str = format_currency(tx['amount']) if tx else ""
+        await query.edit_message_text(
+            f"🍽️ <b>Cafeteria Menu — {html.escape(cat_name)}</b>\n"
+            f"Bill Amount: <b>{html.escape(amt_str)}</b>\n\n"
+            f"Tap any item to tag it:",
+            reply_markup=get_cafeteria_category_keyboard(tx_id, cat_name),
+            parse_mode='HTML'
+        )
+
+    elif action == "cafe_back":
+        tx_id = int(parts[1])
+        from bot.keyboards import get_cafeteria_selection_keyboard
+        tx = get_transaction_by_id(tx_id)
+        amt = float(tx['amount']) if tx else 0.0
+        await query.edit_message_text(
+            f"🍽️ <b>Cafeteria Menu Selection (Paid {html.escape(format_currency(amt))}):</b>\n\n"
+            f"Select the item(s) you ordered or choose a category below:",
+            reply_markup=get_cafeteria_selection_keyboard(tx_id, amt),
+            parse_mode='HTML'
+        )
+
+    elif action == "cafe_addon":
+        tx_id = int(parts[1])
+        addon = parts[2]
+        tx = get_transaction_by_id(tx_id)
+        if tx:
+            current_name = tx['person_name'] or "VIKRAMAN NAIR K (Cafeteria)"
+            updated_name = f"{current_name} + {addon}"
+            update_transaction(tx_id, {'person_name': updated_name, 'category': 'Food & Dining'})
+            await query.edit_message_text(
+                f"🍽️ <b>Add-on Tagged:</b> +₹5 {html.escape(addon)}\n"
+                f"• Total Amount: <b>{html.escape(format_currency(tx['amount']))}</b>\n\n"
+                f"✅ Updated record!",
+                parse_mode='HTML'
+            )
+
+    elif action == "cafe_skip":
+        tx_id = int(parts[1])
+        tx = get_transaction_by_id(tx_id)
+        amt_s = format_currency(tx['amount']) if tx else ""
+        await query.edit_message_text(
+            f"✅ <b>Cafeteria Payment Recorded</b> ({html.escape(amt_s)})\n"
+            f"Tagged as: 🍔 <b>Food & Dining</b> (General)",
+            parse_mode='HTML'
+        )
+
+
 
 def format_success_message(t) -> str:
     """Formats transaction confirmation message in clean, robust HTML with category badge & budget alerts."""
@@ -795,10 +887,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         transaction, confidence = process_transaction(text, "", message_id, chat_id)
         if transaction.amount and transaction.amount > 0 and transaction.transaction_type:
             if confidence >= 80:
+                from services.cafeteria_service import is_cafeteria_payment
+                from bot.keyboards import get_cafeteria_selection_keyboard
+                if is_cafeteria_payment(transaction.person_name, transaction.upi_id, transaction.ocr_text):
+                    transaction.category = "Food & Dining"
+
                 success = commit_transaction(transaction)
                 if success:
                     response = format_success_message(transaction)
-                    await update.message.reply_text(response, parse_mode='HTML')
+                    markup = None
+                    if is_cafeteria_payment(transaction.person_name, transaction.upi_id, transaction.ocr_text):
+                        markup = get_cafeteria_selection_keyboard(transaction.id, transaction.amount)
+                        response += "\n\n🍽️ <b>Cafeteria Bill Detected!</b> Select your menu item below:"
+
+                    await update.message.reply_text(response, reply_markup=markup, parse_mode='HTML')
                     try:
                         asyncio.create_task(backup_to_telegram(context.bot))
                     except Exception:

@@ -8,7 +8,7 @@ from database.queries import get_category_summary, get_monthly_summary, get_mont
 from config import logger
 
 CATEGORIES = {
-    "Food & Dining": ["swiggy", "zomato", "restaurant", "cafe", "mcdonald", "kfc", "burger", "pizza", "bakery", "food", "dhaba", "dining", "tea", "chai", "coffee", "bistro", "eatery", "canteen"],
+    "Food & Dining": ["swiggy", "zomato", "restaurant", "cafe", "mcdonald", "kfc", "burger", "pizza", "bakery", "food", "dhaba", "dining", "tea", "chai", "coffee", "bistro", "eatery", "canteen", "cafeteria", "vikraman nair", "vikram nair", "vikramannair066@fbl"],
     "Groceries": ["blinkit", "zepto", "instamart", "bigbasket", "supermarket", "mart", "provision", "vegetable", "fruits", "dmart", "spencer", "reliance fresh", "milk", "kirana"],
     "Shopping": ["amazon", "flipkart", "myntra", "ajio", "meesho", "store", "retail", "clothing", "apparel", "shoes", "mall", "electronics", "croma", "reliancedigital"],
     "Travel & Transport": ["uber", "ola", "rapido", "irctc", "petrol", "fuel", "diesel", "toll", "metro", "flight", "indigo", "air india", "redbus", "abhibus", "parking", "fastag", "cab", "auto"],

@@ -830,3 +830,11 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg, parse_mode='HTML', disable_web_page_preview=False)
 
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays the full vegetarian cafeteria menu with prices & add-ons."""
+    if not await is_authorized(update): return
+    from services.cafeteria_service import format_full_menu
+    menu_text = format_full_menu()
+    await update.message.reply_text(menu_text, parse_mode='HTML')
+
+

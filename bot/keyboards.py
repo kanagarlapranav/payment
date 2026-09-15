@@ -91,3 +91,66 @@ def get_sort_keyboard():
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+def get_cafeteria_selection_keyboard(tx_id: int, amount: float):
+    """Generates dynamic cafeteria veg item selection keyboard based on paid amount."""
+    from services.cafeteria_service import find_exact_items, find_combinations
+    exact_items = find_exact_items(amount)
+    combos = find_combinations(amount)
+    
+    keyboard = []
+    
+    # 1. Exact Matching Veg Items
+    for item in exact_items[:4]:
+        cb_data = f"cafe_pick:{tx_id}:{item.name}"
+        keyboard.append([InlineKeyboardButton(f"🍽️ {item.name} (₹{item.price:.0f})", callback_data=cb_data)])
+        
+    # 2. Matching Combinations (Item + Packing / Item + Extra Spicy / Pair)
+    for combo in combos[:4]:
+        short_name = combo.split(' (')[0]
+        cb_data = f"cafe_pick:{tx_id}:{short_name[:35]}"
+        keyboard.append([InlineKeyboardButton(f"🍴 {combo}", callback_data=cb_data)])
+        
+    # 3. Category Browser Buttons
+    keyboard.append([
+        InlineKeyboardButton("🥞 Breakfast", callback_data=f"cafe_cat:{tx_id}:Breakfast"),
+        InlineKeyboardButton("🍛 Lunch", callback_data=f"cafe_cat:{tx_id}:Lunch")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("🥘 Veg Dishes", callback_data=f"cafe_cat:{tx_id}:Veg Dishes"),
+        InlineKeyboardButton("☕ Snacks & Tea", callback_data=f"cafe_cat:{tx_id}:Snacks & Tea")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("🧃 Juices", callback_data=f"cafe_cat:{tx_id}:Juices"),
+        InlineKeyboardButton("🍨 Ice Cream", callback_data=f"cafe_cat:{tx_id}:Ice Cream")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("📦 +₹5 Packing", callback_data=f"cafe_addon:{tx_id}:Packing"),
+        InlineKeyboardButton("🌶️ +₹5 Extra Spicy", callback_data=f"cafe_addon:{tx_id}:Extra Spicy")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("⏭️ Skip (General Cafeteria)", callback_data=f"cafe_skip:{tx_id}")
+    ])
+    
+    return InlineKeyboardMarkup(keyboard)
+
+def get_cafeteria_category_keyboard(tx_id: int, category: str):
+    """Shows all items in a specific cafeteria category."""
+    from services.cafeteria_service import VEG_MENU
+    items = [it for it in VEG_MENU if it.category == category]
+    
+    keyboard = []
+    # Place items in rows of 2 for compact display
+    row = []
+    for it in items:
+        btn = InlineKeyboardButton(f"{it.name} (₹{it.price:.0f})", callback_data=f"cafe_pick:{tx_id}:{it.name}")
+        row.append(btn)
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+        
+    keyboard.append([InlineKeyboardButton("🔙 Back to Suggestions", callback_data=f"cafe_back:{tx_id}")])
+    return InlineKeyboardMarkup(keyboard)
+
