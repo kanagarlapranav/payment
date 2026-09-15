@@ -117,7 +117,7 @@ def format_spending_insights(year: int, month: int) -> str:
             metrics += f"{icon} <b>{cat_name}</b>: ₹{amt:,.2f} ({share_pct:.1f}%)\n"
             metrics += f"   <code>[{mini_bar}]</code> ({item['count']} tx)\n"
             
-    # Key Observations & AI Takeaways
+    # Key Observations & Gemini AI Takeaways
     metrics += "\n💡 <b>Smart Observations:</b>\n"
     if sent_by_cat:
         top_cat = sent_by_cat[0]
@@ -133,8 +133,24 @@ def format_spending_insights(year: int, month: int) -> str:
             metrics += f"• Moderate savings rate of <b>{savings_rate:.1f}%</b>. Consider reducing discretionary costs.\n"
         else:
             metrics += f"• Spending exceeds income this month. Watch out for non-essential transfers.\n"
+
+    # Gemini AI Financial Coaching
+    try:
+        from ocr.gemini_vision import generate_gemini_spending_advice, is_gemini_available
+        if is_gemini_available():
+            summary_for_ai = (
+                f"Month: {month}/{year}, Total Spent: Rs.{total_spent}, Total Received: Rs.{total_received}, "
+                f"Net Savings: Rs.{net_savings}, Categories: " +
+                ", ".join([f"{c['category']}: Rs.{c['total_amount']}" for c in sent_by_cat[:4]])
+            )
+            ai_advice = generate_gemini_spending_advice(summary_for_ai)
+            if ai_advice:
+                metrics += f"\n🤖 <b>Gemini AI Financial Coach:</b>\n{ai_advice}\n"
+    except Exception:
+        pass
             
     metrics += "\n━━━━━━━━━━━━━━━━━━━━\n"
     metrics += "<i>Tip: Use /dashboard to view interactive graphical charts.</i>"
     
     return header + metrics
+

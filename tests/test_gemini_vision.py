@@ -7,11 +7,12 @@ from ocr.gemini_vision import is_gemini_available, extract_transaction_with_gemi
 
 class TestGeminiVision(unittest.TestCase):
     def test_gemini_not_available_by_default(self):
-        with patch('ocr.gemini_vision.GEMINI_API_KEY', None):
+        with patch('ocr.gemini_vision.GEMINI_API_KEY', "DISABLED"), patch('ocr.gemini_vision.FALLBACK_GEMINI_KEY', ""):
             self.assertFalse(is_gemini_available())
             tx, conf = extract_transaction_with_gemini('non_existent.jpg')
             self.assertIsNone(tx)
             self.assertEqual(conf, 0)
+
 
     @patch('ocr.gemini_vision.requests.post')
     @patch('ocr.gemini_vision.os.path.exists')
