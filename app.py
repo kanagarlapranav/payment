@@ -15,7 +15,7 @@ from bot.commands import (
     edit_command, delete_command, date_command, search_command,
     monthly_command, filter_command, sort_command, details_command,
     setbalance_command, export_command, help_command, chatid_command, amount_command,
-    insights_command, budget_command, setbudget_command, digest_command, dashboard_command
+    insights_command, budget_command, setbudget_command, digest_command, dashboard_command, menu_command
 )
 from bot.handlers import handle_image, handle_callback_query, handle_text
 from services.scheduler_service import scheduler
@@ -84,12 +84,15 @@ def build_application():
     app.add_handler(CommandHandler("chatid", chatid_command))
     app.add_handler(CommandHandler("help", help_command))
 
-    # Advanced AI & Analytics commands
+    # Advanced AI, Analytics & Cafeteria commands
     app.add_handler(CommandHandler("insights", insights_command))
     app.add_handler(CommandHandler("budget", budget_command))
     app.add_handler(CommandHandler("setbudget", setbudget_command))
     app.add_handler(CommandHandler("digest", digest_command))
     app.add_handler(CommandHandler("dashboard", dashboard_command))
+    app.add_handler(CommandHandler("menu", menu_command))
+    app.add_handler(CommandHandler("cafeteria", menu_command))
+
 
     # Image handler (photos and documents)
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
