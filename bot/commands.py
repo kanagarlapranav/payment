@@ -79,24 +79,24 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update): return
-    
+
+    recalculate_all_balances()
     balance = get_balance_setting()
     overall = get_overall_summary()
     today = get_today_summary()
-    
+
     text = (
         f"💰 *Current Balance*\n"
-        f"`{format_currency(balance)}`\n\n"
+        f"👉 *{format_currency(balance)}*\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 *Overall Summary:*\n"
-        f"🔴 Total Sent: {format_currency(overall.total_sent)}\n"
-        f"🟢 Total Received: {format_currency(overall.total_received)}\n"
-        f"📈 Net: {format_currency(overall.net_change)}\n"
-        f"🔢 Total Transactions: {overall.transaction_count}\n\n"
+        f"• 🟢 Received: {format_currency(overall.total_received)}\n"
+        f"• 🔴 Sent: {format_currency(overall.total_sent)}\n"
+        f"• 📈 Net: {format_currency(overall.net_change)} ({overall.transaction_count} transactions)\n\n"
         f"📅 *Today's Summary:*\n"
-        f"🔴 Money Sent: {format_currency(today.total_sent)}\n"
-        f"🟢 Money Received: {format_currency(today.total_received)}\n"
-        f"📈 Net: {format_currency(today.net_change)}\n"
-        f"🔢 Transactions Today: {today.transaction_count}"
+        f"• 🟢 Received: {format_currency(today.total_received)}\n"
+        f"• 🔴 Sent: {format_currency(today.total_sent)}\n"
+        f"• 📈 Net: {format_currency(today.net_change)} ({today.transaction_count} transactions)"
     )
     await update.message.reply_text(text, parse_mode='Markdown')
 
@@ -107,47 +107,46 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update): return
-    
+
     # If user asks for IDs explicitly e.g. /history ids or /history details
     if context.args and context.args[0].lower() in ('ids', 'id', 'details', 'full'):
         await details_command(update, context)
         return
-        
+
+    from services.balance_service import resequence_transaction_ids
+    resequence_transaction_ids()
+    recalculate_all_balances()
+
     transactions = get_all_transactions_asc()
     if not transactions:
-        await update.message.reply_text("No recent transactions found.")
+        await update.message.reply_text("ℹ️ No transactions recorded yet.")
         return
-    
+
     # Calculate summary
     total_sent = sum(t['amount'] for t in transactions if t['transaction_type'] == 'SENT')
     total_received = sum(t['amount'] for t in transactions if t['transaction_type'] == 'RECEIVED')
-    net = total_received - total_sent
-    tx_count = len(transactions)
-        
-    text = "📜 *Recent Transactions*\n\n"
+    curr_balance = get_balance_setting()
+
+    lines_list = ["📜 *Payment History*\n"]
     for t in transactions:
         date_str = format_display_date(t['transaction_date'])
-        time_str = f" | ⏰ {t['transaction_time']}" if t['transaction_time'] and t['transaction_time'] != 'Unknown Time' else ""
         person = t['person_name'] or "Unknown"
-        type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
-        
-        text += (
-            f"• *{date_str}*{time_str} | {type_badge} `[ID: #{t['id']}]`\n"
-            f"👤 {person}\n"
-            f"💵 {format_currency(t['amount'])}\n"
-            f"Balance: {format_currency(t['balance_after'])}\n\n"
+        badge = "🔴" if t['transaction_type'] == 'SENT' else "🟢"
+        amt_str = format_currency(t['amount'])
+        bal_str = format_currency(t['balance_after'])
+
+        lines_list.append(
+            f"*{t['id']}.* {badge} *{amt_str}* — {person}\n"
+            f"   📅 {date_str} | 💰 Bal: `{bal_str}`\n"
         )
-    
-    # Add summary at the end
-    text += (
-        f"📊 *Summary*\n"
-        f"🔴 Total Sent: {format_currency(total_sent)}\n"
-        f"🟢 Total Received: {format_currency(total_received)}\n"
-        f"📈 Net: {format_currency(net)}\n"
-        f"🔢 Total Transactions: {tx_count}"
-    )
-    
-    # Split message if too long for Telegram (4096 char limit)
+
+    lines_list.append("━━━━━━━━━━━━━━━━━━━━")
+    lines_list.append(f"🟢 *Total Received:* {format_currency(total_received)}")
+    lines_list.append(f"🔴 *Total Sent:* {format_currency(total_sent)}")
+    lines_list.append(f"💳 *Current Balance:* *{format_currency(curr_balance)}*")
+
+    text = "\n".join(lines_list)
+
     if len(text) > 4096:
         parts = []
         current = ""
@@ -431,7 +430,10 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Initiates interactive editing or applies direct edit command."""
     if not await is_authorized(update): return
     from bot.keyboards import get_edit_fields_keyboard, get_transaction_selection_keyboard
+    from services.balance_service import resequence_transaction_ids
     
+    resequence_transaction_ids()
+
     # 1. No arguments: show list of recent transactions to tap on
     if not context.args:
         transactions = get_recent_transactions(limit=6)
@@ -440,53 +442,44 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         context.user_data['action'] = 'waiting_edit_id'
         context.user_data['recent_edit_ids'] = [t['id'] for t in transactions]
-        
+
         tx_list_lines = []
         for idx, t in enumerate(transactions, 1):
             date_s = format_display_date(t['transaction_date'])
             badge = "🟢" if t['transaction_type'] == 'RECEIVED' else "🔴"
-            tx_list_lines.append(f"*{idx}.* {badge} {t['person_name'] or 'Unknown'} — *{format_currency(t['amount'])}* ({date_s}) `[ID: #{t['id']}]`")
-            
+            tx_list_lines.append(f"*{t['id']}.* {badge} {t['person_name'] or 'Unknown'} — *{format_currency(t['amount'])}* ({date_s})")
+
         list_text = "\n".join(tx_list_lines)
         await update.message.reply_text(
             "✏️ *Edit Transaction*\n\n"
-            f"Tap a button below, or reply with the number (1-{len(transactions)}) or ID:\n\n"
+            f"Tap a button below, or reply with the transaction ID (e.g. `1`):\n\n"
             f"{list_text}",
             reply_markup=get_transaction_selection_keyboard(transactions, 'select_edit'),
             parse_mode='Markdown'
         )
         return
-        
+
     try:
         raw_num = int(context.args[0].replace('#', ''))
     except ValueError:
         await update.message.reply_text("❌ Invalid ID format. Example: `/edit 3` or `/edit 1`", parse_mode='Markdown')
         return
-        
+
     import asyncio
     from services.backup_service import backup_to_telegram
-    
-    recent = get_recent_transactions(limit=10)
-    # Check if raw_num is a 1-based list index or direct ID
-    tx = None
-    if 1 <= raw_num <= len(recent) and raw_num not in [t['id'] for t in recent]:
-        tx = recent[raw_num - 1]
-    else:
-        tx = get_transaction_by_id(raw_num)
-        if not tx and 1 <= raw_num <= len(recent):
-            tx = recent[raw_num - 1]
-            
+
+    tx = get_transaction_by_id(raw_num)
     if not tx:
         await update.message.reply_text("❌ Transaction not found.", parse_mode='Markdown')
         return
     tx_id = tx['id']
-        
+
     # 2. Only ID provided: show edit field buttons
     if len(context.args) == 1:
-        date_str = tx['transaction_date'] or "Today"
+        date_str = format_display_date(tx['transaction_date'])
         person = tx['person_name'] or "Unknown"
         text = (
-            f"✏️ *Editing Transaction*\n\n"
+            f"✏️ *Editing Transaction #{tx_id}*\n\n"
             f"Type: {tx['transaction_type']}\n"
             f"Amount: {format_currency(tx['amount'])}\n"
             f"Person: {person}\n"
@@ -499,10 +492,10 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 3. Full command provided: /edit <id> <field> <value>
     field = context.args[1].lower()
     value_raw = " ".join(context.args[2:]).strip()
-    
+
     updates = {}
     needs_recalc = False
-    
+
     if field in ('amount', 'amt'):
         new_amt = parse_amount(value_raw)
         if new_amt <= 0:
@@ -529,23 +522,38 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Invalid date format. Use `DD/MM/YYYY`, `05 Sep 2026`, or `yesterday`.")
             return
         updates['transaction_date'] = parsed_d
+        needs_recalc = True
     elif field in ('ref', 'reference', 'utr', 'reference_number'):
         updates['reference_number'] = value_raw
     else:
         await update.message.reply_text(f"❌ Unknown field `{field}`. Supported: `amount`, `person`, `type`, `date`, `ref`.", parse_mode='Markdown')
         return
-        
+
     success = update_transaction(tx_id, updates)
     if success:
-        bal_msg = ""
         if needs_recalc:
             new_bal = recalculate_all_balances()
-            bal_msg = f"\n💰 Updated Current Balance: {format_currency(new_bal)}"
+        else:
+            new_bal = get_balance_setting()
+
+        updated_tx = get_transaction_by_id(tx_id)
+        person = (updated_tx['person_name'] if updated_tx else '') or "Unknown"
+        amt_s = format_currency(updated_tx['amount']) if updated_tx else ''
+        bal_flow = ""
+        if updated_tx and 'balance_before' in updated_tx and 'balance_after' in updated_tx:
+            bal_flow = f"\n💰 *Balance Flow:* {format_currency(updated_tx['balance_before'])} ➔ *{format_currency(updated_tx['balance_after'])}"
+
         try:
             asyncio.create_task(backup_to_telegram(context.bot))
         except Exception:
             pass
-        await update.message.reply_text(f"✅ Transaction updated successfully!{bal_msg}", parse_mode='Markdown')
+        await update.message.reply_text(
+            f"✅ *Transaction #{tx_id} Updated*\n\n"
+            f"👤 *Person:* {person}\n"
+            f"💵 *Amount:* *{amt_s}*{bal_flow}\n\n"
+            f"💳 *Current Balance:* *{format_currency(new_bal)}*",
+            parse_mode='Markdown'
+        )
     else:
         await update.message.reply_text("❌ Failed to update transaction.")
 
@@ -553,7 +561,10 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Initiates interactive deletion or prompts for ID."""
     if not await is_authorized(update): return
     from bot.keyboards import get_delete_confirm_keyboard, get_transaction_selection_keyboard
+    from services.balance_service import resequence_transaction_ids
     
+    resequence_transaction_ids()
+
     # 1. No arguments: show list of recent transactions to tap on
     if not context.args:
         transactions = get_recent_transactions(limit=6)
@@ -562,48 +573,40 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         context.user_data['action'] = 'waiting_delete_id'
         context.user_data['recent_delete_ids'] = [t['id'] for t in transactions]
-        
+
         tx_list_lines = []
         for idx, t in enumerate(transactions, 1):
             date_s = format_display_date(t['transaction_date'])
             badge = "🟢" if t['transaction_type'] == 'RECEIVED' else "🔴"
-            tx_list_lines.append(f"*{idx}.* {badge} {t['person_name'] or 'Unknown'} — *{format_currency(t['amount'])}* ({date_s}) `[ID: #{t['id']}]`")
-            
+            tx_list_lines.append(f"*{t['id']}.* {badge} {t['person_name'] or 'Unknown'} — *{format_currency(t['amount'])}* ({date_s})")
+
         list_text = "\n".join(tx_list_lines)
         await update.message.reply_text(
             "🗑️ *Delete Transaction*\n\n"
-            f"Tap a button below, or reply with the number (1-{len(transactions)}) or ID:\n\n"
+            f"Tap a button below, or reply with the transaction ID (e.g. `1`):\n\n"
             f"{list_text}",
             reply_markup=get_transaction_selection_keyboard(transactions, 'select_delete'),
             parse_mode='Markdown'
         )
         return
-        
+
     try:
         raw_num = int(context.args[0].replace('#', ''))
     except ValueError:
         await update.message.reply_text("❌ Invalid ID format. Example: `/delete 3` or `/delete 1`", parse_mode='Markdown')
         return
-        
-    recent = get_recent_transactions(limit=10)
-    tx = None
-    if 1 <= raw_num <= len(recent) and raw_num not in [t['id'] for t in recent]:
-        tx = recent[raw_num - 1]
-    else:
-        tx = get_transaction_by_id(raw_num)
-        if not tx and 1 <= raw_num <= len(recent):
-            tx = recent[raw_num - 1]
-            
+
+    tx = get_transaction_by_id(raw_num)
     if not tx:
         await update.message.reply_text("❌ Transaction not found.", parse_mode='Markdown')
         return
     tx_id = tx['id']
-        
+
     # Show confirmation keyboard
-    date_str = tx['transaction_date'] or "Today"
+    date_str = format_display_date(tx['transaction_date'])
     person = tx['person_name'] or "Unknown"
     text = (
-        f"🗑️ *Delete Transaction*\n\n"
+        f"🗑️ *Delete Transaction #{tx_id}*\n\n"
         f"Type: {tx['transaction_type']}\n"
         f"Amount: {format_currency(tx['amount'])}\n"
         f"Person: {person}\n"

@@ -2,6 +2,7 @@ from database.queries import get_balance_setting, update_balance_setting
 from database.models import Transaction, TransactionSummary
 from database.db import get_db_connection
 from utils.dates import get_current_time_in_tz
+from config import logger
 
 def update_balance_for_transaction(transaction: Transaction) -> Transaction:
     """
@@ -65,6 +66,32 @@ def get_overall_summary() -> TransactionSummary:
         summary.net_change = summary.total_received - summary.total_sent
         return summary
 
+def resequence_transaction_ids() -> None:
+    """
+    Resequences all transactions so that IDs are strictly consecutive 1, 2, 3, ... N
+    in chronological order with NO missing IDs or gaps.
+    Updates sqlite_sequence so the next inserted record receives ID N+1.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM transactions ORDER BY transaction_date ASC, created_at ASC, id ASC")
+        rows = cursor.fetchall()
+        if not rows:
+            cursor.execute("UPDATE sqlite_sequence SET seq = 0 WHERE name = 'transactions'")
+            conn.commit()
+            return
+        
+        # Step 1: Temporarily assign negative sequential IDs to avoid UNIQUE constraint conflicts
+        for idx, row in enumerate(rows, 1):
+            cursor.execute("UPDATE transactions SET id = ? WHERE id = ?", (-idx, row['id']))
+            
+        # Step 2: Invert negative IDs back to positive contiguous 1..N IDs
+        cursor.execute("UPDATE transactions SET id = -id WHERE id < 0")
+        
+        # Step 3: Update sqlite autoincrement sequence counter
+        cursor.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = 'transactions'", (len(rows),))
+        conn.commit()
+
 def recalculate_all_balances() -> float:
     """
     Recalculates balance_before and balance_after for all transactions in chronological order.
@@ -105,8 +132,8 @@ def recalculate_all_balances() -> float:
     try:
         from services.backup_service import export_database_to_json
         export_database_to_json()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"JSON export notice during balance recalculation: {e}")
         
     return running_balance
 
@@ -131,4 +158,3 @@ def set_explicit_balance(new_balance: float) -> float:
         conn.commit()
     
     return recalculate_all_balances()
-

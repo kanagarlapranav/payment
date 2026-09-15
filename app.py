@@ -1,4 +1,9 @@
 import logging
+import os
+import time
+import urllib.request
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID, logger
 from database.db import setup_database
@@ -15,12 +20,17 @@ async def on_startup(app):
     """Restores database state from cloud backup if needed on fresh container spins."""
     try:
         from services.backup_service import restore_from_telegram, export_database_to_json
+        from services.balance_service import resequence_transaction_ids, recalculate_all_balances
         logger.info("Checking for cloud backup on startup...")
         restored = await restore_from_telegram(app.bot)
         if restored:
             logger.info("Cloud backup restored successfully on startup.")
-        else:
-            export_database_to_json()
+        
+        # Resequence IDs and recalculate balances so database is always clean & sequential
+        resequence_transaction_ids()
+        recalculate_all_balances()
+        export_database_to_json()
+
         # Clean up any leftover temporary images from prior runs
         try:
             from config import IMAGE_DIR
@@ -77,12 +87,6 @@ def build_application():
 
     return app
 
-import os
-import time
-import urllib.request
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -135,4 +139,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
