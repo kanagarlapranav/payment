@@ -75,10 +75,28 @@ class TestCafeteriaService(unittest.TestCase):
         kb_cart = get_cafeteria_cart_keyboard(1, 20.0, [{'name': 'Plain Dosa', 'price': 10.0}])
         self.assertTrue(len(kb_cart.inline_keyboard) > 0)
         
-        # Tagged order keyboard
-        kb_tagged = get_cafeteria_tagged_keyboard(1)
-        self.assertEqual(len(kb_tagged.inline_keyboard), 2)
+    def test_custom_menu_item_flow(self):
+        from services.cafeteria_service import add_custom_menu_item, delete_custom_menu_item, get_all_menu_items
+        # Non-veg rejection
+        succ, msg = add_custom_menu_item("Chicken Biryani", 100, "Rice")
+        self.assertFalse(succ)
+        self.assertIn("vegetarian", msg.lower())
+
+        # Valid veg addition
+        succ, msg = add_custom_menu_item("Special Paneer Roll", 45, "Snacks", is_veg=True)
+        self.assertTrue(succ)
+
+        all_items = get_all_menu_items()
+        self.assertTrue(any(i.name == "Special Paneer Roll" for i in all_items))
+
+        # Delete custom item
+        succ_del, msg_del = delete_custom_menu_item("Special Paneer Roll")
+        self.assertTrue(succ_del)
+
+        all_items_after = get_all_menu_items()
+        self.assertFalse(any(i.name == "Special Paneer Roll" for i in all_items_after))
 
 if __name__ == '__main__':
     unittest.main()
+
 

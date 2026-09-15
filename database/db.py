@@ -68,6 +68,18 @@ def setup_database():
                 )
             ''')
             
+            # Custom Cafeteria Menu Items table (supports adding new veg dishes)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS custom_menu_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    price REAL NOT NULL,
+                    category TEXT DEFAULT 'Snacks & Tea',
+                    is_veg INTEGER DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
             # Create indexes
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_reference_number ON transactions(reference_number)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_date ON transactions(transaction_date)')
