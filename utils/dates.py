@@ -9,7 +9,7 @@ def get_current_time_in_tz():
     return datetime.now(tz)
 
 def parse_date(date_str: str, fallback_year: int = None) -> date:
-    """Attempts to parse a date string like '31 Aug', '9 Sept 2026', '06 Sep 2026', or '04Sep2026'."""
+    """Attempts to parse a date string like '31 Aug', '15 Sept 2026', '06 Sep 2026', or '04Sep2026'."""
     if not date_str:
         return None
         
@@ -24,11 +24,14 @@ def parse_date(date_str: str, fallback_year: int = None) -> date:
     if not fallback_year:
         fallback_year = get_current_time_in_tz().year
 
+    # Remove noise prefixes like 'date and time', 'date:', 'on', 'at'
+    date_str = re.sub(r'^(?:date\s+and\s+time|date|time|on|at)\s*[:.-]*\s*', '', date_str)
+
     # Remove ordinals (st, nd, rd, th) and commas
     date_str = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', date_str)
     date_str = date_str.replace(',', ' ').replace('.', ' ')
 
-    # Normalize 'sept' -> 'sep'
+    # Normalize month abbreviations: 'sept' -> 'sep', 'september' -> 'sep'
     date_str = re.sub(r'\bsept\b', 'sep', date_str)
 
     # Separate stuck digits and letters (e.g. '04sep2026' -> '04 sep 2026')
@@ -37,16 +40,18 @@ def parse_date(date_str: str, fallback_year: int = None) -> date:
     date_str = re.sub(r'\s+', ' ', date_str).strip()
 
     formats = [
-        ('%d %b %Y', False), # 31 Aug 2026 / 04 Sep 2026 / 9 Sep 2026
-        ('%d %B %Y', False), # 31 August 2026
-        ('%d %b %y', False), # 31 Aug 26
-        ('%d %b', True),     # 31 Aug
-        ('%d %B', True),     # 31 August
-        ('%Y-%m-%d', False), # 2026-08-31
-        ('%d/%m/%Y', False), # 31/08/2026
-        ('%d-%m-%Y', False), # 31-08-2026
-        ('%d/%m/%y', False), # 31/08/26
-        ('%d-%m-%y', False), # 31-08-26
+        ('%d %b %Y', False), # 15 Sep 2026 / 31 Aug 2026 / 04 Sep 2026
+        ('%d %B %Y', False), # 15 September 2026
+        ('%d %b %y', False), # 15 Sep 26
+        ('%b %d %Y', False), # Sep 15 2026
+        ('%B %d %Y', False), # September 15 2026
+        ('%d %b', True),     # 15 Sep
+        ('%d %B', True),     # 15 September
+        ('%Y-%m-%d', False), # 2026-09-15
+        ('%d/%m/%Y', False), # 15/09/2026
+        ('%d-%m-%Y', False), # 15-09-2026
+        ('%d/%m/%y', False), # 15/09/26
+        ('%d-%m-%y', False), # 15-09-26
     ]
 
     for fmt, needs_year in formats:
@@ -62,11 +67,12 @@ def parse_date(date_str: str, fallback_year: int = None) -> date:
     return None
 
 def parse_time(time_str: str) -> str:
-    """Cleans up time string, returning standard format like '08:25 PM' or '10:02 AM'."""
+    """Cleans up time string, returning standard format like '07:54 PM' or '10:02 AM'."""
     if not time_str:
         return ""
     
     time_str = re.sub(r'\s+', ' ', time_str).strip()
+    time_str = re.sub(r'(\d{1,2}:\d{2})\s*([aApP][mM])', r'\1 \2', time_str)
     
     match = re.search(r'(\b(?:0?[1-9]|1[0-2]|2[0-3])[:.]\d{2}(?::\d{2})?\s*(?:[aApP][mM])?)', time_str)
     if match:
@@ -76,7 +82,7 @@ def parse_time(time_str: str) -> str:
     return time_str.strip()
 
 def format_display_date(d) -> str:
-    """Formats date cleanly as '06 Sep 2026'."""
+    """Formats date cleanly as '15 Sep 2026'."""
     if not d:
         return "Unknown Date"
     if isinstance(d, (datetime, date)):

@@ -33,7 +33,7 @@ class GenericParser(BasePaymentParser):
         if val_int >= 100000000 or len(str(val_int)) in (10, 11, 12, 13, 14, 15, 16):
             return True
         # Ignore years
-        if val_int in (2023, 2024, 2025, 2026, 2027, 2028, 2029, 2030):
+        if val_int in range(2023, 2035):
             return True
         # Ignore UPI ID lines with @
         if '@' in line_str:
@@ -45,8 +45,10 @@ class GenericParser(BasePaymentParser):
         # Ignore network speeds or battery percentages
         if any(k in line_l for k in ('kb/s', 'mb/s', 'gb/s', 'g+', '5g', '4g', 'lte', '%', 'battery')):
             return True
-        # Ignore account number patterns e.g. "Bank - 1185" or "A/c 7751"
-        if ('bank' in line_l or 'a/c' in line_l or 'acct' in line_l) and re.search(r'[-–\s]+' + str(val_int) + r'\b', line_str):
+        # Ignore masked account numbers e.g. "****7751", "***1185", "xx7751", "A/c 7751"
+        if re.search(r'[*xX]{2,}\s*' + str(val_int) + r'\b', line_str):
+            return True
+        if any(k in line_l for k in ('bank', 'biarik', 'a/c', 'acct', 'account', 'ending in')) and re.search(r'[-?*xX\s]+' + str(val_int) + r'\b', line_str):
             return True
         return False
 
@@ -64,7 +66,7 @@ class GenericParser(BasePaymentParser):
         ]
         sent_keywords = [
             'paid successfully', 'paidsuccessfully', 'payment successful', 'paymentsuccessful',
-            'paid to', 'paidto', 'sent to', 'sentto', 'sent successfully', 'sentsuccessfully',
+            'paid to', 'pald to', 'paidto', 'sent to', 'sentto', 'sent successfully', 'sentsuccessfully',
             'transferred to', 'transfer to', 'debited from', 'debited', 'transferred successfully',
             'payment of', 'money sent'
         ]
@@ -79,7 +81,7 @@ class GenericParser(BasePaymentParser):
         elif is_received and is_sent:
             if any(kw in text_lower for kw in ('received from', 'money received', 'payment received', 'credited to')):
                 t.transaction_type = 'RECEIVED'
-            elif any(kw in text_lower for kw in ('paid to', 'sent to', 'transferred to', 'debited from', 'paid successfully', 'money sent')):
+            elif any(kw in text_lower for kw in ('paid to', 'pald to', 'sent to', 'transferred to', 'debited from', 'paid successfully', 'money sent')):
                 t.transaction_type = 'SENT'
             else:
                 first_few = " ".join(lines[:5]).lower()
@@ -91,7 +93,6 @@ class GenericParser(BasePaymentParser):
             t.transaction_type = 'SENT' if any(w in text_lower for w in ('to', 'debit', 'spent')) else ('RECEIVED' if 'credit' in text_lower else '')
 
         # 2. Extract Amount
-        # Priority 1: Explicit Word Amount e.g. "Three Thousand Five Hundred Rupees"
         word_amount = 0.0
         for line in lines:
             if any(w in line.lower() for w in ('thousand', 'hundred', 'lakh', 'crore', 'only')) and any(w in line.lower() for w in ('rupees', 'rs', 'inr', 'only')):
@@ -104,11 +105,10 @@ class GenericParser(BasePaymentParser):
             if words_match:
                 word_amount = parse_amount(words_match.group(0))
 
-        # Priority 2: Amount associated with primary action header
         header_keywords = (
             'money received', 'payment received', 'paid successfully',
             'sent successfully', 'transferred successfully', 'payment to',
-            'paid to', 'received from', 'transfer to', 'money sent',
+            'paid to', 'pald to', 'received from', 'transfer to', 'money sent',
         )
         header_amount = 0.0
         for i, line in enumerate(lines):
@@ -125,7 +125,7 @@ class GenericParser(BasePaymentParser):
                         cand = lines[idx].strip()
                         if self._is_promo_or_balance_line(cand):
                             continue
-                        if offset > 0 and any(w in cand.lower() for w in ('account', 'instrument', 'initiated', 'transferred from', 'seconds', 'narration')):
+                        if offset > 0 and any(w in cand.lower() for w in ('account', 'instrument', 'initiated', 'transferred from', 'seconds', 'narration', 'bank', 'biarik', '****', '***')):
                             continue
                         cands = extract_amounts_from_line(cand)
                         for c in cands:
@@ -137,18 +137,16 @@ class GenericParser(BasePaymentParser):
                 if header_amount > 0:
                     break
 
-        # Priority 3: All Currency symbol matches across lines
         currency_matches = []
         for line in lines:
-            if self._is_promo_or_balance_line(line):
+            if self._is_promo_or_balance_line(line) or any(w in line.lower() for w in ('****', '***', 'xx', 'ending in')):
                 continue
-            if re.search(r'[₹$€£?*]|Rs\.?|INR|[RrFf](?=\d)', line):
+            if re.search(r'[₹$€£¥?*]|Rs\.?|INR|[RrFf](?=\d)', line):
                 cands = extract_amounts_from_line(line)
                 for c in cands:
                     if not self.is_invalid_amount(c, line):
                         currency_matches.append(c)
 
-        # Priority 4: Labeled lines e.g. "Amount: 3,500" or "Total: 3500"
         labeled_matches = []
         for i, line in enumerate(lines):
             if re.search(r'\b(amount|total)\b', line, re.IGNORECASE):
@@ -159,23 +157,22 @@ class GenericParser(BasePaymentParser):
                             if not self.is_invalid_amount(c, lines[i + offset]):
                                 labeled_matches.append(c)
 
-        # Selection of best amount:
         if word_amount > 0:
             t.amount = word_amount
         elif header_amount > 0:
             t.amount = header_amount
         elif currency_matches:
-            t.amount = max(currency_matches)
+            t.amount = currency_matches[0]
         elif labeled_matches:
-            t.amount = max(labeled_matches)
+            t.amount = labeled_matches[0]
         else:
             all_cands = []
             for line in lines:
-                if not self._is_promo_or_balance_line(line):
+                if not self._is_promo_or_balance_line(line) and not any(w in line.lower() for w in ('bank', 'biarik', '****', '***', 'xx')):
                     for c in extract_amounts_from_line(line):
                         if not self.is_invalid_amount(c, line):
                             all_cands.append(c)
-            t.amount = max(all_cands) if all_cands else 0.0
+            t.amount = all_cands[0] if all_cands else 0.0
 
         # 3. Extract Reference / UTR Number
         ref_patterns = [
@@ -198,52 +195,40 @@ class GenericParser(BasePaymentParser):
                     break
 
         # 4. Extract Date and Time
-        if re.search(r'\byesterday\b', self.raw_text, re.IGNORECASE):
-            from datetime import timedelta
-            from utils.dates import get_current_time_in_tz
-            t.transaction_date = get_current_time_in_tz().date() - timedelta(days=1)
-        elif re.search(r'\btoday\b', self.raw_text, re.IGNORECASE):
-            from utils.dates import get_current_time_in_tz
-            t.transaction_date = get_current_time_in_tz().date()
+        if 'yesterday' in self.raw_text.lower():
+            t.transaction_date = parse_date('yesterday')
+        elif 'today' in self.raw_text.lower():
+            t.transaction_date = parse_date('today')
         else:
-            date_match = re.search(
-                r'(\d{1,2}\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*(?:\d{2,4})?)',
-                self.raw_text, re.IGNORECASE
-            )
-            if date_match:
-                t.transaction_date = parse_date(date_match.group(1))
-            else:
-                date_match2 = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', self.raw_text)
-                if date_match2:
-                    t.transaction_date = parse_date(date_match2.group(1))
-                
-        time_match = re.search(r'(\d{1,2}[:.]\d{2}(?::\d{2})?\s*[aApP][mM])', self.raw_text)
-        if not time_match:
-            time_match = re.search(r'(\d{1,2}[:.]\d{2}(?::\d{2})?)', self.raw_text)
-        if time_match:
-            t.transaction_time = parse_time(time_match.group(1))
+            for line in lines:
+                if re.search(r'\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|October|Nov|Dec)', line, re.IGNORECASE) or 'date' in line.lower():
+                    d_match = re.search(r'(\d{1,2}\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|October|Nov|Dec)[a-z]*\s*(?:\d{2,4})?)', line, re.IGNORECASE)
+                    if d_match:
+                        t.transaction_date = parse_date(d_match.group(1))
+                    t_match = re.search(r'(\d{1,2}[:.]\d{2}\s*(?:[aApP][mM])?)', line)
+                    if t_match:
+                        t.transaction_time = parse_time(t_match.group(1))
+                    if t.transaction_date:
+                        break
 
-        # 5. Extract Person Names (From / To)
+        # 5. Extract Names
         for i, line in enumerate(lines):
             line_clean = line.strip()
             
-            # Check "Paid to <Name>" / "Sent to <Name>" / "Transfer to <Name>"
-            sent_to_match = re.search(r'(?:paid|sent|transfer(?:red)?|payment)\s+to\s+([a-zA-Z\s]+?)(?=\s+paid|\s+sent|\s+received|\s+via|\s+for|\s+on|\s+using|\s+at|\s+\d|$|\n)', line_clean, re.IGNORECASE)
+            sent_to_match = re.search(r'(?:paid|pald|pard|sent|transfer(?:red)?|payment)\s+to\s+([a-zA-Z\s]+?)(?=\s+paid|\s+sent|\s+received|\s+via|\s+for|\s+on|\s+using|\s+at|\s+\d|$|\n)', line_clean, re.IGNORECASE)
             if not sent_to_match:
-                sent_to_match = re.search(r'(?:paid|sent|transfer(?:red)?|payment)\s+to\s+([a-zA-Z\s]+)', line_clean, re.IGNORECASE)
+                sent_to_match = re.search(r'(?:paid|pald|pard|sent|transfer(?:red)?|payment)\s+to\s+([a-zA-Z\s]+)', line_clean, re.IGNORECASE)
             if sent_to_match:
                 val = clean_person_name(sent_to_match.group(1))
                 if val:
                     t.recipient_name = val
                     
-            # Check "Received from <Name>" / "Received <amt> from <Name>"
             recv_from_match = re.search(r'(?:received|money\s+received).*?\bfrom\s+([a-zA-Z\s]+?)(?=\s+via|\s+for|\s+on|\s+using|\s+at|$|\n)', line_clean, re.IGNORECASE)
             if recv_from_match:
                 val = clean_person_name(recv_from_match.group(1))
                 if val:
                     t.sender_name = val
 
-            # Check general "from <Name> via/for/on/using" in conversational text
             if not t.sender_name:
                 conv_from = re.search(r'\bfrom\s+([a-zA-Z\s]+?)(?=\s+via|\s+for|\s+on|\s+using|\s+at|$|\n)', line_clean, re.IGNORECASE)
                 if conv_from:
@@ -251,7 +236,6 @@ class GenericParser(BasePaymentParser):
                     if val and "bank" not in val.lower() and "phonepe" not in val.lower() and "paytm" not in val.lower():
                         t.sender_name = val
 
-            # Check general "to <Name> via/for/on/using" in conversational text
             if not t.recipient_name:
                 conv_to = re.search(r'\bto\s+([a-zA-Z\s]+?)(?=\s+via|\s+for|\s+on|\s+using|\s+at|$|\n)', line_clean, re.IGNORECASE)
                 if conv_to:
@@ -259,7 +243,6 @@ class GenericParser(BasePaymentParser):
                     if val and "bank" not in val.lower() and "phonepe" not in val.lower() and "paytm" not in val.lower():
                         t.recipient_name = val
 
-            # Check standalone "From"
             if re.match(r'^from\b', line_clean, re.IGNORECASE):
                 val = re.sub(r'^from\s*[:.-]*\s*', '', line_clean, flags=re.IGNORECASE).strip()
                 name_parts = [val] if val else []
@@ -271,7 +254,6 @@ class GenericParser(BasePaymentParser):
                 if val and not t.sender_name:
                     t.sender_name = val
 
-            # Check standalone "To"
             elif re.match(r'^to\b', line_clean, re.IGNORECASE):
                 val = re.sub(r'^to\s*[:.-]*\s*', '', line_clean, flags=re.IGNORECASE).strip()
                 name_parts = [val] if val else []
@@ -283,30 +265,6 @@ class GenericParser(BasePaymentParser):
                 if val and not t.recipient_name:
                     t.recipient_name = val
 
-            # BHIM-style: "Banking Name"
-            if re.match(r'^banking\s*name\b', line_clean, re.IGNORECASE):
-                if i + 1 < len(lines):
-                    next_line = lines[i + 1].strip()
-                    if next_line and re.match(r'^[a-zA-Z\s.]+$', next_line) and len(next_line) > 2:
-                        val = clean_person_name(next_line)
-                        if val:
-                            if t.transaction_type == 'SENT' and not t.recipient_name:
-                                t.recipient_name = val
-                            elif t.transaction_type == 'RECEIVED' and not t.sender_name:
-                                t.sender_name = val
-                            elif not t.person_name:
-                                t.person_name = val
-
-            # BHIM-style: "Payment initiated by <Name>" or "Payment received by <Name>"
-            initiated_match = re.search(r"payment\s+(?:initiated|transferred|received)\s+(?:by|from)\s+([a-zA-Z\s.]+?)(?:\s*'s|\s*$)", line_clean, re.IGNORECASE)
-            if initiated_match:
-                val = clean_person_name(initiated_match.group(1))
-                if val:
-                    if 'received by' in line_clean.lower() and not t.recipient_name:
-                        t.recipient_name = val
-                    elif 'initiated' in line_clean.lower() and not t.sender_name:
-                        t.sender_name = val
-
         # 6. Extract Bank and Account Information
         for i, line in enumerate(lines):
             line_clean = line.strip()
@@ -314,8 +272,8 @@ class GenericParser(BasePaymentParser):
                 acc_match = re.search(r'(?:account|acct|a/c)\s*(?:number|no)?[\s:.-]*[xX*]*([0-9]{3,6})\b', line_clean, re.IGNORECASE)
                 if acc_match:
                     t.bank_account = acc_match.group(1)
-                elif re.search(r'[-–\s]+([0-9]{4})[a-zA-Z]*$', line_clean):
-                    t.bank_account = re.search(r'[-–\s]+([0-9]{4})[a-zA-Z]*$', line_clean).group(1)
+                elif re.search(r'[-?*xX\s]+([0-9]{4})[a-zA-Z]*$', line_clean):
+                    t.bank_account = re.search(r'[-?*xX\s]+([0-9]{4})[a-zA-Z]*$', line_clean).group(1)
                 elif "bank" in line_clean.lower() and i + 1 < len(lines):
                     next_acc = re.search(r'^([0-9]{4})\b', lines[i + 1].strip())
                     if next_acc:
@@ -341,7 +299,7 @@ class GenericParser(BasePaymentParser):
 
             # Narration
             narr_person = re.search(r'UPI/(?:DR|CR)/[0-9a-zA-Z*xX]+/([^/]+)/', line_clean, re.IGNORECASE)
-            if narr_person and not t.person_name:
+            if narr_person:
                 val = clean_person_name(narr_person.group(1))
                 if val:
                     t.person_name = val
@@ -352,7 +310,6 @@ class GenericParser(BasePaymentParser):
                         t.sender_name = val
                         t.transaction_type = 'RECEIVED'
 
-        # Set consolidated person_name (counterparty)
         if t.transaction_type == 'SENT':
             t.person_name = t.recipient_name or t.person_name
         else:

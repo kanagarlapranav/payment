@@ -12,14 +12,12 @@ class PhonePeParser(GenericParser):
         text_lower = self.raw_text.lower()
         if "bhim" in text_lower or "banking name" in text_lower:
             return False
-        # PhonePe indicators
         return (
             "phonepe" in text_lower or "@ybl" in text_lower or "@ibl" in text_lower or
             "@axl" in text_lower or "phonepe transaction id" in text_lower
         )
 
     def parse(self) -> Transaction:
-        # Start with generic extraction as baseline
         t = super().parse()
         t.payment_app = "PhonePe"
         
@@ -38,7 +36,6 @@ class PhonePeParser(GenericParser):
         for i, line in enumerate(lines):
             line_l = line.lower().strip()
             
-            # Received from <Name> or line right after "Received from"
             if "received from" in line_l:
                 part = re.sub(r'^.*?received\s+from\s*[:.-]*\s*', '', line, flags=re.IGNORECASE).strip()
                 if part and not re.search(r'\d{4,}', part) and '@' not in part:
@@ -47,12 +44,11 @@ class PhonePeParser(GenericParser):
                         t.sender_name = c
                 elif i + 1 < len(lines):
                     next_l = lines[i + 1].strip()
-                    if not re.search(r'^\d{4,}', next_l) and '@' not in next_l and '₹' not in next_l:
+                    if not re.search(r'^\d{4,}', next_l) and '@' not in next_l and '₹' not in next_l and 'Rs' not in next_l:
                         c = clean_person_name(next_l)
                         if c:
                             t.sender_name = c
                             
-            # Paid to <Name> or line right after "Paid to" / "To"
             elif "paid to" in line_l:
                 part = re.sub(r'^.*?paid\s+to\s*[:.-]*\s*', '', line, flags=re.IGNORECASE).strip()
                 if part and not re.search(r'\d{4,}', part) and '@' not in part:
@@ -61,7 +57,7 @@ class PhonePeParser(GenericParser):
                         t.recipient_name = c
                 elif i + 1 < len(lines):
                     next_l = lines[i + 1].strip()
-                    if not re.search(r'^\d{4,}', next_l) and '@' not in next_l and '₹' not in next_l:
+                    if not re.search(r'^\d{4,}', next_l) and '@' not in next_l and '₹' not in next_l and 'Rs' not in next_l:
                         c = clean_person_name(next_l)
                         if c:
                             t.recipient_name = c
@@ -72,7 +68,7 @@ class PhonePeParser(GenericParser):
                 line_l = line.lower()
                 if any(k in line_l for k in ('phonepe', 'paid', 'received', 'success', 'transaction', 'http', 'download', 'credited', 'debited', 'transfer')):
                     continue
-                if '@' in line or re.search(r'\d', line) or '₹' in line:
+                if '@' in line or re.search(r'\d', line) or '₹' in line or 'Rs' in line:
                     continue
                 cleaned = clean_person_name(line)
                 if cleaned:
@@ -82,7 +78,6 @@ class PhonePeParser(GenericParser):
                         t.sender_name = cleaned
                     break
 
-        # Set counterparty
         if t.transaction_type == "SENT":
             t.person_name = t.recipient_name or t.person_name
         else:

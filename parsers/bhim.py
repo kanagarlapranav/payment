@@ -29,11 +29,9 @@ class BhimParser(GenericParser):
             t.transaction_type = "RECEIVED"
             t.payment_status = "SUCCESS"
 
-        # 2. Amount:
-        # In BHIM screenshots, amount is prominently below "Paid" or "✔ Paid" (e.g. ?4,000.00)
+        # 2. Amount
         for i, line in enumerate(self.lines):
             line_l = line.lower().strip()
-            # Skip process detail lines
             if any(p in line_l for p in ('initiated', 'transferred', 'received by')):
                 continue
             if re.search(r'\b(?:paid|received)\b', line_l):
@@ -44,7 +42,7 @@ class BhimParser(GenericParser):
                             continue
                         if any(w in cand.lower() for w in ('bank', 'upi', 'from', 'to', 'ref', 'rupees', 'only', 'initiated', 'seconds')):
                             continue
-                        m = re.search(r'(?:[₹$€£?]|Rs\.?|INR|[RrFf](?=\d))?\s*(\b(?:\d{1,3}(?:,\d{2,3})+|\d+)(?:\.\d{1,2})?\b)', cand, re.IGNORECASE)
+                        m = re.search(r'(?:[₹$€£¥?*]|Rs\.?|INR|[RrFf](?=\d))?\s*(\b(?:\d{1,3}(?:,\d{2,3})+|\d+)(?:\.\d{1,2})?\b)', cand, re.IGNORECASE)
                         if m:
                             val = parse_amount(m.group(0))
                             if val >= 1.0:
@@ -54,14 +52,12 @@ class BhimParser(GenericParser):
                     break
 
         # 3. Person Names
-        # Sender: "Payment initiated by <Sender>"
         init_m = re.search(r'payment\s+initiated\s+by\s+([a-zA-Z\s.]+?)(?:\'s|\n|$)', self.raw_text, re.IGNORECASE)
         if init_m:
             s_name = clean_person_name(init_m.group(1))
             if s_name:
                 t.sender_name = s_name
 
-        # Recipient: "Payment received by <Recipient>"
         rec_m = re.search(r'payment\s+received\s+by\s+([a-zA-Z\s.\n]+?)(?:hide\s+details|share|more\s+details|\n\n|$)', self.raw_text, re.IGNORECASE)
         if rec_m:
             r_name = re.sub(r'\s+', ' ', rec_m.group(1)).strip()
@@ -69,7 +65,6 @@ class BhimParser(GenericParser):
             if r_name:
                 t.recipient_name = r_name
 
-        # Also check "Banking Name"
         for i, line in enumerate(self.lines):
             if "banking name" in line.lower() and i + 1 < len(self.lines):
                 b_name = clean_person_name(self.lines[i + 1])
@@ -80,24 +75,21 @@ class BhimParser(GenericParser):
                         t.recipient_name = b_name
                 break
 
-        # Set primary person_name based on transaction type
         if t.transaction_type == "SENT":
             t.person_name = t.recipient_name or t.person_name
         else:
             t.person_name = t.sender_name or t.person_name
 
         # 4. Bank details
-        # Look for bank name (e.g. State Bank Of India) and account number (e.g. XXXX7751, X7751)
         for line in self.lines:
             line_s = line.strip()
             if any(b in line_s.lower() for b in ('bank', 'sbi', 'hdfc', 'icici', 'axis', 'kotak', 'pnb', 'bob', 'canara', 'union')):
                 if not any(k in line_s.lower() for k in ('account', 'mode', 'instrument', 'banking name')):
-                    t.bank_name = line_s
+                    t.bank_name = line_s.title().replace(" Of ", " of ")
             if re.search(r'\b[Xx*]+\d{3,4}\b', line_s):
                 t.bank_account = line_s
 
         # 5. Reference Number
-        # Transaction ID 134446412863
         for i, line in enumerate(self.lines):
             if "transaction id" in line.lower():
                 same_line = re.search(r'\b(\d{12})\b', line)
@@ -115,7 +107,6 @@ class BhimParser(GenericParser):
             t.upi_id = upi_match.group(1)
 
         # 7. Date & Time
-        # E.g. "8th Sep 26, 01:44 pm" or "8th Sep 26, 12:37 pm"
         dt_match = re.search(
             r'(\d{1,2}(?:st|nd|rd|th)?\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*(?:\d{2,4})?)[,\s]+(\d{1,2}[:.]\d{2}\s*(?:[aApP][mM])?)',
             self.raw_text, re.IGNORECASE
