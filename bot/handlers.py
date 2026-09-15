@@ -14,6 +14,8 @@ from bot.keyboards import (
     get_filter_keyboard, get_sort_keyboard
 )
 from ocr.extractor import perform_ocr
+from ocr.gemini_vision import is_gemini_available, extract_transaction_with_gemini
+from services.gdrive_service import is_gdrive_available, upload_receipt_to_drive, upload_backup_to_drive
 from services.transaction_service import process_transaction, commit_transaction
 from services.balance_service import recalculate_all_balances, resequence_transaction_ids
 from services.backup_service import backup_to_telegram
@@ -53,12 +55,13 @@ async def deliver_response(status_msg, message, text: str, reply_markup=None, pa
                     logger.error(f"Failed to deliver message: {final_err}")
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles incoming images (screenshots) with non-blocking OCR and resilient responses."""
+    """Handles incoming images (screenshots) with Gemini Vision AI + RapidOCR fallback."""
     if not await is_authorized(update): return
     
     message = update.message
     chat_id = str(message.chat_id)
     message_id = str(message.message_id)
+    caption = message.caption or ""
     
     # Get the file (photo or document)
     if message.photo:
@@ -68,7 +71,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         return # Ignore non-images
         
-    status_msg = await message.reply_text("🔍 Analyzing screenshot (OCR)...")
+    status_msg = await message.reply_text("🔍 Analyzing screenshot...")
     
     try:
         # Download image with resilient timeout and retry
@@ -89,44 +92,70 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     raise dl_err
                 await asyncio.sleep(1)
         
-        # Send typing action to keep Telegram active without triggering edit flood control
+        # Send typing action
         try:
             await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         except Exception:
             pass
 
-        # Perform OCR in background thread with a timeout so it can't hang forever
-        try:
-            raw_text = await asyncio.wait_for(
-                asyncio.to_thread(perform_ocr, str(image_path)),
-                timeout=60.0  # Hard 60-second limit
-            )
-        except asyncio.TimeoutError:
-            logger.error(f"OCR timed out after 60s on {image_path}")
-            await deliver_response(status_msg, message, "⏱️ OCR took too long. The image might be too large or complex. Please try a clearer/smaller screenshot.")
+        transaction = None
+        confidence = 0
+
+        # Tier 1: Try Google Gemini Vision AI if API key is configured
+        if is_gemini_available():
+            try:
+                logger.info("Attempting Gemini Vision extraction...")
+                g_tx, g_conf = await asyncio.to_thread(extract_transaction_with_gemini, str(image_path), caption)
+                if g_tx and g_conf >= 50:
+                    transaction = g_tx
+                    confidence = g_conf
+                    transaction.telegram_message_id = message_id
+                    transaction.telegram_chat_id = chat_id
+                    transaction.original_image_path = str(image_path)
+            except Exception as gem_err:
+                logger.warning(f"Gemini Vision error, falling back to local OCR: {gem_err}")
+
+        # Tier 2: Fallback to local RapidOCR + Regex Heuristic Parser
+        if not transaction or not transaction.amount:
+            try:
+                raw_text = await asyncio.wait_for(
+                    asyncio.to_thread(perform_ocr, str(image_path)),
+                    timeout=60.0  # Hard 60-second limit
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"OCR timed out after 60s on {image_path}")
+                await deliver_response(status_msg, message, "⏱️ OCR took too long. Please try a clearer/smaller screenshot.")
+                try:
+                    if os.path.exists(image_path):
+                        os.remove(image_path)
+                except OSError:
+                    pass
+                return
+
+            if not raw_text or not raw_text.strip():
+                await deliver_response(status_msg, message, "❌ Could not extract any readable text from the image. Please upload a clearer screenshot.")
+                try:
+                    if os.path.exists(image_path):
+                        os.remove(image_path)
+                except OSError:
+                    pass
+                return
+
+            transaction, confidence = process_transaction(raw_text, str(image_path), message_id, chat_id, caption=caption)
+
+        # Tier 3: Asynchronously archive receipt to Google Drive if available
+        if is_gdrive_available():
+            try:
+                asyncio.create_task(asyncio.to_thread(upload_receipt_to_drive, str(image_path)))
+            except Exception as gd_err:
+                logger.warning(f"Background Google Drive upload could not be scheduled: {gd_err}")
+        else:
+            # Clean up local image immediately if not archiving to Drive
             try:
                 if os.path.exists(image_path):
                     os.remove(image_path)
             except OSError:
                 pass
-            return
-
-        # Delete the image immediately after OCR — text is extracted, the file
-        # is no longer needed. This saves disk space on Render's free plan.
-        try:
-            if os.path.exists(image_path):
-                os.remove(image_path)
-                logger.info(f"Cleaned up image after OCR: {image_path}")
-        except OSError as cleanup_err:
-            logger.warning(f"Could not delete image {image_path}: {cleanup_err}")
-
-        if not raw_text or not raw_text.strip():
-            await deliver_response(status_msg, message, "❌ Could not extract any readable text from the image. Please upload a clearer screenshot.")
-            return
-            
-        # Process Transaction
-        caption = message.caption or ""
-        transaction, confidence = process_transaction(raw_text, "", message_id, chat_id, caption=caption)
         
         # Basic validation
         if not transaction.amount or transaction.amount <= 0:
@@ -178,6 +207,14 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     asyncio.create_task(backup_to_telegram(context.bot))
                 except Exception:
                     pass
+                if is_gdrive_available():
+                    try:
+                        from config import DATA_DIR
+                        bkp = DATA_DIR / 'backup_transactions.json'
+                        if os.path.exists(bkp):
+                            asyncio.create_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)))
+                    except Exception:
+                        pass
             else:
                 await deliver_response(status_msg, message, "⚠️ Transaction already recorded.")
         elif confidence >= 40:
@@ -235,6 +272,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     asyncio.create_task(backup_to_telegram(context.bot))
                 except Exception:
                     pass
+                if is_gdrive_available():
+                    try:
+                        from config import DATA_DIR
+                        bkp = DATA_DIR / 'backup_transactions.json'
+                        if os.path.exists(bkp):
+                            asyncio.create_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)))
+                    except Exception:
+                        pass
             else:
                 await query.edit_message_text("⚠️ Transaction already recorded.")
             del pending_transactions[tx_id]
@@ -327,6 +372,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 asyncio.create_task(backup_to_telegram(context.bot))
             except Exception:
                 pass
+            if is_gdrive_available():
+                try:
+                    from config import DATA_DIR
+                    bkp = DATA_DIR / 'backup_transactions.json'
+                    if os.path.exists(bkp):
+                        asyncio.create_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)))
+                except Exception:
+                    pass
             await query.edit_message_text(
                 f"🗑️ <b>Transaction #{tx_id} Deleted</b>\n\n"
                 f"• <b>Amount:</b> {html.escape(amt_str)}\n"
@@ -356,6 +409,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 asyncio.create_task(backup_to_telegram(context.bot))
             except Exception:
                 pass
+            if is_gdrive_available():
+                try:
+                    from config import DATA_DIR
+                    bkp = DATA_DIR / 'backup_transactions.json'
+                    if os.path.exists(bkp):
+                        asyncio.create_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)))
+                except Exception:
+                    pass
             await query.edit_message_text(
                 f"✅ <b>Transaction updated successfully!</b>\n\n"
                 f"• <b>Amount corrected to:</b> <b>{html.escape(format_currency(new_amt))}</b>\n"
@@ -572,7 +633,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clean_num = text.replace(',', '').replace('₹', '').strip()
     if clean_num.isdigit() and len(clean_num) >= 2:
         val = float(clean_num)
-        # Only treat as search if not in a pending action state
         if 'action' not in context.user_data:
             txs = search_transactions(amount=val)
             if txs:
@@ -704,6 +764,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 asyncio.create_task(backup_to_telegram(context.bot))
             except Exception:
                 pass
+            if is_gdrive_available():
+                try:
+                    from config import DATA_DIR
+                    bkp = DATA_DIR / 'backup_transactions.json'
+                    if os.path.exists(bkp):
+                        asyncio.create_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)))
+                except Exception:
+                    pass
             await update.message.reply_text(
                 f"✅ <b>Transaction #{tx_id} Updated</b>\n\n"
                 f"👤 <b>Person:</b> {html.escape(str(person))}\n"

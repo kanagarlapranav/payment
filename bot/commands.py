@@ -639,9 +639,15 @@ async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def send_pdf_report(chat, bot):
     from services.export_service import generate_pdf_statement
+    from services.gdrive_service import is_gdrive_available, upload_statement_to_drive
     export_path = DATA_DIR / "Payment_Tracker_Statement.pdf"
     try:
         generate_pdf_statement(str(export_path))
+        if is_gdrive_available():
+            try:
+                asyncio.create_task(asyncio.to_thread(upload_statement_to_drive, str(export_path)))
+            except Exception:
+                pass
         with open(export_path, 'rb') as f:
             await bot.send_document(
                 chat_id=chat.id,
@@ -660,9 +666,15 @@ async def send_pdf_report(chat, bot):
 
 async def send_excel_report(chat, bot):
     from services.export_service import generate_excel_report
+    from services.gdrive_service import is_gdrive_available, upload_statement_to_drive
     export_path = DATA_DIR / "transactions_export.xlsx"
     try:
         generate_excel_report(str(export_path))
+        if is_gdrive_available():
+            try:
+                asyncio.create_task(asyncio.to_thread(upload_statement_to_drive, str(export_path)))
+            except Exception:
+                pass
         with open(export_path, 'rb') as f:
             await bot.send_document(
                 chat_id=chat.id,

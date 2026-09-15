@@ -20,7 +20,6 @@ else:
 
 DB_PATH = DATA_DIR / 'database.sqlite3'
 
-
 # Ensure directories exist safely
 try:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -41,6 +40,17 @@ TELEGRAM_USER_ID = os.getenv('TELEGRAM_USER_ID')
 TELEGRAM_GROUP_ID = os.getenv('TELEGRAM_GROUP_ID')
 TESSERACT_CMD = os.getenv('TESSERACT_CMD', r'C:\Program Files\Tesseract-OCR\tesseract.exe')
 DEFAULT_TIMEZONE = 'Asia/Kolkata'
+
+# Google Gemini Vision AI Configuration
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')
+
+# Google Drive Cloud Storage Configuration
+GDRIVE_FOLDER_ID = os.getenv('GDRIVE_FOLDER_ID')
+GDRIVE_SERVICE_ACCOUNT_JSON = os.getenv('GDRIVE_SERVICE_ACCOUNT_JSON') # File path or JSON string
+GDRIVE_REFRESH_TOKEN = os.getenv('GDRIVE_REFRESH_TOKEN')
+GDRIVE_CLIENT_ID = os.getenv('GDRIVE_CLIENT_ID')
+GDRIVE_CLIENT_SECRET = os.getenv('GDRIVE_CLIENT_SECRET')
 
 handlers = [logging.StreamHandler()]
 try:
