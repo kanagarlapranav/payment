@@ -160,10 +160,56 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await deliver_response(status_msg, message, f"⚠️ Transaction type (SENT/RECEIVED) could not be determined reliably.\nAmount found: {format_currency(transaction.amount)}")
             return
             
-        # Check if already recorded (duplicate prevention with friendly informative response)
+        # Check if already recorded (duplicate prevention with smart auto-update if details differ)
         if transaction.reference_number:
             existing = get_transaction_by_reference(transaction.reference_number)
             if existing:
+                is_diff = (
+                    abs(float(existing['amount']) - float(transaction.amount)) > 0.01 or
+                    (transaction.person_name and transaction.person_name != "Unknown" and existing['person_name'] != transaction.person_name)
+                )
+                if is_diff and confidence >= 70:
+                    tx_id = existing['id']
+                    from database.queries import update_transaction, get_transaction_by_id
+                    from services.balance_service import recalculate_all_balances
+                    
+                    updates = {
+                        'amount': transaction.amount,
+                        'transaction_type': transaction.transaction_type,
+                        'person_name': transaction.person_name,
+                        'payment_app': transaction.payment_app or existing['payment_app'],
+                        'category': transaction.category or existing['category']
+                    }
+                    if transaction.transaction_type == 'SENT':
+                        updates['recipient_name'] = transaction.person_name
+                    else:
+                        updates['sender_name'] = transaction.person_name
+
+                    update_transaction(tx_id, updates)
+                    recalculate_all_balances()
+                    
+                    updated_tx = get_transaction_by_id(tx_id)
+                    transaction.id = tx_id
+                    transaction.balance_after = updated_tx['balance_after'] if updated_tx else existing['balance_after']
+                    
+                    response = format_success_message(transaction)
+                    markup = None
+                    from services.cafeteria_service import is_cafeteria_payment
+                    from bot.keyboards import get_cafeteria_selection_keyboard
+                    if is_cafeteria_payment(transaction.person_name, transaction.upi_id, transaction.ocr_text):
+                        markup = get_cafeteria_selection_keyboard(tx_id, transaction.amount)
+                        response += "\n\n🍽️ <b>Cafeteria Bill Detected!</b> Select your menu item below:"
+
+                    response = f"🔄 <b>Updated Existing Transaction #{tx_id} with New Receipt!</b>\n\n" + response
+                    await deliver_response(status_msg, message, response, reply_markup=markup, parse_mode='HTML')
+                    try:
+                        from services.backup_service import backup_to_telegram, export_database_to_json
+                        export_database_to_json()
+                        asyncio.create_task(backup_to_telegram(context.bot))
+                    except Exception:
+                        pass
+                    return
+
                 date_str = format_display_date(existing['transaction_date'])
                 person = existing['person_name'] or "Unknown"
                 amt_str = format_currency(existing['amount'])
@@ -189,6 +235,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 await deliver_response(status_msg, message, dup_text, reply_markup=dup_markup, parse_mode='HTML')
                 return
+
 
         # Confidence check
         if confidence >= 80:
