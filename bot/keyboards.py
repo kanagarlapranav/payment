@@ -41,14 +41,14 @@ def get_delete_confirm_keyboard(tx_id: int):
     return InlineKeyboardMarkup(keyboard)
 
 def get_transaction_selection_keyboard(transactions: list, action_prefix: str):
-    """Returns a list of buttons for selecting a recent transaction."""
+    """Returns a list of buttons for selecting a transaction."""
     from utils.currency import format_currency
     keyboard = []
-    for idx, t in enumerate(transactions[:6], 1): # Show top 6
-        person = t['person_name'] or t['transaction_type']
-        badge = "🟢" if t['transaction_type'] == 'RECEIVED' else "🔴"
-        amt = format_currency(t['amount'])
-        btn_label = f"{idx}. {badge} {person[:14]} - {amt}"
+    for t in transactions[:6]: # Show top 6
+        person = t.get('person_name') or t.get('transaction_type', '')
+        badge = "🟢" if t.get('transaction_type') == 'RECEIVED' else "🔴"
+        amt = format_currency(t.get('amount', 0))
+        btn_label = f"#{t['id']} {badge} {person[:12]} - {amt}"
         keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"{action_prefix}:{t['id']}")])
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data=f"{action_prefix}_cancel")])
     return InlineKeyboardMarkup(keyboard)
@@ -91,4 +91,3 @@ def get_sort_keyboard():
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
-

@@ -320,22 +320,23 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if not tx:
             await query.edit_message_text("❌ Transaction not found.")
             return
-            
+
         success = delete_transaction(tx_id)
         if success:
-            new_bal = recalculate_all_balances()
+            new_bal = get_balance_setting()
             try:
                 asyncio.create_task(backup_to_telegram(context.bot))
             except Exception:
                 pass
             await query.edit_message_text(
-                f"🗑️ *Transaction deleted successfully.*\n\n"
+                f"🗑️ *Transaction #{tx_id} Deleted*\n\n"
+                f"✅ Remaining transactions renumbered sequentially.\n"
                 f"💰 *Updated Balance:* `{format_currency(new_bal)}`",
                 parse_mode='Markdown'
             )
         else:
             await query.edit_message_text("❌ Failed to delete transaction.")
-            
+
     elif action == "delete_cancel":
         context.user_data.pop('action', None)
         await query.edit_message_text("❌ Deletion cancelled.")
@@ -479,26 +480,30 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 def format_success_message(t) -> str:
-    icon = "✅ Payment Recorded" if t.transaction_type == 'SENT' else "✅ Payment Received"
-    person_label = "Recipient" if t.transaction_type == 'SENT' else "Sender"
+    icon = "🔴 Payment Sent" if t.transaction_type == 'SENT' else "🟢 Payment Received"
+    person_label = "To" if t.transaction_type == 'SENT' else "From"
     person_name = t.person_name or "Unknown"
+
     if hasattr(t.transaction_date, 'strftime'):
         date_str = t.transaction_date.strftime("%d %b %Y")
     elif t.transaction_date:
         date_str = str(t.transaction_date)
     else:
-        date_str = "Unknown"
-    
+        date_str = "Today"
+
+    time_part = f" ({t.transaction_time})" if t.transaction_time and t.transaction_time not in ('N/A', 'Unknown Time') else ""
+    bank_part = f"\n🏦 *Bank:* {t.bank_name}" if t.bank_name else ""
+    ref_part = f"\n🔢 *Ref / UTR:* `{t.reference_number}`" if t.reference_number else ""
+    app_part = f" • _{t.payment_app}_" if t.payment_app and t.payment_app not in ('Generic', '') else ""
+
     return (
-        f"{icon}\n\n"
-        f"Type: {t.transaction_type}\n"
-        f"{person_label}: {person_name}\n"
-        f"Amount: {format_currency(t.amount)}\n"
-        f"Date: {date_str}\n"
-        f"Time: {t.transaction_time or 'N/A'}\n"
-        f"Reference: {t.reference_number or 'N/A'}\n\n"
-        f"Balance Before: {format_currency(t.balance_before)}\n"
-        f"Balance After: {format_currency(t.balance_after)}"
+        f"✅ *{icon}*\n\n"
+        f"👤 *{person_label}:* {person_name}\n"
+        f"💵 *Amount:* *{format_currency(t.amount)}*{app_part}\n"
+        f"📅 *Date:* {date_str}{time_part}"
+        f"{bank_part}"
+        f"{ref_part}\n\n"
+        f"💰 *Balance:* {format_currency(t.balance_before)} ➔ *{format_currency(t.balance_after)}*"
     )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -658,14 +663,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif pending_action == 'waiting_edit_value':
         tx_id = context.user_data.get('edit_tx_id')
         field = context.user_data.get('edit_field')
-        
+
         updates = {}
         needs_recalc = False
-        
+
         if field == 'amount':
             new_amt = parse_amount(text)
             if new_amt <= 0:
-                await update.message.reply_text("❌ Invalid amount. Please try again:")
+                await update.message.reply_text("❌ Invalid amount. Please enter a valid positive number:")
                 return
             updates['amount'] = new_amt
             needs_recalc = True
@@ -689,25 +694,40 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Invalid date. Example: `05/09/2026` or `yesterday`:")
                 return
             updates['transaction_date'] = parsed_d
+            needs_recalc = True
         elif field == 'ref':
             updates['reference_number'] = text
-            
+
         success = update_transaction(tx_id, updates)
         context.user_data.pop('action', None)
         context.user_data.pop('edit_tx_id', None)
         context.user_data.pop('edit_field', None)
-        
+
         if success:
-            bal_msg = ""
             if needs_recalc:
                 new_bal = recalculate_all_balances()
-                bal_msg = f"\n💰 Updated Current Balance: {format_currency(new_bal)}"
+            else:
+                new_bal = get_balance_setting()
+
+            updated_tx = get_transaction_by_id(tx_id)
+            person = (updated_tx['person_name'] if updated_tx else '') or "Unknown"
+            amt_s = format_currency(updated_tx['amount']) if updated_tx else ''
+            bal_flow = ""
+            if updated_tx and 'balance_before' in updated_tx and 'balance_after' in updated_tx:
+                bal_flow = f"\n💰 *Balance Flow:* {format_currency(updated_tx['balance_before'])} ➔ *{format_currency(updated_tx['balance_after'])}*"
+
             try:
                 from services.backup_service import backup_to_telegram
                 asyncio.create_task(backup_to_telegram(context.bot))
             except Exception:
                 pass
-            await update.message.reply_text(f"✅ Transaction updated successfully!{bal_msg}", parse_mode='Markdown')
+            await update.message.reply_text(
+                f"✅ *Transaction #{tx_id} Updated*\n\n"
+                f"👤 *Person:* {person}\n"
+                f"💵 *Amount:* *{amt_s}*{bal_flow}\n\n"
+                f"💳 *Current Balance:* *{format_currency(new_bal)}*",
+                parse_mode='Markdown'
+            )
             return
         else:
             await update.message.reply_text("❌ Failed to update transaction.")

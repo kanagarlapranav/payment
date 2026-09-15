@@ -1,11 +1,10 @@
-from database.db import get_db_connection
 from database.models import Transaction
-import logging
-
-logger = logging.getLogger(__name__)
+from database.db import get_db_connection
+from datetime import datetime
+from config import logger
 
 def insert_transaction(t: Transaction) -> int:
-    """Inserts a new transaction into the database and returns its ID."""
+    """Inserts a new transaction into the database."""
     query = '''
         INSERT INTO transactions (
             transaction_type, amount, person_name, sender_name, recipient_name,
@@ -13,9 +12,7 @@ def insert_transaction(t: Transaction) -> int:
             transaction_id, payment_app, bank_name, bank_account, payment_status,
             balance_before, balance_after, ocr_text, original_image_path,
             telegram_message_id, telegram_chat_id
-        ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-        )
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     '''
     
     values = (
@@ -205,12 +202,22 @@ def update_transaction(tx_id: int, updates: dict) -> bool:
         return cursor.rowcount > 0
 
 def delete_transaction(tx_id: int) -> bool:
-    """Deletes a transaction by its ID."""
+    """Deletes a transaction by its ID, resequences remaining IDs consecutively, and recalculates balances."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
         conn.commit()
-        return cursor.rowcount > 0
+        deleted = cursor.rowcount > 0
+
+    if deleted:
+        try:
+            from services.balance_service import resequence_transaction_ids, recalculate_all_balances
+            resequence_transaction_ids()
+            recalculate_all_balances()
+        except Exception as e:
+            logger.error(f"Error during post-delete resequence/recalculate: {e}")
+
+    return deleted
 
 def update_balance_setting(new_balance: float):
     """Updates the current balance in the settings table."""

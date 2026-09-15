@@ -1,0 +1,93 @@
+import unittest
+import os
+import sqlite3
+from database.db import get_db_connection, setup_database
+from database.queries import (
+    insert_transaction, delete_transaction, update_transaction,
+    get_all_transactions_asc, get_transaction_by_id, get_balance_setting
+)
+from database.models import Transaction
+from services.balance_service import resequence_transaction_ids, recalculate_all_balances
+from bot.handlers import format_success_message
+from config import DB_PATH
+
+class TestResequenceAndBalance(unittest.TestCase):
+    def setUp(self):
+        setup_database()
+        resequence_transaction_ids()
+        recalculate_all_balances()
+
+    def tearDown(self):
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("DELETE FROM transactions")
+            conn.commit()
+        setup_database()
+        resequence_transaction_ids()
+        recalculate_all_balances()
+
+    def test_resequence_on_deletion(self):
+        txs = get_all_transactions_asc()
+        initial_count = len(txs)
+        self.assertGreaterEqual(initial_count, 4)
+        
+        # Verify initial IDs are strictly 1..N
+        ids = [t['id'] for t in txs]
+        self.assertEqual(ids, list(range(1, initial_count + 1)))
+        
+        # Delete transaction #2
+        deleted = delete_transaction(2)
+        self.assertTrue(deleted)
+        
+        # After deletion, IDs must be strictly 1..(N-1) with NO gaps
+        txs_after = get_all_transactions_asc()
+        self.assertEqual(len(txs_after), initial_count - 1)
+        ids_after = [t['id'] for t in txs_after]
+        self.assertEqual(ids_after, list(range(1, initial_count)))
+        
+        # Balances should remain consistent
+        running = 0.0
+        for t in txs_after:
+            self.assertAlmostEqual(t['balance_before'], running)
+            if t['transaction_type'] == 'SENT':
+                running -= t['amount']
+            elif t['transaction_type'] == 'RECEIVED':
+                running += t['amount']
+            self.assertAlmostEqual(t['balance_after'], running)
+            
+        self.assertAlmostEqual(get_balance_setting(), running)
+
+    def test_balance_recalculation_on_amount_edit(self):
+        txs = get_all_transactions_asc()
+        self.assertTrue(len(txs) > 0)
+        first_tx = txs[0]
+        old_amt = first_tx['amount']
+        new_amt = old_amt + 1000.0
+        
+        # Update amount
+        update_transaction(first_tx['id'], {'amount': new_amt})
+        new_bal = recalculate_all_balances()
+        
+        updated_first = get_transaction_by_id(first_tx['id'])
+        self.assertEqual(updated_first['amount'], new_amt)
+        self.assertEqual(updated_first['balance_after'], updated_first['balance_before'] + new_amt if updated_first['transaction_type'] == 'RECEIVED' else updated_first['balance_before'] - new_amt)
+
+    def test_format_success_message(self):
+        t = Transaction(
+            transaction_type='SENT',
+            amount=5000.0,
+            person_name='Balaji',
+            transaction_date='2026-09-05',
+            transaction_time='10:02 AM',
+            reference_number='661385614715',
+            balance_before=36900.0,
+            balance_after=31900.0
+        )
+        msg = format_success_message(t)
+        self.assertIn("Payment Sent", msg)
+        self.assertIn("Balaji", msg)
+        self.assertIn("5,000", msg)
+        self.assertIn("36,900", msg)
+        self.assertIn("31,900", msg)
+
+if __name__ == '__main__':
+    unittest.main()
