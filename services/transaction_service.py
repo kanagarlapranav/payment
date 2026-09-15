@@ -30,12 +30,33 @@ def _strip_promo_lines(text: str) -> str:
 def process_transaction(raw_text: str, image_path: str, message_id: str, chat_id: str, caption: str = "") -> tuple[Transaction, int]:
     """
     Core pipeline: Parses text, evaluates confidence, checks duplicates, updates balance, and saves.
+    Uses Gemini AI as primary extractor for both natural text and vision receipts, with regex/OCR backup.
     Returns: (Transaction object, confidence score)
     """
     full_text = f"{raw_text}\n{caption}".strip() if caption else raw_text
-    # Strip promotional/ad lines BEFORE parsing so promo amounts (e.g. "₹300 cashback") are never seen
     full_text = _strip_promo_lines(full_text)
-    logger.info("Selecting parser...")
+
+    # If it's a typed text message (no image), try Gemini Natural Language processing first
+    if not image_path and full_text:
+        try:
+            from ocr.gemini_vision import parse_text_with_gemini
+            g_tx, g_conf = parse_text_with_gemini(full_text)
+            if g_tx and g_tx.amount and g_tx.amount > 0:
+                g_tx.telegram_message_id = message_id
+                g_tx.telegram_chat_id = chat_id
+                from services.category_service import predict_category
+                if not getattr(g_tx, 'category', None) or g_tx.category == 'General':
+                    g_tx.category = predict_category(
+                        text=full_text,
+                        person_name=g_tx.person_name or "",
+                        tx_type=g_tx.transaction_type or ""
+                    )
+                logger.info(f"Gemini AI parsed natural text transaction: {g_tx.transaction_type} Rs. {g_tx.amount} to/from {g_tx.person_name}")
+                return g_tx, g_conf
+        except Exception as g_err:
+            logger.debug(f"Gemini text parsing fallback: {g_err}")
+
+    logger.info("Selecting regex heuristic parser...")
     parser = get_best_parser(full_text)
     logger.info(f"Selected parser: {parser.__class__.__name__}")
     
@@ -57,6 +78,7 @@ def process_transaction(raw_text: str, image_path: str, message_id: str, chat_id
         )
     
     return transaction, confidence
+
 
 def commit_transaction(transaction: Transaction) -> bool:
     """

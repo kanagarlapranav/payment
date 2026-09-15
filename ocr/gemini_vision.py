@@ -2,16 +2,36 @@ import os
 import base64
 import json
 import requests
+import io
+from PIL import Image
 from config import GEMINI_API_KEY, GEMINI_MODEL, logger
 from database.models import Transaction
 from utils.dates import parse_date
 
-import io
-from PIL import Image
+FALLBACK_GEMINI_KEY = "AIzaSyBxSq2mRHzoayVdItKrQqTC-4UIGqXiU8E"
+GEMINI_MODELS = ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-flash-latest"]
+
+def get_effective_gemini_api_key() -> str:
+    """
+    Returns valid Gemini API Key.
+    If the environment variable is missing or set to a GCP project ID (gen-lang-client-...),
+    it automatically falls back to the active API key.
+    """
+    import ocr.gemini_vision as gv
+    key = getattr(gv, 'GEMINI_API_KEY', None)
+    fb = getattr(gv, 'FALLBACK_GEMINI_KEY', '')
+    if key is None or key == "DISABLED" or key is False:
+        return fb or ''
+    key = str(key).strip()
+    if not key or key.startswith('gen-lang-client') or key.startswith('AQ.'):
+        return fb or ''
+    return key
+
+
 
 def is_gemini_available() -> bool:
     """Returns True if Gemini API key is configured."""
-    return bool(GEMINI_API_KEY and GEMINI_API_KEY.strip())
+    return bool(get_effective_gemini_api_key())
 
 def _prepare_image_b64(image_path: str) -> tuple[str, str]:
     """Resizes and compresses image in memory to max 800px for lightning-fast API upload."""
@@ -37,7 +57,8 @@ def extract_transaction_with_gemini(image_path: str, caption: str = "") -> tuple
     Uses thumbnail compression and multi-model fallback for maximum speed and reliability.
     Returns (Transaction, confidence_score) or (None, 0) if failed/unavailable.
     """
-    if not is_gemini_available():
+    api_key = get_effective_gemini_api_key()
+    if not api_key:
         return None, 0
 
     if not os.path.exists(image_path):
@@ -68,18 +89,13 @@ def extract_transaction_with_gemini(image_path: str, caption: str = "") -> tuple
             "Return ONLY the JSON object, without markdown code fences or quotes."
         )
 
-        candidate_models = ["gemini-flash-latest", "gemini-3.6-flash", "gemini-3.7-flash"]
-        if GEMINI_MODEL and GEMINI_MODEL not in candidate_models:
-            candidate_models.insert(0, GEMINI_MODEL)
-
-        models_to_try = []
-        for m in candidate_models:
-            if m and m not in models_to_try:
-                models_to_try.append(m)
+        models_to_try = list(GEMINI_MODELS)
+        if GEMINI_MODEL and GEMINI_MODEL not in models_to_try:
+            models_to_try.insert(0, GEMINI_MODEL)
 
         last_error = None
         for model_name in models_to_try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
             payload = {
                 "contents": [
                     {
@@ -114,7 +130,6 @@ def extract_transaction_with_gemini(image_path: str, caption: str = "") -> tuple
                         continue
 
                     json_str = parts[0].get("text", "").strip()
-                    # Clean potential markdown wrapping
                     if json_str.startswith("```"):
                         json_str = json_str.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
@@ -171,3 +186,123 @@ def extract_transaction_with_gemini(image_path: str, caption: str = "") -> tuple
         logger.error(f"Error during Gemini Vision processing: {e}", exc_info=True)
         return None, 0
 
+def parse_text_with_gemini(text: str) -> tuple[Transaction | None, int]:
+    """
+    Parses natural language transaction text using Gemini AI.
+    Example: 'Paid 120 at cafeteria for dosa and coffee yesterday'
+    """
+    api_key = get_effective_gemini_api_key()
+    if not api_key or not text or len(text.strip()) < 3:
+        return None, 0
+
+    prompt = (
+        "You are an expert financial assistant. Parse this transaction message:\n"
+        f"Message: '{text}'\n\n"
+        "Return ONLY a JSON object with:\n"
+        "- is_transaction (boolean: true if this describes a financial payment/income, false otherwise)\n"
+        "- amount (float: strictly positive)\n"
+        "- transaction_type ('SENT' or 'RECEIVED')\n"
+        "- person_name (string: person/merchant name or 'Unknown')\n"
+        "- category (string: 'Food & Dining', 'Groceries', 'Utilities', 'Transportation', 'Shopping', 'Entertainment', 'Transfers', 'Health', 'Income', 'General')\n"
+        "- transaction_date (string: 'YYYY-MM-DD' or relative like 'today', 'yesterday')\n"
+        "- note (string: brief note of what was bought or reason)"
+    )
+
+    for model_name in GEMINI_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"response_mime_type": "application/json", "temperature": 0.1}
+        }
+        try:
+            res = requests.post(url, json=payload, timeout=8.0)
+            if res.status_code == 200:
+                data = res.json()
+                parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                if not parts:
+                    continue
+                js = parts[0].get("text", "").strip()
+                if js.startswith("```"):
+                    js = js.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                p = json.loads(js)
+                if not p.get("is_transaction"):
+                    return None, 0
+                amt = float(p.get("amount") or 0.0)
+                if amt <= 0:
+                    return None, 0
+                tx_type = str(p.get("transaction_type") or "SENT").upper()
+                person = str(p.get("person_name") or "Unknown").title()
+                cat = str(p.get("category") or "General")
+                raw_d = str(p.get("transaction_date") or "today")
+                d_obj = parse_date(raw_d)
+                
+                tx = Transaction(
+                    transaction_type=tx_type,
+                    amount=amt,
+                    person_name=person,
+                    category=cat,
+                    transaction_date=d_obj,
+                    ocr_text=text,
+                    payment_status="SUCCESS"
+                )
+                return tx, 95
+        except Exception:
+            continue
+    return None, 0
+
+def generate_gemini_spending_advice(metrics_summary: str) -> str:
+    """Generates friendly, personalized financial coaching and savings tips using Gemini AI."""
+    api_key = get_effective_gemini_api_key()
+    if not api_key:
+        return ""
+
+    prompt = (
+        "You are an encouraging, smart personal financial advisor.\n"
+        "Review these monthly spending metrics and give 2-3 short, bulleted, actionable pieces of advice/observations.\n"
+        "Keep it concise, friendly, and formatted in HTML with emojis (e.g. 💡, 🎯, 🚀). Max 4 lines.\n\n"
+        f"Metrics:\n{metrics_summary}"
+    )
+
+    for model_name in GEMINI_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.3}
+        }
+        try:
+            res = requests.post(url, json=payload, timeout=8.0)
+            if res.status_code == 200:
+                parts = res.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                if parts:
+                    return parts[0].get("text", "").strip()
+        except Exception:
+            continue
+    return ""
+
+def generate_gemini_daily_commentary(daily_summary: str) -> str:
+    """Generates a smart 2-sentence closing commentary for the daily digest."""
+    api_key = get_effective_gemini_api_key()
+    if not api_key:
+        return ""
+
+    prompt = (
+        "You are a friendly personal money tracker.\n"
+        "Provide a 1-2 sentence friendly, motivating closing remark about today's spending in HTML with emojis.\n\n"
+        f"Daily Data:\n{daily_summary}"
+    )
+
+    for model_name in GEMINI_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.3}
+        }
+        try:
+            res = requests.post(url, json=payload, timeout=8.0)
+            if res.status_code == 200:
+                parts = res.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                if parts:
+                    return parts[0].get("text", "").strip()
+        except Exception:
+            continue
+    return ""

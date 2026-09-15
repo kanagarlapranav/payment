@@ -83,11 +83,23 @@ def format_daily_digest(target_date_str: str = None) -> str:
         monthly_spent = get_monthly_spending(now_ist.year, now_ist.month)
         pct = (monthly_spent / budget * 100)
         summary += f"\n🎯 <b>Monthly Budget Pace:</b> ₹{monthly_spent:,.2f} / ₹{budget:,.2f} ({pct:.1f}%)\n"
+
+    # Gemini AI Closing Remarks
+    try:
+        from ocr.gemini_vision import generate_gemini_daily_commentary, is_gemini_available
+        if is_gemini_available():
+            day_data = f"Date: {date_str}, Spent: Rs.{total_sent}, Received: Rs.{total_received}, Net: Rs.{net_change}, Count: {tx_count}"
+            ai_remark = generate_gemini_daily_commentary(day_data)
+            if ai_remark:
+                summary += f"\n🤖 <b>Gemini AI Takeaway:</b>\n{ai_remark}\n"
+    except Exception:
+        pass
         
     summary += "\n━━━━━━━━━━━━━━━━━━━━\n"
     summary += "<i>Automated 9:00 PM IST Closing Briefing. Have a great night! 🌙</i>"
     
     return header + summary
+
 
 class DailyDigestScheduler:
     """Lightweight background thread that checks IST time and delivers 9:00 PM digests."""
