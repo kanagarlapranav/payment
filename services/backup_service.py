@@ -278,7 +278,27 @@ async def restore_from_telegram(bot, chat_id: str = None) -> bool:
         file = await bot.get_file(pinned.document.file_id)
         download_path = DATA_DIR / "temp_cloud_backup.json"
         await file.download_to_drive(custom_path=download_path)
-        
+
+        # Safety check: Prevent a partial/stale cloud backup from overwriting a larger local backup
+        try:
+            with open(download_path, 'r', encoding='utf-8') as df:
+                cloud_data = json.load(df)
+            cloud_tx_count = len(cloud_data.get("transactions", []))
+
+            if BACKUP_JSON_PATH.exists():
+                with open(BACKUP_JSON_PATH, 'r', encoding='utf-8') as bf:
+                    local_data = json.load(bf)
+                local_tx_count = len(local_data.get("transactions", []))
+                
+                if local_tx_count > cloud_tx_count:
+                    logger.warning(
+                        f"Local backup has {local_tx_count} records while pinned cloud backup has only {cloud_tx_count}. "
+                        "Using local backup to prevent history loss."
+                    )
+                    return import_database_from_json(BACKUP_JSON_PATH)
+        except Exception as check_err:
+            logger.debug(f"Backup comparison notice: {check_err}")
+
         success = import_database_from_json(input_path=download_path)
         if download_path.exists():
             try:

@@ -3,7 +3,30 @@ from unittest.mock import patch
 from database.models import Transaction
 from services.balance_service import update_balance_for_transaction
 
+import os
+from config import DB_PATH
+from services.backup_service import BACKUP_JSON_PATH
+
 class TestBalance(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.db_backup = None
+        cls.json_backup = None
+        if os.path.exists(DB_PATH):
+            with open(DB_PATH, 'rb') as f:
+                cls.db_backup = f.read()
+        if os.path.exists(BACKUP_JSON_PATH):
+            with open(BACKUP_JSON_PATH, 'rb') as f:
+                cls.json_backup = f.read()
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.db_backup is not None:
+            with open(DB_PATH, 'wb') as f:
+                f.write(cls.db_backup)
+        if cls.json_backup is not None:
+            with open(BACKUP_JSON_PATH, 'wb') as f:
+                f.write(cls.json_backup)
 
     def test_balance_calculation(self):
         current_balance = 50000.0

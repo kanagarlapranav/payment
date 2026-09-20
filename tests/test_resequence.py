@@ -11,19 +11,49 @@ from services.balance_service import resequence_transaction_ids, recalculate_all
 from bot.handlers import format_success_message
 from config import DB_PATH
 
+from services.backup_service import BACKUP_JSON_PATH
+
 class TestResequenceAndBalance(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Snapshot current database and backup file to restore after tests
+        cls.db_backup = None
+        cls.json_backup = None
+        if os.path.exists(DB_PATH):
+            with open(DB_PATH, 'rb') as f:
+                cls.db_backup = f.read()
+        if os.path.exists(BACKUP_JSON_PATH):
+            with open(BACKUP_JSON_PATH, 'rb') as f:
+                cls.json_backup = f.read()
+
+    @classmethod
+    def tearDownClass(cls):
+        # Restore original database and backup file
+        if cls.db_backup is not None:
+            with open(DB_PATH, 'wb') as f:
+                f.write(cls.db_backup)
+        if cls.json_backup is not None:
+            with open(BACKUP_JSON_PATH, 'wb') as f:
+                f.write(cls.json_backup)
+
     def setUp(self):
         setup_database()
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("DELETE FROM transactions")
+            # Insert 5 self-contained test transactions
+            for i in range(1, 6):
+                conn.execute("""
+                    INSERT INTO transactions (
+                        id, transaction_type, amount, person_name, transaction_date,
+                        balance_before, balance_after, category
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (i, 'RECEIVED' if i % 2 == 1 else 'SENT', float(i * 1000), f"Person {i}", "2026-09-01", 0.0, float(i * 1000), "General"))
+            conn.commit()
         resequence_transaction_ids()
         recalculate_all_balances()
 
     def tearDown(self):
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("DELETE FROM transactions")
-            conn.commit()
-        setup_database()
-        resequence_transaction_ids()
-        recalculate_all_balances()
+        pass
 
     def test_resequence_on_deletion(self):
         txs = get_all_transactions_asc()
