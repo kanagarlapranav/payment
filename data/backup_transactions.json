@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "exported_at": "2026-09-20T23:30:00.000000",
+  "exported_at": "2026-09-20T23:52:40.774070",
   "transaction_count": 16,
   "settings": {
     "initial_balance": "0.0",
-    "current_balance": "6945.0",
+    "current_balance": "4480.0",
     "monthly_budget": "25000.0"
   },
   "transactions": [
@@ -25,7 +25,6 @@
       "bank_name": "Union Bank Of India",
       "bank_account": "1185",
       "payment_status": "SUCCESS",
-      "category": "Transfers & P2P",
       "balance_before": 0.0,
       "balance_after": 30700.0,
       "ocr_text": "Money Received: 30,700 from Lakkimsetti Sai Sri Vamsi",
@@ -33,7 +32,8 @@
       "telegram_message_id": "9",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-04 10:02:00",
-      "updated_at": "2026-09-04 10:02:00"
+      "updated_at": "2026-09-04 10:02:00",
+      "category": "General"
     },
     {
       "id": 2,
@@ -52,7 +52,6 @@
       "bank_name": "Union Bank Of India",
       "bank_account": "",
       "payment_status": "SUCCESS",
-      "category": "Transfers & P2P",
       "balance_before": 30700.0,
       "balance_after": 36900.0,
       "ocr_text": "Money Received: 6,200 from Johnson Siddhu Motru",
@@ -60,7 +59,8 @@
       "telegram_message_id": "21",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-04 12:47:00",
-      "updated_at": "2026-09-04 12:47:00"
+      "updated_at": "2026-09-04 12:47:00",
+      "category": "General"
     },
     {
       "id": 3,
@@ -79,7 +79,6 @@
       "bank_name": "",
       "bank_account": "",
       "payment_status": "SUCCESS",
-      "category": "Bills & Utilities",
       "balance_before": 36900.0,
       "balance_after": 31900.0,
       "ocr_text": "Paid to balaji icic admin 5000",
@@ -87,7 +86,8 @@
       "telegram_message_id": "33",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-05 15:00:00",
-      "updated_at": "2026-09-05 15:00:00"
+      "updated_at": "2026-09-05 15:00:00",
+      "category": "General"
     },
     {
       "id": 4,
@@ -106,7 +106,6 @@
       "bank_name": "Union Bank Of India",
       "bank_account": "1185",
       "payment_status": "SUCCESS",
-      "category": "Transfers & P2P",
       "balance_before": 31900.0,
       "balance_after": 32500.0,
       "ocr_text": "Money Received: 600 from Patchigolla Lakshmi Vinay",
@@ -114,7 +113,8 @@
       "telegram_message_id": "37",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-06 21:57:00",
-      "updated_at": "2026-09-06 21:57:00"
+      "updated_at": "2026-09-06 21:57:00",
+      "category": "General"
     },
     {
       "id": 5,
@@ -133,7 +133,6 @@
       "bank_name": "State Bank of India",
       "bank_account": "X7751",
       "payment_status": "SUCCESS",
-      "category": "Transfers & P2P",
       "balance_before": 32500.0,
       "balance_after": 28500.0,
       "ocr_text": "Paid to Kanagarla Sai Akhil 4000",
@@ -141,7 +140,8 @@
       "telegram_message_id": "",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-08 13:44:00",
-      "updated_at": "2026-09-08 13:44:00"
+      "updated_at": "2026-09-08 13:44:00",
+      "category": "General"
     },
     {
       "id": 6,
@@ -160,7 +160,6 @@
       "bank_name": "",
       "bank_account": "",
       "payment_status": "SUCCESS",
-      "category": "Transfers & P2P",
       "balance_before": 28500.0,
       "balance_after": 25000.0,
       "ocr_text": "Paid to Kanagarla Sai Akhil 3500",
@@ -168,7 +167,8 @@
       "telegram_message_id": "",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-09 10:00:00",
-      "updated_at": "2026-09-09 10:00:00"
+      "updated_at": "2026-09-09 10:00:00",
+      "category": "General"
     },
     {
       "id": 7,
@@ -187,7 +187,6 @@
       "bank_name": "Union Bank Of India",
       "bank_account": "",
       "payment_status": "SUCCESS",
-      "category": "Transfers & P2P",
       "balance_before": 25000.0,
       "balance_after": 29900.0,
       "ocr_text": "Received 4900 from Johnson Siddhu Motru",
@@ -195,7 +194,8 @@
       "telegram_message_id": "",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-09 11:00:00",
-      "updated_at": "2026-09-09 11:00:00"
+      "updated_at": "2026-09-09 11:00:00",
+      "category": "General"
     },
     {
       "id": 8,
@@ -214,7 +214,6 @@
       "bank_name": "",
       "bank_account": "",
       "payment_status": "SUCCESS",
-      "category": "Transfers & P2P",
       "balance_before": 29900.0,
       "balance_after": 7900.0,
       "ocr_text": "Paid to K Sri Ramavenkateshwarulu 22000",
@@ -222,7 +221,8 @@
       "telegram_message_id": "",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-09 11:30:00",
-      "updated_at": "2026-09-09 11:30:00"
+      "updated_at": "2026-09-09 11:30:00",
+      "category": "General"
     },
     {
       "id": 9,
@@ -241,7 +241,6 @@
       "bank_name": "State Bank of India",
       "bank_account": "7751",
       "payment_status": "SUCCESS",
-      "category": "Transfers & P2P",
       "balance_before": 7900.0,
       "balance_after": 2900.0,
       "ocr_text": "Paid 5000 to Kanagarla Sai Akhil",
@@ -249,7 +248,8 @@
       "telegram_message_id": "",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-09 12:17:00",
-      "updated_at": "2026-09-09 12:17:00"
+      "updated_at": "2026-09-09 12:17:00",
+      "category": "General"
     },
     {
       "id": 10,
@@ -268,7 +268,6 @@
       "bank_name": "",
       "bank_account": "",
       "payment_status": "SUCCESS",
-      "category": "Transfers & P2P",
       "balance_before": 2900.0,
       "balance_after": 14900.0,
       "ocr_text": "Received 12000 from Thippa Sanjeev",
@@ -276,7 +275,8 @@
       "telegram_message_id": "",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-10 10:00:00",
-      "updated_at": "2026-09-10 10:00:00"
+      "updated_at": "2026-09-10 10:00:00",
+      "category": "General"
     },
     {
       "id": 11,
@@ -295,7 +295,6 @@
       "bank_name": "",
       "bank_account": "",
       "payment_status": "SUCCESS",
-      "category": "Transfers & P2P",
       "balance_before": 14900.0,
       "balance_after": 4900.0,
       "ocr_text": "Paid to M S Prashanth Kumar 10000",
@@ -303,37 +302,11 @@
       "telegram_message_id": "",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-11 10:00:00",
-      "updated_at": "2026-09-11 10:00:00"
+      "updated_at": "2026-09-11 10:00:00",
+      "category": "General"
     },
     {
       "id": 12,
-      "transaction_type": "SENT",
-      "amount": 20.0,
-      "person_name": "VIKRAMAN NAIR K",
-      "sender_name": "",
-      "recipient_name": "VIKRAMAN NAIR K",
-      "upi_id": "vikramannair066@fbl",
-      "phone_number": "",
-      "transaction_date": "2026-09-14",
-      "transaction_time": "",
-      "reference_number": "",
-      "transaction_id": "",
-      "payment_app": "Generic",
-      "bank_name": "",
-      "bank_account": "",
-      "payment_status": "SUCCESS",
-      "category": "Food & Dining",
-      "balance_before": 4900.0,
-      "balance_after": 4880.0,
-      "ocr_text": "Paid to VIKRAMAN NAIR K 20",
-      "original_image_path": "",
-      "telegram_message_id": "",
-      "telegram_chat_id": "-1004310685141",
-      "created_at": "2026-09-14 12:00:00",
-      "updated_at": "2026-09-14 12:00:00"
-    },
-    {
-      "id": 13,
       "transaction_type": "RECEIVED",
       "amount": 2500.0,
       "person_name": "Patchigolla Lakshmi Pv Vinay",
@@ -349,18 +322,18 @@
       "bank_name": "Union Bank Of India",
       "bank_account": "",
       "payment_status": "SUCCESS",
-      "category": "Transfers & P2P",
-      "balance_before": 4880.0,
-      "balance_after": 7380.0,
+      "balance_before": 4900.0,
+      "balance_after": 7400.0,
       "ocr_text": "Received 2500 from Patchigolla Lakshmi Pv Vinay",
       "original_image_path": "",
       "telegram_message_id": "",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-15 10:00:00",
-      "updated_at": "2026-09-15 10:00:00"
+      "updated_at": "2026-09-15 10:00:00",
+      "category": "General"
     },
     {
-      "id": 14,
+      "id": 13,
       "transaction_type": "SENT",
       "amount": 400.0,
       "person_name": "Kanagarlasaiakhil",
@@ -376,69 +349,96 @@
       "bank_name": "State Bank of India",
       "bank_account": "7751",
       "payment_status": "SUCCESS",
-      "category": "Transfers & P2P",
-      "balance_before": 7380.0,
-      "balance_after": 6980.0,
+      "balance_before": 7400.0,
+      "balance_after": 7000.0,
       "ocr_text": "Paid 400 to Kanagarla Sai Akhil",
       "original_image_path": "",
       "telegram_message_id": "",
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-15 19:54:00",
-      "updated_at": "2026-09-15 19:54:00"
+      "updated_at": "2026-09-15 19:54:00",
+      "category": "General"
+    },
+    {
+      "id": 14,
+      "transaction_type": "SENT",
+      "amount": 1000.0,
+      "person_name": "Kanagarlasaiakhil",
+      "sender_name": "Kanagarla Pranav",
+      "recipient_name": "Kanagarla Sai Akhil",
+      "upi_id": "9346896729@ybl",
+      "phone_number": "",
+      "transaction_date": "2026-09-18",
+      "transaction_time": "10:51 AM",
+      "reference_number": "626131701805",
+      "transaction_id": "",
+      "payment_app": "Amazon Pay",
+      "bank_name": "Statebank of India",
+      "bank_account": "7751",
+      "payment_status": "SUCCESS",
+      "balance_before": 7000.0,
+      "balance_after": 6000.0,
+      "ocr_text": "Paid 1000 to Kanagarla Sai Akhil",
+      "original_image_path": "",
+      "telegram_message_id": "589",
+      "telegram_chat_id": "-1004310685141",
+      "created_at": "2026-09-18 10:51:00",
+      "updated_at": "2026-09-18 10:51:00",
+      "category": "General"
     },
     {
       "id": 15,
       "transaction_type": "SENT",
-      "amount": 20.0,
-      "person_name": "Narise Nagendra",
-      "sender_name": "",
-      "recipient_name": "Narise Nagendra",
+      "amount": 1000.0,
+      "person_name": "Vabilisetty Manoj Sai Charan",
+      "sender_name": "Kanagarla Pranav",
+      "recipient_name": "Vabilisetty Manoj Sai Charan",
       "upi_id": "",
       "phone_number": "",
-      "transaction_date": "2026-09-16",
-      "transaction_time": "",
-      "reference_number": "",
+      "transaction_date": "2026-09-19",
+      "transaction_time": "01:23 PM",
+      "reference_number": "626219964507",
       "transaction_id": "",
-      "payment_app": "Generic",
-      "bank_name": "",
-      "bank_account": "",
+      "payment_app": "Paytm",
+      "bank_name": "Union Bank of India",
+      "bank_account": "1185",
       "payment_status": "SUCCESS",
-      "category": "Transfers & P2P",
-      "balance_before": 6980.0,
-      "balance_after": 6960.0,
-      "ocr_text": "Paid to Narise Nagendra 20",
+      "balance_before": 6000.0,
+      "balance_after": 5000.0,
+      "ocr_text": "Hey, I sent 1000.00 to Vabilisetty Manoj Sai Charan using paytm.",
       "original_image_path": "",
-      "telegram_message_id": "",
+      "telegram_message_id": "595",
       "telegram_chat_id": "-1004310685141",
-      "created_at": "2026-09-16 10:00:00",
-      "updated_at": "2026-09-16 10:00:00"
+      "created_at": "2026-09-19 13:23:00",
+      "updated_at": "2026-09-19 13:23:00",
+      "category": "General"
     },
     {
       "id": 16,
       "transaction_type": "SENT",
-      "amount": 15.0,
-      "person_name": "VIKRAMAN NAIR K (Cafeteria: Paneer Rice)",
-      "sender_name": "",
-      "recipient_name": "VIKRAMAN NAIR K",
-      "upi_id": "vikramannair066@fbl",
+      "amount": 520.0,
+      "person_name": "Naini Surya",
+      "sender_name": "Kanagarla Pranav",
+      "recipient_name": "Naini Surya",
+      "upi_id": "",
       "phone_number": "",
-      "transaction_date": "2026-09-16",
-      "transaction_time": "",
+      "transaction_date": "2026-09-19",
+      "transaction_time": "01:30 PM",
       "reference_number": "",
       "transaction_id": "",
-      "payment_app": "Generic",
-      "bank_name": "",
+      "payment_app": "Paytm",
+      "bank_name": "Union Bank of India",
       "bank_account": "",
       "payment_status": "SUCCESS",
-      "category": "Food & Dining",
-      "balance_before": 6960.0,
-      "balance_after": 6945.0,
-      "ocr_text": "Paid to VIKRAMAN NAIR K 15",
+      "balance_before": 5000.0,
+      "balance_after": 4480.0,
+      "ocr_text": "Hey, I sent 520.00 to Naini Surya using paytm.",
       "original_image_path": "",
-      "telegram_message_id": "",
+      "telegram_message_id": "597",
       "telegram_chat_id": "-1004310685141",
-      "created_at": "2026-09-16 11:00:00",
-      "updated_at": "2026-09-16 11:00:00"
+      "created_at": "2026-09-19 13:30:00",
+      "updated_at": "2026-09-19 13:30:00",
+      "category": "General"
     }
   ]
 }
