@@ -214,6 +214,14 @@ async def backup_to_telegram(bot, chat_id: str = None) -> bool:
         tx_count = data.get("transaction_count", 0)
         caption = f"#PAYMENT_TRACKER_BACKUP ☁️ Auto-Backup ({tx_count} records)"
         
+        # Unpin previous backup message so outdated files are never restored
+        try:
+            chat = await bot.get_chat(chat_id=target_chat)
+            if chat.pinned_message:
+                await bot.unpin_chat_message(chat_id=target_chat, message_id=chat.pinned_message.message_id)
+        except Exception as unpin_err:
+            logger.debug(f"Unpin notice: {unpin_err}")
+
         with open(BACKUP_JSON_PATH, 'rb') as doc_file:
             msg = await bot.send_document(
                 chat_id=target_chat,

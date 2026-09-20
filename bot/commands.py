@@ -79,7 +79,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚙️ <b>7. Management & Edits</b>\n"
         "• /edit — Interactive 1-tap menu to edit amount, name, date, type, or UTR\n"
         "• /delete — Interactive 1-tap menu to delete record & auto-recalculate\n"
-        "• /setbalance &lt;amt&gt; — Set starting balance (e.g. <code>/setbalance 50000</code>)\n\n"
+        "• /undo — Instantly revert the last delete, edit, or add action\n"
+        "• /setbalance &lt;amt&gt; — Set starting balance (e.g. <code>/setbalance 50000</code>)\n"
+        "• /restore — Restore from cloud/JSON backup whenever needed on demand\n\n"
         "📄 <b>8. Reports & Export</b>\n"
         "• /export (or /report, /statement) — Download official <b>PDF Statement</b> or <b>Excel Sheet (.xlsx)</b>\n\n"
         "☁️ <b>Cloud Reliability:</b>\n"
@@ -539,6 +541,9 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Unknown field `{field}`. Supported: `amount`, `person`, `type`, `date`, `ref`.", parse_mode='Markdown')
         return
 
+    from services.undo_service import record_edit_action
+    record_edit_action(tx)
+
     success = update_transaction(tx_id, updates)
     if success:
         if needs_recalc:
@@ -553,6 +558,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if updated_tx and 'balance_before' in updated_tx and 'balance_after' in updated_tx:
             bal_flow = f"\n💰 *Balance Flow:* {format_currency(updated_tx['balance_before'])} ➔ *{format_currency(updated_tx['balance_after'])}"
 
+        from bot.keyboards import get_undo_keyboard
         try:
             asyncio.create_task(backup_to_telegram(context.bot))
         except Exception:
@@ -562,6 +568,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 *Person:* {person}\n"
             f"💵 *Amount:* *{amt_s}*{bal_flow}\n\n"
             f"💳 *Current Balance:* *{format_currency(new_bal)}*",
+            reply_markup=get_undo_keyboard(),
             parse_mode='Markdown'
         )
     else:
@@ -1010,8 +1017,6 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("⏳ Restoring text transactions from backup...")
     success = import_database_from_json()
-    resequence_transaction_ids()
-    recalculate_all_balances()
     txs = get_all_transactions()
     await update.message.reply_text(
         f"✅ <b>Database Restored Successfully!</b>\n\n"
@@ -1021,6 +1026,24 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Use <code>/history</code> or <code>/balance</code> to view restored transactions.",
         parse_mode='HTML'
     )
+
+async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reverts the last delete, edit, or add action performed."""
+    if not await is_authorized(update): return
+    from services.undo_service import perform_undo
+    from services.backup_service import backup_to_telegram
+    import asyncio
+
+    success, msg = perform_undo()
+    if success:
+        try:
+            asyncio.create_task(backup_to_telegram(context.bot))
+        except Exception:
+            pass
+        await update.message.reply_text(msg, parse_mode='HTML')
+    else:
+        await update.message.reply_text(f"ℹ️ {msg}", parse_mode='HTML')
+
 
 
 

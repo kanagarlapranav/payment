@@ -8,14 +8,14 @@ from config import GEMINI_API_KEY, GEMINI_MODEL, logger
 from database.models import Transaction
 from utils.dates import parse_date
 
-FALLBACK_GEMINI_KEY = "AIzaSyBxSq2mRHzoayVdItKrQqTC-4UIGqXiU8E"
+FALLBACK_GEMINI_KEY = ""
+REVOKED_LEAKED_KEY = "AIzaSyBxSq2mRHzoayVdItKrQqTC-4UIGqXiU8E"
 GEMINI_MODELS = ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-flash-latest"]
 
 def get_effective_gemini_api_key() -> str:
     """
     Returns valid Gemini API Key.
-    If the environment variable is missing or set to a GCP project ID (gen-lang-client-...),
-    it automatically falls back to the active API key.
+    If missing or set to the revoked leaked key, returns empty string.
     """
     import ocr.gemini_vision as gv
     key = getattr(gv, 'GEMINI_API_KEY', None)
@@ -23,7 +23,7 @@ def get_effective_gemini_api_key() -> str:
     if key is None or key == "DISABLED" or key is False:
         return fb or ''
     key = str(key).strip()
-    if not key or key.startswith('gen-lang-client') or key.startswith('AQ.'):
+    if not key or key == REVOKED_LEAKED_KEY or key.startswith('gen-lang-client'):
         return fb or ''
     return key
 
@@ -182,6 +182,9 @@ def extract_transaction_with_gemini(image_path: str, caption: str = "") -> tuple
                 else:
                     logger.warning(f"Gemini model {model_name} returned status {response.status_code}: {response.text[:200]}")
                     last_error = f"Status {response.status_code}"
+                    if response.status_code in (401, 403):
+                        logger.error("Gemini API key rejected (401/403). Halting further model attempts.")
+                        break
             except requests.RequestException as req_err:
                 logger.warning(f"Gemini model {model_name} request failed/timed out: {req_err}")
                 last_error = str(req_err)
