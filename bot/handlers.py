@@ -6,9 +6,8 @@ import json
 import asyncio
 import html
 import re
-from datetime import timedelta
 from config import TELEGRAM_USER_ID, IMAGE_DIR, logger
-from bot.commands import is_authorized
+from bot.commands import is_authorized, is_admin_user
 from bot.keyboards import (
     get_confirmation_keyboard, get_edit_fields_keyboard, get_delete_confirm_keyboard,
     get_filter_keyboard, get_sort_keyboard
@@ -298,6 +297,10 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles button presses from inline keyboards."""
     query = update.callback_query
+    if not await is_authorized(update):
+        await query.answer("❌ Unauthorized action.", show_alert=True)
+        return
+
     await query.answer()
     
     data = query.data
@@ -358,6 +361,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(text, reply_markup=get_edit_fields_keyboard(tx_id), parse_mode='HTML')
         
     elif action == "select_delete":
+        if not is_admin_user(update):
+            await query.answer("❌ Only the bot owner can delete transactions.", show_alert=True)
+            return
         tx_id = int(parts[1])
         tx = get_transaction_by_id(tx_id)
         if not tx:
@@ -405,6 +411,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     # 4. Delete Confirmation
     elif action == "delete_confirm":
+        if not is_admin_user(update):
+            await query.answer("❌ Only the bot owner can delete transactions.", show_alert=True)
+            return
         tx_id = int(parts[1])
         tx = get_transaction_by_id(tx_id)
         if not tx:
@@ -446,10 +455,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text("❌ Failed to delete transaction.")
 
     elif action == "delete_cancel":
+        if not is_admin_user(update):
+            await query.answer("❌ Only the bot owner can cancel deletions.", show_alert=True)
+            return
         context.user_data.pop('action', None)
         await query.edit_message_text("❌ Deletion cancelled.")
 
     elif action == "undo_action":
+        if not is_admin_user(update):
+            await query.answer("❌ Only the bot owner can undo changes.", show_alert=True)
+            return
         from services.undo_service import perform_undo
         success, msg = perform_undo()
         if success:

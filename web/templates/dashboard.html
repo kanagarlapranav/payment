@@ -376,9 +376,41 @@
         let categoryChartInstance = null;
         let cashflowChartInstance = null;
 
+        function getDashboardToken() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const queryToken = urlParams.get('token');
+            if (queryToken) {
+                localStorage.setItem('dashboard_token', queryToken);
+                return queryToken;
+            }
+            return localStorage.getItem('dashboard_token') || '';
+        }
+
         async function fetchDashboardData() {
             try {
-                const res = await fetch('/api/data');
+                const token = getDashboardToken();
+                const headers = { 'Accept': 'application/json' };
+                if (token) {
+                    headers['X-Dash-Token'] = token;
+                }
+
+                const endpoint = token ? `/api/data?token=${encodeURIComponent(token)}` : '/api/data';
+                const res = await fetch(endpoint, { headers });
+
+                if (res.status === 401) {
+                    const entered = prompt("🔒 Protected Dashboard API\nPlease enter your DASHBOARD_TOKEN:");
+                    if (entered && entered.trim()) {
+                        localStorage.setItem('dashboard_token', entered.trim());
+                        return fetchDashboardData();
+                    }
+                    document.getElementById('sub-header').innerText = "❌ Unauthorized: Valid DASHBOARD_TOKEN required.";
+                    return;
+                }
+
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}`);
+                }
+
                 const data = await res.json();
                 renderDashboard(data);
             } catch (err) {

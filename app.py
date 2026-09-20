@@ -2,12 +2,13 @@ import logging
 import os
 import time
 import json
-import urllib.request
+import urllib.parse
+import hmac
 import threading
 from datetime import datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackQueryHandler
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID, logger, BASE_DIR
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID, logger, BASE_DIR, DASHBOARD_TOKEN
 from database.db import setup_database
 from telegram.request import HTTPXRequest
 from bot.commands import (
@@ -25,7 +26,6 @@ async def on_startup(app):
     """Restores database state from cloud backup only if database is empty on fresh container spins."""
     try:
         from services.backup_service import restore_from_telegram, export_database_to_json, backup_to_telegram
-        from services.balance_service import resequence_transaction_ids, recalculate_all_balances
         from database.queries import get_all_transactions
         from database.db import get_db_connection
 
@@ -54,12 +54,9 @@ async def on_startup(app):
         except Exception as purge_err:
             logger.debug(f"Purge notice: {purge_err}")
 
-        # Resequence IDs and recalculate balances so database is always clean & sequential
-        resequence_transaction_ids()
-        recalculate_all_balances()
         export_database_to_json()
 
-        # Update Telegram cloud backup with the clean state and unpin old 16-record message
+        # Update Telegram cloud backup with the clean state and unpin old messages if needed
         try:
             await backup_to_telegram(app.bot)
             logger.info("Synced clean cloud backup to Telegram after startup.")
@@ -78,11 +75,16 @@ async def on_startup(app):
         except Exception as e:
             logger.debug(f"Image cleanup notice: {e}")
 
-        # Hook bot instance into background scheduler
-        scheduler.set_bot(app.bot)
-        scheduler.start()
     except Exception as e:
         logger.warning(f"Startup initialization notice: {e}")
+
+    # Hook bot instance into background scheduler in its own decoupled block
+    try:
+        scheduler.set_bot(app.bot)
+        scheduler.start()
+        logger.info("Background scheduler started successfully.")
+    except Exception as sched_err:
+        logger.error(f"Scheduler startup error: {sched_err}")
 
 def build_application():
     """Builds and configures the Telegram Application."""
@@ -134,8 +136,6 @@ def build_application():
     app.add_handler(CommandHandler("undo", undo_command))
     app.add_handler(CommandHandler("revert", undo_command))
 
-
-
     # Image handler (photos and documents)
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
 
@@ -148,11 +148,34 @@ def build_application():
     return app
 
 class WebAppAndHealthHandler(BaseHTTPRequestHandler):
-    """Serves keep-alive health checks, live web dashboard, and API endpoints."""
-    def do_GET(self):
-        path = self.path.split('?')[0]
+    """Serves keep-alive health checks, live web dashboard, and protected API endpoints."""
+    
+    def do_HEAD(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        if path in ('/healthz', '/health', '/', '/dashboard'):
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain; charset=utf-8')
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
 
-        if path in ('/dashboard', '/'):
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        query_params = urllib.parse.parse_qs(parsed.query)
+
+        # 1. Lightweight health check endpoint for uptime monitors
+        if path in ('/healthz', '/health'):
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(b"OK")
+            return
+
+        # 2. Web dashboard frontend UI
+        elif path in ('/dashboard', '/'):
             template_path = BASE_DIR / 'web' / 'templates' / 'dashboard.html'
             if os.path.exists(template_path):
                 with open(template_path, 'r', encoding='utf-8') as f:
@@ -167,7 +190,22 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b"Payment Tracker Bot is Running 24/7 OK")
 
+        # 3. Protected Dashboard Data API
         elif path == '/api/data':
+            dash_token = DASHBOARD_TOKEN or os.getenv("DASHBOARD_TOKEN", "")
+
+            # Verify authentication via X-Dash-Token header OR ?token= query parameter
+            supplied_header = self.headers.get("X-Dash-Token", "")
+            supplied_query = query_params.get("token", [""])[0]
+            supplied = supplied_header or supplied_query
+
+            if not dash_token or not hmac.compare_digest(supplied, dash_token):
+                self.send_response(401)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Unauthorized. Provide valid X-Dash-Token or ?token="}).encode('utf-8'))
+                return
+
             from database.queries import (
                 get_balance_setting, get_monthly_summary, get_category_summary,
                 get_recent_transactions, get_all_transactions
@@ -209,7 +247,7 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            # Public Access-Control-Allow-Origin: * header has been removed
             self.end_headers()
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
 
@@ -223,23 +261,11 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
 def start_health_server():
     port = int(os.environ.get("PORT", 10000))
     try:
-        server = HTTPServer(('0.0.0.0', port), WebAppAndHealthHandler)
+        server = ThreadingHTTPServer(('0.0.0.0', port), WebAppAndHealthHandler)
+        logger.info(f"Threading HTTP server running on port {port}")
         server.serve_forever()
     except Exception as e:
         logger.warning(f"Web/Health server error: {e}")
-
-def start_keep_alive():
-    """Pings public URL every 10 minutes to prevent Render free instance from spinning down."""
-    render_url = os.getenv("RENDER_EXTERNAL_URL", "https://payment-3-kldp.onrender.com")
-    time.sleep(30) # Initial warmup delay
-    while True:
-        try:
-            req = urllib.request.Request(render_url, headers={'User-Agent': 'KeepAliveBot/1.0'})
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                logger.info(f"Keep-alive self ping to {render_url}: status {resp.status}")
-        except Exception as e:
-            logger.debug(f"Keep-alive ping notice: {e}")
-        time.sleep(600) # Ping every 10 minutes
 
 def main():
     """Main entry point for polling & cloud web service."""
@@ -247,9 +273,8 @@ def main():
         logger.error("TELEGRAM_BOT_TOKEN is not set. Exiting.")
         return
 
-    # Start Web Dashboard & keep-alive server so Render stays alive 24/7
+    # Start Threading Web Dashboard & health check server
     threading.Thread(target=start_health_server, daemon=True).start()
-    threading.Thread(target=start_keep_alive, daemon=True).start()
 
     # Pre-warm OCR engine in background to ensure zero cold-start delay for users
     from ocr.engine import warmup_ocr
@@ -262,4 +287,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
