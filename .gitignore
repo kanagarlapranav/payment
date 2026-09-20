@@ -3,18 +3,21 @@ venv/
 .venv/
 env/
 
-# Environment Variables
+# Environment Variables & Secrets
 .env
+.env.*
 .env.local
 
-# Database & Data
+# Database & Sensitive Financial Data
 data/*.db
 data/*.sqlite3
+data/*.json
+data/*.xlsx
+data/*.pdf
 *.db
 *.sqlite3
 data/images/*
 !data/images/.gitkeep
-data/*.xlsx
 
 # Logs
 logs/*.log
@@ -24,11 +27,11 @@ logs/*.log
 *.exe
 tesseract_setup.exe
 
-# Python Cache
+# Python & Testing Cache
 __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
 
-# Vercel
+# Legacy Deployments
 .vercel/

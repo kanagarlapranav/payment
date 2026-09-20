@@ -1,45 +1,45 @@
 import os
+import sys
 import logging
 from pathlib import Path
+from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Serverless environments (Vercel/Lambda/Netlify) must write to /tmp
-IS_SERVERLESS = bool(os.getenv('VERCEL') or os.getenv('AWS_LAMBDA_FUNCTION_NAME') or os.getenv('NETLIFY'))
 BASE_DIR = Path(__file__).resolve().parent
-
-if IS_SERVERLESS:
-    DATA_DIR = Path('/tmp/data')
-    IMAGE_DIR = DATA_DIR / 'images'
-    LOG_DIR = Path('/tmp/logs')
-else:
-    DATA_DIR = BASE_DIR / 'data'
-    IMAGE_DIR = DATA_DIR / 'images'
-    LOG_DIR = BASE_DIR / 'logs'
-
+DATA_DIR = BASE_DIR / 'data'
+IMAGE_DIR = DATA_DIR / 'images'
+LOG_DIR = BASE_DIR / 'logs'
 DB_PATH = DATA_DIR / 'database.sqlite3'
 
 # Ensure directories exist safely
-try:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    IMAGE_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-except Exception:
-    DATA_DIR = Path('/tmp/data')
-    IMAGE_DIR = DATA_DIR / 'images'
-    LOG_DIR = Path('/tmp/logs')
-    DB_PATH = DATA_DIR / 'database.sqlite3'
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    IMAGE_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # Telegram Configuration
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-TELEGRAM_USER_ID = os.getenv('TELEGRAM_USER_ID')
-TELEGRAM_GROUP_ID = os.getenv('TELEGRAM_GROUP_ID')
-TESSERACT_CMD = os.getenv('TESSERACT_CMD', r'C:\Program Files\Tesseract-OCR\tesseract.exe')
+
+# Strictly validate owner User ID as integer to prevent silent auth bypasses
+raw_user_id = os.getenv('TELEGRAM_USER_ID')
+if not raw_user_id or not raw_user_id.strip():
+    raise ValueError("TELEGRAM_USER_ID is missing in environment. Authorization cannot be enforced.")
+try:
+    TELEGRAM_USER_ID = int(raw_user_id.strip())
+except ValueError:
+    raise ValueError(f"TELEGRAM_USER_ID must be a valid integer, got: {raw_user_id!r}")
+
+raw_group_id = os.getenv('TELEGRAM_GROUP_ID')
+TELEGRAM_GROUP_ID = int(raw_group_id.strip()) if raw_group_id and raw_group_id.strip() else None
+
+# OCR Configuration: avoid Windows path default on Linux/Render
+default_tesseract = r'C:\Program Files\Tesseract-OCR\tesseract.exe' if sys.platform == 'win32' else 'tesseract'
+TESSERACT_CMD = os.getenv('TESSERACT_CMD', default_tesseract)
 DEFAULT_TIMEZONE = 'Asia/Kolkata'
+
+# Dashboard Security Token for /api/data
+DASHBOARD_TOKEN = os.getenv('DASHBOARD_TOKEN', '')
 
 # Google Gemini Vision AI Configuration
 GEMINI_API_KEY = os.getenv('GOOGLE_API_KEY') or os.getenv('GEMINI_API_KEY')
@@ -54,7 +54,12 @@ GDRIVE_CLIENT_SECRET = os.getenv('GDRIVE_CLIENT_SECRET')
 
 handlers = [logging.StreamHandler()]
 try:
-    handlers.append(logging.FileHandler(LOG_DIR / 'app.log'))
+    handlers.append(RotatingFileHandler(
+        LOG_DIR / 'app.log',
+        maxBytes=5 * 1024 * 1024, # 5 MB per file
+        backupCount=3,
+        encoding='utf-8'
+    ))
 except Exception:
     pass
 

@@ -1,6 +1,8 @@
 import unittest
 import json
 import os
+import io
+from unittest.mock import MagicMock, patch
 from config import BASE_DIR
 from database.db import setup_database
 from database.queries import (
@@ -8,6 +10,7 @@ from database.queries import (
     get_recent_transactions, get_all_transactions
 )
 from services.budget_service import get_budget_info
+from app import WebAppAndHealthHandler
 
 class TestDashboardData(unittest.TestCase):
     def setUp(self):
@@ -21,6 +24,7 @@ class TestDashboardData(unittest.TestCase):
         self.assertIn("Payment Tracker", content)
         self.assertIn("categoryChart", content)
         self.assertIn("cashflowChart", content)
+        self.assertIn("X-Dash-Token", content)
 
     def test_api_data_payload_structure(self):
         balance = get_balance_setting()
@@ -49,6 +53,73 @@ class TestDashboardData(unittest.TestCase):
         self.assertEqual(parsed['current_balance'], balance)
         self.assertIn('categories', parsed)
         self.assertIn('budget_info', parsed)
+
+    def test_handler_healthz_get(self):
+        handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
+        handler.path = '/healthz'
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        handler.wfile = io.BytesIO()
+
+        handler.do_GET()
+        handler.send_response.assert_called_with(200)
+        self.assertEqual(handler.wfile.getvalue(), b"OK")
+
+    def test_handler_healthz_head(self):
+        handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
+        handler.path = '/healthz'
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+
+        handler.do_HEAD()
+        handler.send_response.assert_called_with(200)
+
+    def test_handler_api_unauthorized_without_token(self):
+        handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
+        handler.path = '/api/data'
+        handler.headers = {}
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        handler.wfile = io.BytesIO()
+
+        with patch.dict(os.environ, {"DASHBOARD_TOKEN": "test_secret_123"}):
+            with patch("app.DASHBOARD_TOKEN", "test_secret_123"):
+                handler.do_GET()
+                handler.send_response.assert_called_with(401)
+
+    def test_handler_api_authorized_with_valid_header_token(self):
+        handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
+        handler.path = '/api/data'
+        handler.headers = {'X-Dash-Token': 'test_secret_123'}
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        handler.wfile = io.BytesIO()
+
+        with patch.dict(os.environ, {"DASHBOARD_TOKEN": "test_secret_123"}):
+            with patch("app.DASHBOARD_TOKEN", "test_secret_123"):
+                handler.do_GET()
+                handler.send_response.assert_called_with(200)
+                # Verify CORS wildcard is removed
+                for call in handler.send_header.call_args_list:
+                    self.assertNotEqual(call[0][0], 'Access-Control-Allow-Origin')
+
+    def test_handler_api_authorized_with_valid_query_token(self):
+        handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
+        handler.path = '/api/data?token=test_secret_123'
+        handler.headers = {}
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        handler.wfile = io.BytesIO()
+
+        with patch.dict(os.environ, {"DASHBOARD_TOKEN": "test_secret_123"}):
+            with patch("app.DASHBOARD_TOKEN", "test_secret_123"):
+                handler.do_GET()
+                handler.send_response.assert_called_with(200)
 
 if __name__ == '__main__':
     unittest.main()

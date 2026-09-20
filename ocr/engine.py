@@ -176,13 +176,16 @@ def extract_text_from_image(image_path: str) -> str:
             tesseract_bin = TESSERACT_CMD
 
         if tesseract_bin:
-            import pytesseract
-            pytesseract.pytesseract.tesseract_cmd = tesseract_bin
-            img = Image.open(image_path)
-            custom_config = r'--oem 3 --psm 6'
-            text = pytesseract.image_to_string(img, config=custom_config)
-            if text and text.strip():
-                return text.strip()
+            try:
+                import pytesseract
+                pytesseract.pytesseract.tesseract_cmd = tesseract_bin
+                img = Image.open(image_path)
+                custom_config = r'--oem 3 --psm 6'
+                text = pytesseract.image_to_string(img, config=custom_config)
+                if text and text.strip():
+                    return text.strip()
+            except ImportError:
+                logger.debug("pytesseract is not installed, skipping fallback.")
     except Exception as e:
         logger.error(f"Tesseract OCR Error on {image_path}: {e}")
 

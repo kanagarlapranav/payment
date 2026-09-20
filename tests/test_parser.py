@@ -490,9 +490,16 @@ class TestParsers(unittest.TestCase):
             ('Rupees Thirty Thousand Seven Hundred Only', 30700.0),
             ('₹600', 600.0),
             ('600', 600.0),
+            ('Rs500', 500.0),
+            ('Rs. 500', 500.0),
         ]
         for raw, expected in test_amounts:
             self.assertEqual(parse_amount(raw), expected, f"Failed for {raw}")
+
+    def test_rs500_edge_case_no_space(self):
+        self.assertEqual(parse_amount("Rs500"), 500.0)
+        extracted = extract_amounts_from_line("Paid Rs500 to Merchant")
+        self.assertIn(500.0, extracted)
 
     def test_supermoney_payment_successful_20(self):
         text = """

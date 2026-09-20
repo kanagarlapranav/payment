@@ -12,15 +12,20 @@ from utils.currency import format_currency, parse_amount
 from utils.dates import parse_date, get_current_time_in_tz, format_display_date
 import os
 
+def is_admin_user(update: Update) -> bool:
+    """Checks if the user is the primary bot owner (TELEGRAM_USER_ID)."""
+    if not update or not update.effective_user:
+        return False
+    return update.effective_user.id == TELEGRAM_USER_ID
+
 async def is_authorized(update: Update) -> bool:
     """Checks if the user or group is authorized to use the bot."""
-    user_id = str(update.effective_user.id) if update.effective_user else ""
-    chat_id = str(update.effective_chat.id) if update.effective_chat else ""
+    if not update:
+        return False
+    user_id = update.effective_user.id if update.effective_user else None
+    chat_id = update.effective_chat.id if update.effective_chat else None
     
-    cfg_user = str(TELEGRAM_USER_ID).strip() if TELEGRAM_USER_ID else ""
-    cfg_group = str(TELEGRAM_GROUP_ID).strip() if TELEGRAM_GROUP_ID else ""
-    
-    if user_id == cfg_user or (cfg_group and chat_id == cfg_group):
+    if user_id == TELEGRAM_USER_ID or (TELEGRAM_GROUP_ID is not None and chat_id == TELEGRAM_GROUP_ID):
         return True
         
     if update.effective_message and update.effective_chat and update.effective_chat.type == 'private':
@@ -577,10 +582,10 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Initiates interactive deletion or prompts for ID."""
     if not await is_authorized(update): return
+    if not is_admin_user(update):
+        await update.message.reply_text("❌ Only the bot owner can delete transactions.")
+        return
     from bot.keyboards import get_delete_confirm_keyboard, get_transaction_selection_keyboard
-    from services.balance_service import resequence_transaction_ids
-    
-    resequence_transaction_ids()
 
     # 1. No arguments: show list of recent transactions to tap on
     if not context.args:
@@ -634,6 +639,9 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update): return
+    if not is_admin_user(update):
+        await update.message.reply_text("❌ Only the bot owner can set the balance.")
+        return
     import asyncio
     from services.balance_service import set_explicit_balance
     from services.backup_service import backup_to_telegram
@@ -828,9 +836,11 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Provides a live link to the interactive web dashboard & visual charts."""
     if not await is_authorized(update): return
     import os
+    from config import DASHBOARD_TOKEN
     
     render_url = os.getenv("RENDER_EXTERNAL_URL", "https://payment-3-kldp.onrender.com").rstrip('/')
-    dash_url = f"{render_url}/dashboard"
+    token_param = f"?token={DASHBOARD_TOKEN}" if DASHBOARD_TOKEN else ""
+    dash_url = f"{render_url}/dashboard{token_param}"
     
     msg = (
         f"📊 <b>LIVE FINANCIAL DASHBOARD</b>\n"
