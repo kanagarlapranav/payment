@@ -19,8 +19,12 @@ def get_effective_gemini_api_key() -> str:
     """
     import ocr.gemini_vision as gv
     key = getattr(gv, 'GEMINI_API_KEY', None)
+    if key == "DISABLED" or key is False:
+        return ''
+    if not key:
+        key = os.getenv('GOOGLE_API_KEY') or os.getenv('GEMINI_API_KEY')
     fb = getattr(gv, 'FALLBACK_GEMINI_KEY', '')
-    if key is None or key == "DISABLED" or key is False:
+    if key is None:
         return fb or ''
     key = str(key).strip()
     if not key or key == REVOKED_LEAKED_KEY or key.startswith('gen-lang-client'):
