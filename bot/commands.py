@@ -10,7 +10,111 @@ from services.balance_service import get_today_summary, get_overall_summary, rec
 from services.export_service import generate_excel_report
 from utils.currency import format_currency, parse_amount
 from utils.dates import parse_date, get_current_time_in_tz, format_display_date
+from datetime import datetime
+import html
 import os
+from bot.keyboards import (
+    get_home_menu_keyboard, get_history_paginated_keyboard, get_back_to_menu_keyboard,
+    get_quick_add_keyboard, get_settings_menu_keyboard
+)
+
+def render_home_menu_text() -> str:
+    """Generates the main Home Menu dashboard card."""
+    now = datetime.now()
+    balance = get_balance_setting()
+    today_stats = get_today_summary()
+    monthly = get_monthly_summary(now.year, now.month)
+    
+    from services.budget_service import get_budget_info
+    b_info = get_budget_info(now.year, now.month)
+    
+    month_names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    m_name = month_names[now.month]
+    
+    budget_line = ""
+    if b_info.get('budget', 0) > 0:
+        budget_line = f"🎯 <b>Budget:</b> <code>{b_info['progress_bar']}</code> {b_info['percentage']:.0f}% (₹{b_info['spent']:,.0f} / ₹{b_info['budget']:,.0f})\n"
+        
+    net_today = today_stats['net_change']
+    net_sign = "+" if net_today >= 0 else "-"
+    
+    return (
+        f"⚡ <b>Payment Tracker Dashboard</b>\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"💰 <b>Balance:</b> <b>{format_currency(balance)}</b>\n"
+        f"📅 <b>Today:</b> {net_sign}{format_currency(abs(net_today))} ({today_stats['tx_count']} txs)\n"
+        f"🗓️ <b>{m_name} {now.year} Spent:</b> {format_currency(monthly['total_sent'])}\n"
+        f"{budget_line}"
+        f"━━━━━━━━━━━━━━\n"
+        f"<i>Select an option or send a receipt screenshot:</i>"
+    )
+
+def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int = 5):
+    """Renders a formatted page of transactions with navigation keyboard."""
+    from database.queries import get_transactions_paginated
+    tx_filter = filter_type if filter_type in ('SENT', 'RECEIVED') else None
+    data = get_transactions_paginated(page=page, page_size=page_size, tx_type=tx_filter)
+    
+    items = data['transactions']
+    total_pages = data['total_pages']
+    total_count = data['total_count']
+    
+    if not items:
+        text = "🧾 <b>Transaction History</b>\n━━━━━━━━━━━━━━\n<i>No transactions found for this filter.</i>"
+        return text, get_back_to_menu_keyboard()
+        
+    lines = [
+        f"🧾 <b>Transaction History ({filter_type})</b>",
+        f"<i>Page {page} of {total_pages} ({total_count} records)</i>",
+        "━━━━━━━━━━━━━━"
+    ]
+    
+    for t in items:
+        is_recv = t['transaction_type'] == 'RECEIVED'
+        badge = "🟢" if is_recv else "🔴"
+        arrow = "+" if is_recv else "-"
+        amt = format_currency(t['amount'])
+        person = t.get('person_name') or 'Unknown'
+        cat = t.get('category') or 'General'
+        date_val = t.get('transaction_date') or 'Today'
+        bal = format_currency(t.get('balance_after', 0))
+        
+        lines.append(
+            f"<b>#{t['id']}</b> {badge} <b>{arrow}{amt}</b> — {html.escape(person)}\n"
+            f"   🏷 {html.escape(cat)} | 📅 {date_val}\n"
+            f"   💼 Bal: <code>{bal}</code>\n"
+        )
+    
+    lines.append("━━━━━━━━━━━━━━")
+    return "\n".join(lines), get_history_paginated_keyboard(page, total_pages, filter_type)
+
+def render_contacts_ledger_text() -> str:
+    """Generates the Contact Ledger overview."""
+    from database.queries import get_contact_ledger
+    contacts = get_contact_ledger()
+    if not contacts:
+        return "👥 <b>Contact Ledger</b>\n━━━━━━━━━━━━━━\nNo contact transactions recorded yet."
+        
+    lines = [
+        "👥 <b>Contact Ledger & Counterparties</b>",
+        "━━━━━━━━━━━━━━"
+    ]
+    for c in contacts[:10]:
+        net = c['net_balance']
+        if net > 0:
+            net_str = f"🟢 Owed to you: +{format_currency(net)}"
+        elif net < 0:
+            net_str = f"🔴 You spent: -{format_currency(abs(net))}"
+        else:
+            net_str = "⚪ Settled: ₹0.00"
+            
+        lines.append(
+            f"👤 <b>{html.escape(c['name'])}</b> ({c['tx_count']} txs)\n"
+            f"   💸 Sent: {format_currency(c['total_sent'])} | Received: {format_currency(c['total_received'])}\n"
+            f"   {net_str}\n"
+        )
+    lines.append("━━━━━━━━━━━━━━")
+    return "\n".join(lines)
 
 def is_admin_user(update: Update) -> bool:
     """Checks if the user is the primary bot owner (TELEGRAM_USER_ID)."""
@@ -33,9 +137,10 @@ async def is_authorized(update: Update) -> bool:
     return False
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Sends a welcome message and comprehensive help instructions."""
+    """Sends the interactive Home Menu card and button grid."""
     if not await is_authorized(update): return
-    await help_command(update, context)
+    menu_text = render_home_menu_text()
+    await update.message.reply_text(menu_text, reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
 
 async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Returns the chat ID for group configuration."""
@@ -125,14 +230,19 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_authorized(update): return
 
-    # If user asks for IDs explicitly e.g. /history ids or /history details
-    if context.args and context.args[0].lower() in ('ids', 'id', 'details', 'full'):
+    # If user asks for IDs or full list explicitly e.g. /history ids, /history full
+    if context.args and context.args[0].lower() in ('ids', 'id', 'details'):
         await details_command(update, context)
         return
-
+        
     from services.balance_service import resequence_transaction_ids
     resequence_transaction_ids()
     recalculate_all_balances()
+
+    if not context.args or context.args[0].lower() not in ('full', 'all'):
+        text, markup = render_history_page(page=1, filter_type="ALL", page_size=5)
+        await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
+        return
 
     transactions = get_all_transactions_asc()
     if not transactions:
@@ -833,24 +943,27 @@ async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(digest_text, parse_mode='HTML')
 
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Provides a live link to the interactive web dashboard & visual charts."""
+    """Provides a live link to the interactive web dashboard & visual charts via WebApp."""
     if not await is_authorized(update): return
     import os
     from config import DASHBOARD_TOKEN
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
     
-    render_url = os.getenv("RENDER_EXTERNAL_URL", "https://payment-3-kldp.onrender.com").rstrip('/')
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "https://payment-tracker-3r8w.onrender.com").rstrip('/')
     token_param = f"?token={DASHBOARD_TOKEN}" if DASHBOARD_TOKEN else ""
     dash_url = f"{render_url}/dashboard{token_param}"
     
     msg = (
         f"📊 <b>LIVE FINANCIAL DASHBOARD</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"View your interactive Dark-Mode Charts, Donut Category Breakdowns, and Cash Flow Graphs:\n\n"
-        f"🔗 <a href=\"{dash_url}\"><b>Open Web Dashboard</b></a>\n"
-        f"<code>{dash_url}</code>\n\n"
-        f"<i>✨ Features: Live sync, Chart.js visualizations, Category distribution, & recent activity.</i>"
+        f"Tap <b>Open Dashboard</b> below to view interactive charts, month switcher, category donut breakdowns, top payees, and spending heatmaps right inside Telegram!\n\n"
+        f"🔗 <code>{dash_url}</code>"
     )
-    await update.message.reply_text(msg, parse_mode='HTML', disable_web_page_preview=False)
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Open Dashboard", web_app=WebAppInfo(url=dash_url))],
+        [InlineKeyboardButton("🌐 Open in Browser", url=dash_url)]
+    ])
+    await update.message.reply_text(msg, reply_markup=markup, parse_mode='HTML')
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the full vegetarian cafeteria menu with prices & add-ons."""

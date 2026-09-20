@@ -341,3 +341,256 @@ def get_cafeteria_transactions(limit: int = 50):
         return [dict(row) for row in cursor.fetchall()]
 
 
+# --- Payee Category Memory ---
+
+def get_payee_category(payee_name: str) -> str | None:
+    """Retrieves remembered category for a payee if available."""
+    if not payee_name or not payee_name.strip():
+        return None
+    normalized = payee_name.strip().lower()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT category FROM payee_categories WHERE lower(payee_name) = ?", (normalized,))
+        row = cursor.fetchone()
+        if row:
+            return row['category']
+        # Also check existing transactions history as fallback
+        cursor.execute("""
+            SELECT category FROM transactions 
+            WHERE lower(person_name) = ? AND category IS NOT NULL AND category != 'General'
+            ORDER BY id DESC LIMIT 1
+        """, (normalized,))
+        t_row = cursor.fetchone()
+        return t_row['category'] if t_row else None
+
+def remember_payee_category(payee_name: str, category: str):
+    """Upserts payee -> category preference in payee_categories."""
+    if not payee_name or not category or not payee_name.strip():
+        return
+    normalized = payee_name.strip().lower()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO payee_categories (payee_name, category, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(payee_name) DO UPDATE SET
+                category = excluded.category,
+                updated_at = CURRENT_TIMESTAMP
+        """, (normalized, category))
+        conn.commit()
+
+
+# --- Duplicate Detection ---
+
+def find_potential_duplicate(amount: float, reference_number: str = None, person_name: str = None, tx_date: str = None):
+    """Checks if a similar transaction already exists (by reference number or amount/payee/date)."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Check by reference number first (strongest indicator)
+        if reference_number and len(str(reference_number).strip()) > 3:
+            clean_ref = str(reference_number).strip()
+            cursor.execute("SELECT * FROM transactions WHERE reference_number = ? ORDER BY id DESC LIMIT 1", (clean_ref,))
+            row = cursor.fetchone()
+            if row:
+                res = dict(row)
+                res['match_reason'] = f"same ref …{clean_ref[-4:]}"
+                return res
+        
+        # Check by amount and person within same date or near date
+        if amount and amount > 0:
+            if person_name and person_name.strip():
+                clean_person = person_name.strip().lower()
+                if tx_date:
+                    cursor.execute("""
+                        SELECT * FROM transactions 
+                        WHERE abs(amount - ?) < 0.01 
+                          AND lower(person_name) LIKE ?
+                          AND abs(julianday(transaction_date) - julianday(?)) <= 2
+                        ORDER BY id DESC LIMIT 1
+                    """, (float(amount), f"%{clean_person}%", tx_date))
+                else:
+                    cursor.execute("""
+                        SELECT * FROM transactions 
+                        WHERE abs(amount - ?) < 0.01 
+                          AND lower(person_name) LIKE ?
+                        ORDER BY id DESC LIMIT 1
+                    """, (float(amount), f"%{clean_person}%"))
+                row = cursor.fetchone()
+                if row:
+                    res = dict(row)
+                    res['match_reason'] = f"same amount ₹{amount:.0f} to {res.get('person_name')}"
+                    return res
+        return None
+
+
+# --- Top Payees & Daily Series ---
+
+def get_top_payees(limit: int = 5, year: int = None, month: int = None):
+    """Fetches top payees by total spent."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        query = """
+            SELECT 
+                person_name,
+                SUM(amount) as total_amount,
+                COUNT(*) as count,
+                MAX(category) as primary_category
+            FROM transactions
+            WHERE transaction_type = 'SENT' 
+              AND person_name IS NOT NULL 
+              AND TRIM(person_name) != ''
+              AND person_name != 'Unknown'
+        """
+        params = []
+        if year and month:
+            query += " AND strftime('%Y-%m', transaction_date) = ?"
+            params.append(f"{year:04d}-{month:02d}")
+        elif year:
+            query += " AND strftime('%Y', transaction_date) = ?"
+            params.append(str(year))
+            
+        query += " GROUP BY person_name ORDER BY total_amount DESC LIMIT ?"
+        params.append(limit)
+        
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+def get_daily_spend_series(year: int, month: int):
+    """Returns daily spending and income series for a month for charts and heatmaps."""
+    month_str = f"{year:04d}-{month:02d}"
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                transaction_date as date,
+                SUM(CASE WHEN transaction_type = 'SENT' THEN amount ELSE 0 END) as spent,
+                SUM(CASE WHEN transaction_type = 'RECEIVED' THEN amount ELSE 0 END) as received,
+                COUNT(*) as count
+            FROM transactions
+            WHERE strftime('%Y-%m', transaction_date) = ?
+            GROUP BY transaction_date
+            ORDER BY transaction_date ASC
+        """, (month_str,))
+        return [dict(row) for row in cursor.fetchall()]
+
+def get_month_comparison_stats(year: int, month: int):
+    """Calculates current month totals and previous month totals for month-over-month deltas."""
+    current_summary = get_monthly_summary(year, month)
+    
+    # Previous month calculation
+    if month == 1:
+        prev_year = year - 1
+        prev_month = 12
+    else:
+        prev_year = year
+        prev_month = month - 1
+        
+    prev_summary = get_monthly_summary(prev_year, prev_month)
+    
+    def calc_delta(curr, prev):
+        if prev > 0:
+            pct = ((curr - prev) / prev) * 100
+            diff = curr - prev
+            return {'diff': diff, 'pct': round(pct, 1), 'direction': 'up' if diff > 0 else ('down' if diff < 0 else 'flat')}
+        elif curr > 0:
+            return {'diff': curr, 'pct': 100.0, 'direction': 'up'}
+        return {'diff': 0.0, 'pct': 0.0, 'direction': 'flat'}
+
+    return {
+        'current': current_summary,
+        'previous': prev_summary,
+        'prev_period': f"{prev_year:04d}-{prev_month:02d}",
+        'spent_delta': calc_delta(current_summary['total_sent'], prev_summary['total_sent']),
+        'received_delta': calc_delta(current_summary['total_received'], prev_summary['total_received']),
+        'net_delta': calc_delta(current_summary['net_savings'], prev_summary['net_savings'])
+    }
+
+def get_transactions_paginated(page: int = 1, page_size: int = 25, search: str = None, category: str = None, tx_type: str = None, year: int = None, month: int = None):
+    """Fetches paginated transactions with optional filters."""
+    conditions = []
+    params = []
+    
+    if search and search.strip():
+        s = f"%{search.strip()}%"
+        conditions.append("(person_name LIKE ? OR category LIKE ? OR reference_number LIKE ? OR payment_app LIKE ?)")
+        params.extend([s, s, s, s])
+        
+    if category and category.strip() and category.lower() != 'all':
+        conditions.append("category = ?")
+        params.append(category.strip())
+        
+    if tx_type and tx_type.strip() and tx_type.upper() in ('SENT', 'RECEIVED'):
+        conditions.append("transaction_type = ?")
+        params.append(tx_type.upper())
+        
+    if year and month:
+        conditions.append("strftime('%Y-%m', transaction_date) = ?")
+        params.append(f"{year:04d}-{month:02d}")
+    elif year:
+        conditions.append("strftime('%Y', transaction_date) = ?")
+        params.append(str(year))
+        
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        # Count total matching
+        cursor.execute(f"SELECT COUNT(*) as total FROM transactions {where_clause}", params)
+        total_count = cursor.fetchone()['total']
+        
+        # Paginated items
+        offset = (page - 1) * page_size
+        paginated_params = params + [page_size, offset]
+        cursor.execute(f"""
+            SELECT * FROM transactions 
+            {where_clause}
+            ORDER BY transaction_date DESC, created_at DESC, id DESC
+            LIMIT ? OFFSET ?
+        """, paginated_params)
+        items = [dict(r) for r in cursor.fetchall()]
+        
+        total_pages = max(1, (total_count + page_size - 1) // page_size)
+        return {
+            'transactions': items,
+            'total_count': total_count,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': total_pages
+        }
+
+def get_contact_ledger():
+    """Aggregates all transactions by contact/payee, normalizing names and showing net balance."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                person_name,
+                COUNT(*) as total_transactions,
+                SUM(CASE WHEN transaction_type = 'SENT' THEN amount ELSE 0 END) as total_sent,
+                SUM(CASE WHEN transaction_type = 'RECEIVED' THEN amount ELSE 0 END) as total_received,
+                MAX(transaction_date) as last_transaction_date,
+                MAX(category) as primary_category
+            FROM transactions
+            WHERE person_name IS NOT NULL AND TRIM(person_name) != '' AND person_name != 'Unknown'
+            GROUP BY lower(TRIM(person_name))
+            ORDER BY (SUM(CASE WHEN transaction_type = 'SENT' THEN amount ELSE 0 END) + SUM(CASE WHEN transaction_type = 'RECEIVED' THEN amount ELSE 0 END)) DESC
+        """)
+        rows = cursor.fetchall()
+        contacts = []
+        for r in rows:
+            sent = float(r['total_sent'] or 0.0)
+            received = float(r['total_received'] or 0.0)
+            contacts.append({
+                'name': r['person_name'],
+                'tx_count': r['total_transactions'],
+                'total_sent': sent,
+                'total_received': received,
+                'net_balance': received - sent, # Positive means they gave you more than you gave them
+                'last_date': r['last_transaction_date'],
+                'category': r['primary_category'] or 'General'
+            })
+        return contacts
+
+
+

@@ -2,15 +2,17 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payment Tracker — Financial Analytics Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Payment Tracker — Financial Analytics</title>
+    <!-- Telegram WebApp SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-base: #0a0e17;
-            --bg-card: rgba(23, 32, 54, 0.7);
-            --bg-card-hover: rgba(30, 42, 70, 0.85);
+            --bg-card: rgba(23, 32, 54, 0.75);
+            --bg-card-hover: rgba(30, 42, 70, 0.9);
             --border-card: rgba(255, 255, 255, 0.08);
             --text-main: #f3f4f6;
             --text-muted: #94a3b8;
@@ -22,53 +24,61 @@
             --glass-blur: blur(16px);
         }
 
+        body.tg-theme {
+            --bg-base: var(--tg-theme-bg-color, #0a0e17);
+            --text-main: var(--tg-theme-text-color, #f3f4f6);
+            --text-muted: var(--tg-theme-hint-color, #94a3b8);
+            --accent-blue: var(--tg-theme-button-color, #3b82f6);
+        }
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
             font-family: 'Outfit', sans-serif;
+            -webkit-tap-highlight-color: transparent;
         }
 
         body {
             background-color: var(--bg-base);
             background-image: 
-                radial-gradient(circle at 10% 20%, rgba(59, 130, 246, 0.12) 0%, transparent 40%),
-                radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.12) 0%, transparent 40%);
+                radial-gradient(circle at 10% 15%, rgba(59, 130, 246, 0.12) 0%, transparent 40%),
+                radial-gradient(circle at 90% 85%, rgba(139, 92, 246, 0.12) 0%, transparent 40%);
             color: var(--text-main);
             min-height: 100vh;
-            padding: 24px 16px;
+            padding: 16px 12px 32px 12px;
         }
 
         .container {
-            max-width: 1200px;
+            max-width: 1050px;
             margin: 0 auto;
         }
 
-        /* Header */
+        /* Top Header */
         header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 28px;
+            margin-bottom: 18px;
             flex-wrap: wrap;
-            gap: 16px;
+            gap: 12px;
         }
 
         .header-title h1 {
-            font-size: 26px;
+            font-size: 22px;
             font-weight: 700;
             background: linear-gradient(135deg, #60a5fa 0%, #c084fc 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
         }
 
         .header-title p {
             color: var(--text-muted);
-            font-size: 14px;
-            margin-top: 4px;
+            font-size: 13px;
+            margin-top: 3px;
         }
 
         .badge-live {
@@ -78,18 +88,18 @@
             background: rgba(16, 185, 129, 0.15);
             border: 1px solid rgba(16, 185, 129, 0.3);
             color: var(--accent-green);
-            padding: 6px 14px;
+            padding: 5px 12px;
             border-radius: 9999px;
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 500;
         }
 
         .pulse-dot {
-            width: 8px;
-            height: 8px;
+            width: 7px;
+            height: 7px;
             background-color: var(--accent-green);
             border-radius: 50%;
-            box-shadow: 0 0 10px var(--accent-green);
+            box-shadow: 0 0 8px var(--accent-green);
             animation: pulse 2s infinite;
         }
 
@@ -99,21 +109,65 @@
             100% { opacity: 1; transform: scale(1); }
         }
 
-        /* Metric Cards Grid */
+        /* Month Switcher Bar */
+        .month-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-card);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--border-card);
+            border-radius: 14px;
+            padding: 8px 14px;
+            margin-bottom: 20px;
+        }
+
+        .month-btn {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border-card);
+            color: var(--text-main);
+            padding: 6px 14px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: all 0.2s ease;
+        }
+
+        .month-btn:hover {
+            background: rgba(255, 255, 255, 0.12);
+        }
+
+        .month-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        /* 4 KPI Cards Grid */
         .metrics-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 18px;
-            margin-bottom: 28px;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-bottom: 22px;
+        }
+
+        @media (min-width: 768px) {
+            .metrics-grid {
+                grid-template-columns: repeat(4, 1fr);
+                gap: 16px;
+            }
         }
 
         .metric-card {
             background: var(--bg-card);
             backdrop-filter: var(--glass-blur);
-            -webkit-backdrop-filter: var(--glass-blur);
             border: 1px solid var(--border-card);
             border-radius: 16px;
-            padding: 20px;
+            padding: 16px;
+            position: relative;
             transition: transform 0.2s ease, border-color 0.2s ease;
         }
 
@@ -124,19 +178,20 @@
 
         .metric-label {
             color: var(--text-muted);
-            font-size: 13px;
-            font-weight: 500;
+            font-size: 11px;
+            font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
 
         .metric-value {
-            font-size: 26px;
+            font-size: 22px;
             font-weight: 700;
+            letter-spacing: -0.5px;
         }
 
         .val-green { color: var(--accent-green); }
@@ -144,105 +199,269 @@
         .val-blue { color: var(--accent-blue); }
         .val-purple { color: var(--accent-purple); }
 
-        .progress-container {
-            margin-top: 10px;
-            background: rgba(255, 255, 255, 0.08);
-            border-radius: 8px;
-            height: 8px;
-            overflow: hidden;
+        .delta-tag {
+            font-size: 11px;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            margin-top: 6px;
+            padding: 2px 7px;
+            border-radius: 6px;
         }
 
-        .progress-bar {
-            height: 100%;
-            background: linear-gradient(90deg, #3b82f6, #8b5cf6);
-            border-radius: 8px;
-            transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-        }
+        .delta-up-red { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+        .delta-down-green { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+        .delta-up-green { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+        .delta-flat { background: rgba(255, 255, 255, 0.08); color: var(--text-muted); }
 
-        /* Charts Section */
+        /* Charts Grid */
         .charts-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-            gap: 20px;
-            margin-bottom: 28px;
+            grid-template-columns: 1fr;
+            gap: 16px;
+            margin-bottom: 22px;
+        }
+
+        @media (min-width: 768px) {
+            .charts-grid {
+                grid-template-columns: 1fr 1fr;
+            }
         }
 
         .chart-card {
             background: var(--bg-card);
             backdrop-filter: var(--glass-blur);
-            -webkit-backdrop-filter: var(--glass-blur);
             border: 1px solid var(--border-card);
             border-radius: 16px;
-            padding: 22px;
+            padding: 18px;
         }
 
         .chart-card h3 {
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 600;
-            margin-bottom: 16px;
+            margin-bottom: 14px;
             display: flex;
             align-items: center;
             gap: 8px;
+            color: #e2e8f0;
         }
 
         .chart-wrapper {
             position: relative;
-            height: 280px;
+            height: 250px;
             width: 100%;
         }
 
-        /* Table Section */
+        /* Calendar Heatmap */
+        .heatmap-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 6px;
+        }
+
+        .heatmap-header {
+            text-align: center;
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 600;
+            padding-bottom: 4px;
+        }
+
+        .heatmap-day {
+            aspect-ratio: 1;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            cursor: pointer;
+            transition: transform 0.15s ease;
+        }
+
+        .heatmap-day:hover {
+            transform: scale(1.08);
+            z-index: 2;
+        }
+
+        .heatmap-day.empty { opacity: 0.15; cursor: default; }
+        .heatmap-day.lvl-0 { background: rgba(255, 255, 255, 0.04); }
+        .heatmap-day.lvl-1 { background: rgba(139, 92, 246, 0.25); border-color: rgba(139, 92, 246, 0.4); }
+        .heatmap-day.lvl-2 { background: rgba(139, 92, 246, 0.50); border-color: rgba(139, 92, 246, 0.7); }
+        .heatmap-day.lvl-3 { background: rgba(239, 68, 68, 0.65); border-color: rgba(239, 68, 68, 0.9); }
+
+        .heatmap-day-num { font-weight: 600; }
+        .heatmap-day-amt { font-size: 9px; color: rgba(255, 255, 255, 0.85); margin-top: 1px; }
+
+        /* Top Payees Leaderboard */
+        .payees-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .payee-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 10px;
+            padding: 10px 14px;
+        }
+
+        .payee-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .payee-rank {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: rgba(139, 92, 246, 0.2);
+            color: #c084fc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .payee-name { font-size: 13px; font-weight: 600; }
+        .payee-cat { font-size: 11px; color: var(--text-muted); }
+        .payee-amt { font-size: 14px; font-weight: 700; color: var(--accent-red); }
+
+        /* Transactions Table Section */
         .table-card {
             background: var(--bg-card);
             backdrop-filter: var(--glass-blur);
             border: 1px solid var(--border-card);
             border-radius: 16px;
-            padding: 22px;
-            overflow-x: auto;
+            padding: 18px;
+            overflow: hidden;
         }
 
-        .table-card h3 {
-            font-size: 16px;
+        .table-header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .table-header-row h3 {
+            font-size: 15px;
             font-weight: 600;
-            margin-bottom: 16px;
             display: flex;
             align-items: center;
             gap: 8px;
+        }
+
+        .filter-controls {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .search-box {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border-card);
+            color: var(--text-main);
+            padding: 6px 12px;
+            border-radius: 10px;
+            font-size: 13px;
+            outline: none;
+            width: 140px;
+            transition: width 0.2s ease;
+        }
+
+        .search-box:focus {
+            width: 180px;
+            border-color: var(--accent-blue);
+        }
+
+        .chip-group {
+            display: inline-flex;
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
+            padding: 2px;
+        }
+
+        .chip {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 4px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .chip.active {
+            background: var(--accent-blue);
+            color: #fff;
+        }
+
+        .csv-btn {
+            background: rgba(16, 185, 129, 0.15);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: var(--accent-green);
+            padding: 5px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .table-scroll {
+            overflow-x: auto;
+            margin-top: 10px;
         }
 
         table {
             width: 100%;
             border-collapse: collapse;
             text-align: left;
+            font-size: 13px;
         }
 
         th {
             color: var(--text-muted);
-            font-size: 13px;
-            font-weight: 500;
-            padding: 12px 14px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 10px 12px;
             border-bottom: 1px solid var(--border-card);
         }
 
         td {
-            padding: 14px;
-            font-size: 14px;
+            padding: 12px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-        }
-
-        tr:last-child td {
-            border-bottom: none;
+            cursor: pointer;
         }
 
         tr:hover td {
-            background: rgba(255, 255, 255, 0.02);
+            background: rgba(255, 255, 255, 0.03);
         }
 
         .pill {
             display: inline-block;
-            padding: 4px 10px;
-            border-radius: 8px;
-            font-size: 12px;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 11px;
             font-weight: 600;
         }
 
@@ -261,29 +480,103 @@
         .pill-category {
             background: rgba(139, 92, 246, 0.15);
             color: #c084fc;
-            border: 1px solid rgba(139, 92, 246, 0.3);
         }
+
+        /* Detail Drawer / Modal */
+        .drawer-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(4px);
+            display: none;
+            align-items: flex-end;
+            justify-content: center;
+            z-index: 100;
+        }
+
+        @media (min-width: 600px) {
+            .drawer-overlay {
+                align-items: center;
+            }
+        }
+
+        .drawer-content {
+            background: #111827;
+            border: 1px solid var(--border-card);
+            border-radius: 20px 20px 0 0;
+            width: 100%;
+            max-width: 480px;
+            padding: 24px;
+            animation: slideUp 0.25s ease-out;
+        }
+
+        @media (min-width: 600px) {
+            .drawer-content {
+                border-radius: 20px;
+            }
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(100%); }
+            to { transform: translateY(0); }
+        }
+
+        .drawer-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 18px;
+        }
+
+        .drawer-header h4 {
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .drawer-close {
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: var(--text-main);
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .drawer-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 13px;
+        }
+
+        .drawer-row:last-child {
+            border-bottom: none;
+        }
+
+        .drawer-lbl { color: var(--text-muted); }
+        .drawer-val { font-weight: 600; text-align: right; }
 
         footer {
             text-align: center;
             color: var(--text-muted);
-            font-size: 13px;
-            margin-top: 36px;
-            padding-bottom: 16px;
-        }
-
-        @media (max-width: 600px) {
-            .charts-grid {
-                grid-template-columns: 1fr;
-            }
-            .header-title h1 {
-                font-size: 22px;
-            }
+            font-size: 12px;
+            margin-top: 28px;
+            padding-bottom: 12px;
         }
     </style>
 </head>
 <body>
     <div class="container">
+        <!-- Header -->
         <header>
             <div class="header-title">
                 <h1>⚡ Payment Tracker Analytics</h1>
@@ -295,7 +588,14 @@
             </div>
         </header>
 
-        <!-- Metric Cards -->
+        <!-- Month Switcher -->
+        <div class="month-bar">
+            <button class="month-btn" id="btn-prev-month" onclick="changeMonth(-1)">◀ Prev</button>
+            <div class="month-title" id="month-display">September 2026</div>
+            <button class="month-btn" id="btn-next-month" onclick="changeMonth(1)">Next ▶</button>
+        </div>
+
+        <!-- 4 KPI Cards -->
         <div class="metrics-grid">
             <div class="metric-card">
                 <div class="metric-label">
@@ -303,13 +603,7 @@
                     <span>💼</span>
                 </div>
                 <div class="metric-value val-blue" id="val-balance">₹0.00</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">
-                    <span>Monthly Income</span>
-                    <span>📈</span>
-                </div>
-                <div class="metric-value val-green" id="val-income">₹0.00</div>
+                <div class="delta-tag delta-flat" id="tag-balance">Live Ledger</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">
@@ -317,20 +611,27 @@
                     <span>📉</span>
                 </div>
                 <div class="metric-value val-red" id="val-spent">₹0.00</div>
+                <div class="delta-tag delta-flat" id="tag-spent">vs last month</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">
-                    <span id="budget-title">Monthly Budget</span>
+                    <span>Monthly Received</span>
+                    <span>📈</span>
+                </div>
+                <div class="metric-value val-green" id="val-income">₹0.00</div>
+                <div class="delta-tag delta-flat" id="tag-income">vs last month</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">
+                    <span>Net Savings</span>
                     <span>🎯</span>
                 </div>
-                <div class="metric-value val-purple" id="val-budget">₹0.00</div>
-                <div class="progress-container">
-                    <div class="progress-bar" id="budget-bar" style="width: 0%;"></div>
-                </div>
+                <div class="metric-value val-purple" id="val-net">₹0.00</div>
+                <div class="delta-tag delta-flat" id="tag-net">Cash Flow</div>
             </div>
         </div>
 
-        <!-- Charts Section -->
+        <!-- Charts Grid (Donut & Cashflow / Daily Bars) -->
         <div class="charts-grid">
             <div class="chart-card">
                 <h3>🏷️ Spending by Category</h3>
@@ -339,42 +640,99 @@
                 </div>
             </div>
             <div class="chart-card">
-                <h3>📊 Cash Flow Breakdown</h3>
+                <h3>📊 Cash Flow & Daily Spending</h3>
                 <div class="chart-wrapper">
                     <canvas id="cashflowChart"></canvas>
                 </div>
             </div>
         </div>
 
-        <!-- Recent Activity Table -->
+        <!-- Calendar Heatmap & Top Payees -->
+        <div class="charts-grid">
+            <div class="chart-card">
+                <h3>🗓️ Spending Heatmap</h3>
+                <div class="heatmap-grid" id="heatmap-container">
+                    <!-- Injected -->
+                </div>
+            </div>
+            <div class="chart-card">
+                <h3>👤 Top 5 Payees</h3>
+                <div class="payees-list" id="payees-container">
+                    <!-- Injected -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Transactions Table -->
         <div class="table-card">
-            <h3>📝 Recent Transactions</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Date</th>
-                        <th>Type</th>
-                        <th>Person / Payee</th>
-                        <th>Category</th>
-                        <th>Amount</th>
-                        <th>Balance After</th>
-                    </tr>
-                </thead>
-                <tbody id="tx-tbody">
-                    <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Loading transactions...</td></tr>
-                </tbody>
-            </table>
+            <div class="table-header-row">
+                <h3>🧾 Transactions Ledger</h3>
+                <div class="filter-controls">
+                    <input type="text" class="search-box" id="table-search" placeholder="Search payee, ref…" oninput="filterTransactions()">
+                    <div class="chip-group">
+                        <button class="chip active" id="chip-all" onclick="setTypeFilter('ALL')">All</button>
+                        <button class="chip" id="chip-sent" onclick="setTypeFilter('SENT')">🔴 Sent</button>
+                        <button class="chip" id="chip-recv" onclick="setTypeFilter('RECEIVED')">🟢 Recv</button>
+                    </div>
+                    <a href="#" class="csv-btn" id="csv-export-link" onclick="downloadCSV()">📥 CSV</a>
+                </div>
+            </div>
+
+            <div class="table-scroll">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#ID</th>
+                            <th>Date</th>
+                            <th>Type</th>
+                            <th>Payee / Counterparty</th>
+                            <th>Category</th>
+                            <th>Amount</th>
+                            <th>Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tx-tbody">
+                        <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 20px;">Loading transactions...</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <footer>
-            Payment Tracker &copy; 2026 &bull; Real-time Telegram Financial Engine &bull; Refreshed dynamically
+            Payment Tracker &bull; Telegram WebApp Integrated &bull; Real-time Financial Engine
         </footer>
     </div>
 
+    <!-- Transaction Detail Drawer -->
+    <div class="drawer-overlay" id="detail-drawer" onclick="closeDrawer(event)">
+        <div class="drawer-content" onclick="event.stopPropagation()">
+            <div class="drawer-header">
+                <h4 id="d-title">Transaction Details</h4>
+                <button class="drawer-close" onclick="closeDrawer()">✕</button>
+            </div>
+            <div id="drawer-body">
+                <!-- Injected -->
+            </div>
+        </div>
+    </div>
+
     <script>
+        // Telegram WebApp Initialization
+        if (window.Telegram && window.Telegram.WebApp) {
+            const tg = window.Telegram.WebApp;
+            tg.ready();
+            tg.expand();
+            if (tg.colorScheme) {
+                document.body.classList.add('tg-theme');
+            }
+        }
+
+        let currentYear = 2026;
+        let currentMonth = 9;
         let categoryChartInstance = null;
         let cashflowChartInstance = null;
+        let allCurrentTransactions = [];
+        let currentTypeFilter = 'ALL';
 
         function getDashboardToken() {
             const urlParams = new URLSearchParams(window.location.search);
@@ -386,19 +744,25 @@
             return localStorage.getItem('dashboard_token') || '';
         }
 
+        function formatINR(num) {
+            return '₹' + Number(num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function formatINRShort(num) {
+            return '₹' + Number(num || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+        }
+
         async function fetchDashboardData() {
             try {
                 const token = getDashboardToken();
                 const headers = { 'Accept': 'application/json' };
-                if (token) {
-                    headers['X-Dash-Token'] = token;
-                }
+                if (token) headers['X-Dash-Token'] = token;
 
-                const endpoint = token ? `/api/data?token=${encodeURIComponent(token)}` : '/api/data';
+                const endpoint = `/api/data?year=${currentYear}&month=${currentMonth}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
                 const res = await fetch(endpoint, { headers });
 
                 if (res.status === 401) {
-                    const entered = prompt("🔒 Protected Dashboard API\nPlease enter your DASHBOARD_TOKEN:");
+                    const entered = prompt("🔒 Protected Dashboard API\nPlease enter DASHBOARD_TOKEN:");
                     if (entered && entered.trim()) {
                         localStorage.setItem('dashboard_token', entered.trim());
                         return fetchDashboardData();
@@ -407,51 +771,103 @@
                     return;
                 }
 
-                if (!res.ok) {
-                    throw new Error(`HTTP ${res.status}`);
-                }
-
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
                 renderDashboard(data);
             } catch (err) {
-                console.error("Failed to load dashboard data:", err);
+                console.error("Dashboard error:", err);
             }
         }
 
+        function changeMonth(delta) {
+            currentMonth += delta;
+            if (currentMonth > 12) {
+                currentMonth = 1;
+                currentYear++;
+            } else if (currentMonth < 1) {
+                currentMonth = 12;
+                currentYear--;
+            }
+            fetchDashboardData();
+        }
+
         function renderDashboard(data) {
-            document.getElementById('sub-header').innerText = `Period: ${data.period_name} • ${data.total_transactions} total transactions recorded`;
-            document.getElementById('val-balance').innerText = `₹${data.current_balance.toLocaleString('en-IN', {minimumFractionDigits: 2})}`;
-            document.getElementById('val-income').innerText = `+₹${data.total_received.toLocaleString('en-IN', {minimumFractionDigits: 2})}`;
-            document.getElementById('val-spent').innerText = `-₹${data.total_spent.toLocaleString('en-IN', {minimumFractionDigits: 2})}`;
-            
-            if (data.budget_info.budget > 0) {
-                document.getElementById('val-budget').innerText = `₹${data.budget_info.spent.toLocaleString('en-IN', {minimumFractionDigits: 2})} / ₹${data.budget_info.budget.toLocaleString('en-IN', {minimumFractionDigits: 0})}`;
-                const pct = Math.min(100, Math.max(0, data.budget_info.percentage));
-                document.getElementById('budget-bar').style.width = `${pct}%`;
-                if (pct > 90) {
-                    document.getElementById('budget-bar').style.background = '#ef4444';
+            currentYear = data.year;
+            currentMonth = data.month;
+            allCurrentTransactions = data.recent_transactions || [];
+
+            // Header & Month
+            document.getElementById('month-display').innerText = data.period_name;
+            document.getElementById('sub-header').innerText = `${data.month_transactions_count || 0} monthly transactions recorded • Last synced ${new Date().toLocaleTimeString('en-IN')}`;
+
+            // KPI Cards
+            document.getElementById('val-balance').innerText = formatINR(data.current_balance);
+            document.getElementById('val-spent').innerText = formatINR(data.total_spent);
+            document.getElementById('val-income').innerText = formatINR(data.total_received);
+            document.getElementById('val-net').innerText = formatINR(data.net_savings);
+
+            // Month-over-month deltas
+            const cmp = data.comparison;
+            if (cmp) {
+                const sDelta = cmp.spent_delta;
+                const rDelta = cmp.received_delta;
+                
+                const spentTag = document.getElementById('tag-spent');
+                if (sDelta.direction === 'up') {
+                    spentTag.className = 'delta-tag delta-up-red';
+                    spentTag.innerText = `▲ ${sDelta.pct}% vs last month`;
+                } else if (sDelta.direction === 'down') {
+                    spentTag.className = 'delta-tag delta-down-green';
+                    spentTag.innerText = `▼ ${Math.abs(sDelta.pct)}% vs last month`;
+                } else {
+                    spentTag.className = 'delta-tag delta-flat';
+                    spentTag.innerText = `Flat vs last month`;
                 }
-            } else {
-                document.getElementById('val-budget').innerText = "Not Set";
-                document.getElementById('budget-bar').style.width = "0%";
+
+                const incTag = document.getElementById('tag-income');
+                if (rDelta.direction === 'up') {
+                    incTag.className = 'delta-tag delta-up-green';
+                    incTag.innerText = `▲ ${rDelta.pct}% vs last month`;
+                } else if (rDelta.direction === 'down') {
+                    incTag.className = 'delta-tag delta-up-red';
+                    incTag.innerText = `▼ ${Math.abs(rDelta.pct)}% vs last month`;
+                } else {
+                    incTag.className = 'delta-tag delta-flat';
+                    incTag.innerText = `Flat vs last month`;
+                }
             }
 
-            // Render Category Donut Chart
-            const catCtx = document.getElementById('categoryChart').getContext('2d');
-            const catLabels = data.categories.map(c => c.category);
-            const catAmounts = data.categories.map(c => c.amount);
+            // Category Donut Chart
+            renderCategoryChart(data.categories || []);
 
+            // Cashflow / Daily Chart
+            renderCashflowChart(data.daily_series || []);
+
+            // Calendar Heatmap
+            renderCalendarHeatmap(data.year, data.month, data.daily_series || []);
+
+            // Top Payees Leaderboard
+            renderTopPayees(data.top_payees || []);
+
+            // Transactions Table
+            filterTransactions();
+        }
+
+        function renderCategoryChart(categories) {
+            const ctx = document.getElementById('categoryChart').getContext('2d');
             if (categoryChartInstance) categoryChartInstance.destroy();
 
-            const chartColors = ['#8b5cf6', '#3b82f6', '#ec4899', '#f59e0b', '#10b981', '#6366f1', '#14b8a6', '#f97316'];
+            const labels = categories.map(c => `${c.category} (${c.percentage}%)`);
+            const values = categories.map(c => c.amount);
+            const colors = ['#8b5cf6', '#3b82f6', '#ec4899', '#f59e0b', '#10b981', '#6366f1', '#14b8a6', '#f97316'];
 
-            categoryChartInstance = new Chart(catCtx, {
+            categoryChartInstance = new Chart(ctx, {
                 type: 'doughnut',
                 data: {
-                    labels: catLabels.length ? catLabels : ['No Expenses Yet'],
+                    labels: labels.length ? labels : ['No Expenses Yet'],
                     datasets: [{
-                        data: catAmounts.length ? catAmounts : [1],
-                        backgroundColor: catLabels.length ? chartColors.slice(0, catLabels.length) : ['rgba(255,255,255,0.1)'],
+                        data: values.length ? values : [1],
+                        backgroundColor: labels.length ? colors.slice(0, labels.length) : ['rgba(255,255,255,0.1)'],
                         borderWidth: 0,
                         hoverOffset: 6
                     }]
@@ -462,78 +878,257 @@
                     plugins: {
                         legend: {
                             position: 'bottom',
-                            labels: { color: '#94a3b8', font: { family: 'Outfit', size: 12 }, padding: 14 }
+                            labels: { color: '#94a3b8', font: { family: 'Outfit', size: 11 }, padding: 10 }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: (item) => ` ${formatINR(item.raw)}`
+                            }
                         }
                     },
-                    cutout: '70%'
+                    cutout: '68%'
                 }
             });
+        }
 
-            // Render Cashflow Bar Chart
-            const flowCtx = document.getElementById('cashflowChart').getContext('2d');
+        function renderCashflowChart(dailySeries) {
+            const ctx = document.getElementById('cashflowChart').getContext('2d');
             if (cashflowChartInstance) cashflowChartInstance.destroy();
 
-            cashflowChartInstance = new Chart(flowCtx, {
+            const labels = dailySeries.length ? dailySeries.map(d => d.date.split('-')[2]) : ['No Data'];
+            const spentData = dailySeries.length ? dailySeries.map(d => d.spent) : [0];
+            const recvData = dailySeries.length ? dailySeries.map(d => d.received) : [0];
+
+            cashflowChartInstance = new Chart(ctx, {
                 type: 'bar',
                 data: {
-                    labels: ['Income (Received)', 'Expenses (Spent)', 'Net Savings'],
-                    datasets: [{
-                        data: [data.total_received, data.total_spent, Math.max(0, data.net_savings)],
-                        backgroundColor: ['#10b981', '#ef4444', '#3b82f6'],
-                        borderRadius: 8,
-                        borderSkipped: false
-                    }]
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Spent (Out)',
+                            data: spentData,
+                            backgroundColor: '#ef4444',
+                            borderRadius: 6
+                        },
+                        {
+                            label: 'Received (In)',
+                            data: recvData,
+                            backgroundColor: '#10b981',
+                            borderRadius: 6
+                        }
+                    ]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: { color: '#94a3b8', font: { family: 'Outfit', size: 11 } }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: (item) => ` ${item.dataset.label}: ${formatINR(item.raw)}`
+                            }
+                        }
+                    },
                     scales: {
                         x: {
                             grid: { display: false },
-                            ticks: { color: '#94a3b8', font: { family: 'Outfit', size: 12 } }
+                            ticks: { color: '#94a3b8', font: { family: 'Outfit', size: 10 } }
                         },
                         y: {
-                            grid: { color: 'rgba(255, 255, 255, 0.06)' },
-                            ticks: { color: '#94a3b8', font: { family: 'Outfit', size: 11 } }
+                            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                            ticks: { color: '#94a3b8', font: { family: 'Outfit', size: 10 } }
                         }
                     }
                 }
             });
+        }
 
-            // Render Transactions Table
-            const tbody = document.getElementById('tx-tbody');
-            tbody.innerHTML = '';
-            
-            if (!data.recent_transactions.length) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);">No transactions recorded yet.</td></tr>';
+        function renderCalendarHeatmap(year, month, dailySeries) {
+            const container = document.getElementById('heatmap-container');
+            container.innerHTML = '';
+
+            const weekdays = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+            weekdays.forEach(w => {
+                const wh = document.createElement('div');
+                wh.className = 'heatmap-header';
+                wh.innerText = w;
+                container.appendChild(wh);
+            });
+
+            const firstDay = new Date(year, month - 1, 1).getDay();
+            const daysInMonth = new Date(year, month, 0).getDate();
+
+            const spendMap = {};
+            let maxDaily = 1;
+            dailySeries.forEach(d => {
+                const dayNum = parseInt(d.date.split('-')[2], 10);
+                spendMap[dayNum] = d.spent;
+                if (d.spent > maxDaily) maxDaily = d.spent;
+            });
+
+            for (let i = 0; i < firstDay; i++) {
+                const empty = document.createElement('div');
+                empty.className = 'heatmap-day empty';
+                container.appendChild(empty);
+            }
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const cell = document.createElement('div');
+                const spent = spendMap[day] || 0;
+                let lvl = 'lvl-0';
+                if (spent > 0) {
+                    const ratio = spent / maxDaily;
+                    if (ratio > 0.6) lvl = 'lvl-3';
+                    else if (ratio > 0.25) lvl = 'lvl-2';
+                    else lvl = 'lvl-1';
+                }
+                cell.className = `heatmap-day ${lvl}`;
+                cell.title = `Day ${day}: ${formatINR(spent)}`;
+                cell.innerHTML = `
+                    <span class="heatmap-day-num">${day}</span>
+                    ${spent > 0 ? `<span class="heatmap-day-amt">${formatINRShort(spent)}</span>` : ''}
+                `;
+                container.appendChild(cell);
+            }
+        }
+
+        function renderTopPayees(payees) {
+            const container = document.getElementById('payees-container');
+            container.innerHTML = '';
+
+            if (!payees.length) {
+                container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">No payees recorded this month.</div>';
                 return;
             }
 
-            data.recent_transactions.forEach(tx => {
+            payees.forEach((p, idx) => {
+                const item = document.createElement('div');
+                item.className = 'payee-item';
+                item.innerHTML = `
+                    <div class="payee-info">
+                        <div class="payee-rank">${idx + 1}</div>
+                        <div>
+                            <div class="payee-name">${p.person_name}</div>
+                            <div class="payee-cat">${p.primary_category || 'General'} • ${p.count} txs</div>
+                        </div>
+                    </div>
+                    <div class="payee-amt">${formatINR(p.total_amount)}</div>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        function setTypeFilter(type) {
+            currentTypeFilter = type;
+            document.getElementById('chip-all').classList.toggle('active', type === 'ALL');
+            document.getElementById('chip-sent').classList.toggle('active', type === 'SENT');
+            document.getElementById('chip-recv').classList.toggle('active', type === 'RECEIVED');
+            filterTransactions();
+        }
+
+        function filterTransactions() {
+            const query = (document.getElementById('table-search').value || '').toLowerCase();
+            const tbody = document.getElementById('tx-tbody');
+            tbody.innerHTML = '';
+
+            const filtered = allCurrentTransactions.filter(tx => {
+                if (currentTypeFilter !== 'ALL' && tx.transaction_type !== currentTypeFilter) return false;
+                if (!query) return true;
+                const matchPerson = (tx.person_name || '').toLowerCase().includes(query);
+                const matchCategory = (tx.category || '').toLowerCase().includes(query);
+                const matchRef = (tx.reference_number || '').toLowerCase().includes(query);
+                const matchApp = (tx.payment_app || '').toLowerCase().includes(query);
+                return matchPerson || matchCategory || matchRef || matchApp;
+            });
+
+            if (!filtered.length) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px;">No transactions match your search.</td></tr>';
+                return;
+            }
+
+            filtered.forEach(tx => {
                 const tr = document.createElement('tr');
                 const isReceived = tx.transaction_type === 'RECEIVED';
                 const pillClass = isReceived ? 'pill-received' : 'pill-sent';
-                const typeText = isReceived ? '🟢 RECEIVED' : '🔴 SENT';
+                const typeText = isReceived ? '🟢 RECV' : '🔴 SENT';
                 const amtSign = isReceived ? '+' : '-';
                 const amtColor = isReceived ? 'val-green' : 'val-red';
 
                 tr.innerHTML = `
                     <td><strong>#${tx.id}</strong></td>
-                    <td>${tx.transaction_date || ''} <span style="color:var(--text-muted);font-size:12px;">${tx.transaction_time || ''}</span></td>
+                    <td>${tx.transaction_date || ''}</td>
                     <td><span class="pill ${pillClass}">${typeText}</span></td>
-                    <td>${tx.person_name || '—'}</td>
+                    <td><b>${tx.person_name || '—'}</b></td>
                     <td><span class="pill pill-category">${tx.category || 'General'}</span></td>
-                    <td class="${amtColor}"><strong>${amtSign}₹${tx.amount.toLocaleString('en-IN', {minimumFractionDigits: 2})}</strong></td>
-                    <td>₹${tx.balance_after.toLocaleString('en-IN', {minimumFractionDigits: 2})}</td>
+                    <td class="${amtColor}"><strong>${amtSign}${formatINR(tx.amount)}</strong></td>
+                    <td>${formatINR(tx.balance_after)}</td>
                 `;
+                tr.onclick = () => openDrawer(tx);
                 tbody.appendChild(tr);
             });
         }
 
-        // Initial fetch and auto-refresh every 15 seconds
+        function openDrawer(tx) {
+            const drawer = document.getElementById('detail-drawer');
+            const body = document.getElementById('drawer-body');
+            document.getElementById('d-title').innerText = `Transaction #${tx.id}`;
+
+            const isReceived = tx.transaction_type === 'RECEIVED';
+            const typeColor = isReceived ? 'var(--accent-green)' : 'var(--accent-red)';
+
+            body.innerHTML = `
+                <div class="drawer-row">
+                    <span class="drawer-lbl">Amount</span>
+                    <span class="drawer-val" style="color:${typeColor}; font-size:16px;">${isReceived ? '+' : '-'}${formatINR(tx.amount)}</span>
+                </div>
+                <div class="drawer-row">
+                    <span class="drawer-lbl">Payee / Counterparty</span>
+                    <span class="drawer-val">${tx.person_name || '—'}</span>
+                </div>
+                <div class="drawer-row">
+                    <span class="drawer-lbl">Type</span>
+                    <span class="drawer-val" style="color:${typeColor}">${tx.transaction_type}</span>
+                </div>
+                <div class="drawer-row">
+                    <span class="drawer-lbl">Category</span>
+                    <span class="drawer-val">${tx.category || 'General'}</span>
+                </div>
+                <div class="drawer-row">
+                    <span class="drawer-lbl">Date & Time</span>
+                    <span class="drawer-val">${tx.transaction_date || ''} ${tx.transaction_time || ''}</span>
+                </div>
+                <div class="drawer-row">
+                    <span class="drawer-lbl">Reference / UTR</span>
+                    <span class="drawer-val"><code>${tx.reference_number || 'N/A'}</code></span>
+                </div>
+                <div class="drawer-row">
+                    <span class="drawer-lbl">Bank / Payment App</span>
+                    <span class="drawer-val">${tx.bank_name || tx.payment_app || 'UPI'}</span>
+                </div>
+                <div class="drawer-row">
+                    <span class="drawer-lbl">Balance After</span>
+                    <span class="drawer-val">${formatINR(tx.balance_after)}</span>
+                </div>
+            `;
+            drawer.style.display = 'flex';
+        }
+
+        function closeDrawer(e) {
+            document.getElementById('detail-drawer').style.display = 'none';
+        }
+
+        function downloadCSV() {
+            const token = getDashboardToken();
+            const url = `/api/export.csv${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+            window.open(url, '_blank');
+        }
+
+        // Initial Load & Auto-Refresh every 60s
         fetchDashboardData();
-        setInterval(fetchDashboardData, 15000);
+        setInterval(fetchDashboardData, 60000);
     </script>
 </body>
 </html>

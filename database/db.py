@@ -80,6 +80,29 @@ def setup_database():
                 )
             ''')
             
+            # Payee Category Memory table (remembers user categorization preferences per payee)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS payee_categories (
+                    payee_name TEXT PRIMARY KEY,
+                    category TEXT NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # Recurring Payments table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS recurring_payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    payee_name TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    day_of_month INTEGER NOT NULL,
+                    category TEXT DEFAULT 'Bills & Utilities',
+                    is_active INTEGER DEFAULT 1,
+                    last_notified DATE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
             # Create indexes
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_reference_number ON transactions(reference_number)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_date ON transactions(transaction_date)')
