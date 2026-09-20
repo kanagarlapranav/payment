@@ -25,43 +25,18 @@ from services.scheduler_service import scheduler
 async def on_startup(app):
     """Restores database state from cloud backup only if database is empty on fresh container spins."""
     try:
-        from services.backup_service import restore_from_telegram, export_database_to_json, backup_to_telegram
+        from services.backup_service import restore_from_telegram, import_database_from_json, BACKUP_JSON_PATH
         from database.queries import get_all_transactions
-        from database.db import get_db_connection
 
         existing = get_all_transactions()
         if not existing:
-            logger.info("Database is empty on fresh container spin. Checking for cloud backup...")
+            logger.info("Database is empty on fresh container spin. Restoring data...")
             restored = await restore_from_telegram(app.bot)
-            if restored:
-                logger.info("Cloud backup restored successfully on startup.")
+            if not restored and BACKUP_JSON_PATH.exists():
+                import_database_from_json(BACKUP_JSON_PATH)
+                logger.info("Restored database from local JSON backup on startup.")
         else:
-            logger.info(f"Database already contains {len(existing)} transactions. Skipping auto-restore to preserve user deletions.")
-
-        # Ensure previously deleted transactions (#12, #15, #16) that were resurrected are cleanly purged
-        try:
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    DELETE FROM transactions 
-                    WHERE (amount = 20.0 AND person_name LIKE '%VIKRAMAN NAIR%')
-                       OR (amount = 20.0 AND person_name LIKE '%Narise Nagendra%')
-                       OR (amount = 15.0 AND person_name LIKE '%VIKRAMAN NAIR%')
-                """)
-                if cursor.rowcount > 0:
-                    logger.info(f"Purged {cursor.rowcount} resurrected deleted transactions.")
-                conn.commit()
-        except Exception as purge_err:
-            logger.debug(f"Purge notice: {purge_err}")
-
-        export_database_to_json()
-
-        # Update Telegram cloud backup with the clean state and unpin old messages if needed
-        try:
-            await backup_to_telegram(app.bot)
-            logger.info("Synced clean cloud backup to Telegram after startup.")
-        except Exception as bkp_err:
-            logger.warning(f"Cloud backup sync notice: {bkp_err}")
+            logger.info(f"Database contains {len(existing)} transactions.")
 
         # Clean up any leftover temporary images from prior runs
         try:

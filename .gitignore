@@ -12,6 +12,7 @@ env/
 data/*.db
 data/*.sqlite3
 data/*.json
+!data/backup_transactions.json
 data/*.xlsx
 data/*.pdf
 *.db
