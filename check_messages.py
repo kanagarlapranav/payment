@@ -3,7 +3,12 @@ import urllib.request
 import json
 import urllib.error
 
-BOT_TOKEN = "8863268724:AAFcDfpdgTXas2E6OnNIQj9mRIwRzQ8WV94"
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 URL = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
 
 offset = 0

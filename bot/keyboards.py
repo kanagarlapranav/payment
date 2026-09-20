@@ -43,6 +43,15 @@ def get_delete_confirm_keyboard(tx_id: int):
     ]
     return InlineKeyboardMarkup(keyboard)
 
+def get_undo_keyboard():
+    """Returns an inline keyboard with an Undo button."""
+    keyboard = [
+        [
+            InlineKeyboardButton("↩️ Undo", callback_data="undo_action")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 def get_transaction_selection_keyboard(transactions: list, action_prefix: str):
     """Returns a list of buttons for selecting a transaction."""
     from utils.currency import format_currency

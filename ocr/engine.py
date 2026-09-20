@@ -111,8 +111,24 @@ def extract_text_from_image(image_path: str) -> str:
     # 1. Try RapidOCR first (works cross-platform via ONNX without external binaries)
     engine = get_rapid_ocr_engine()
     if engine is not None:
+        scaled_temp = None
         try:
-            result, _ = engine(image_path)
+            ocr_target = image_path
+            try:
+                with Image.open(image_path) as img:
+                    w, h = img.size
+                    if max(w, h) > 1024:
+                        scale = 1024.0 / max(w, h)
+                        new_w, new_h = int(w * scale), int(h * scale)
+                        scaled_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                        scaled_temp = image_path + "_ocr_scaled.jpg"
+                        scaled_img.convert("RGB").save(scaled_temp, format="JPEG", quality=85)
+                        ocr_target = scaled_temp
+            except Exception as scale_err:
+                logger.debug(f"Image scaling notice: {scale_err}")
+                ocr_target = image_path
+
+            result, _ = engine(ocr_target)
             if result:
                 lines = _sort_rapid_ocr_boxes(result)
                 text = "\n".join(lines).strip()
@@ -123,8 +139,8 @@ def extract_text_from_image(image_path: str) -> str:
             # If initial OCR produced too little text, try with preprocessing
             try:
                 from ocr.preprocess import preprocess_image_for_ocr
-                proc_path = preprocess_image_for_ocr(image_path)
-                if proc_path and proc_path != image_path and os.path.exists(proc_path):
+                proc_path = preprocess_image_for_ocr(ocr_target)
+                if proc_path and proc_path != ocr_target and os.path.exists(proc_path):
                     res2, _ = engine(proc_path)
                     try:
                         os.remove(proc_path)
@@ -141,6 +157,12 @@ def extract_text_from_image(image_path: str) -> str:
 
         except Exception as e:
             logger.warning(f"RapidOCR failed on {image_path}: {e}. Falling back to Tesseract.")
+        finally:
+            if scaled_temp and os.path.exists(scaled_temp):
+                try:
+                    os.remove(scaled_temp)
+                except OSError:
+                    pass
 
     # 2. Fallback to Tesseract OCR if available
     try:

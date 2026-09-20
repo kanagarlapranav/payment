@@ -152,8 +152,8 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Could not delete temp image {image_path}: {cleanup_err}")
         
         # Basic validation
-        if not transaction.amount or transaction.amount <= 0:
-            await deliver_response(status_msg, message, "⚠️ Could not detect a valid amount. Please provide a clearer screenshot or enter manually.")
+        if not transaction or not transaction.amount or transaction.amount <= 0:
+            await deliver_response(status_msg, message, "⚠️ Could not detect a valid amount from the receipt.\n\n💡 <b>Tip:</b> You can log it instantly by typing:\n<code>Paid 500 to Ramesh</code> or <code>Received 1200 from Alex</code>", parse_mode='HTML')
             return
             
         if not transaction.transaction_type:
@@ -414,6 +414,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         amt_str = format_currency(tx['amount'])
         person = tx['person_name'] or "Unknown"
 
+        from services.undo_service import record_delete_action
+        record_delete_action(tx)
+
         success = delete_transaction(tx_id)
         if success:
             resequence_transaction_ids()
@@ -430,11 +433,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                         asyncio.create_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)))
                 except Exception:
                     pass
+            from bot.keyboards import get_undo_keyboard
             await query.edit_message_text(
                 f"🗑️ <b>Transaction #{tx_id} Deleted</b>\n\n"
                 f"• <b>Amount:</b> {html.escape(amt_str)}\n"
                 f"• <b>Person:</b> {html.escape(str(person))}\n\n"
                 f"💰 <b>Updated Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>",
+                reply_markup=get_undo_keyboard(),
                 parse_mode='HTML'
             )
         else:
@@ -443,6 +448,19 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "delete_cancel":
         context.user_data.pop('action', None)
         await query.edit_message_text("❌ Deletion cancelled.")
+
+    elif action == "undo_action":
+        from services.undo_service import perform_undo
+        success, msg = perform_undo()
+        if success:
+            try:
+                asyncio.create_task(backup_to_telegram(context.bot))
+            except Exception:
+                pass
+            await query.edit_message_text(msg, parse_mode='HTML')
+        else:
+            await query.edit_message_text(f"ℹ️ {msg}", parse_mode='HTML')
+
 
     # 4b. Correct Amount for Existing Transaction
     elif action == "correct_amount":
@@ -953,14 +971,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
     message_id = str(update.message.message_id)
     
-    # Normalize commands e.g. \\date, /search, /monthly, /filter, /sort, /details
+    # Normalize commands e.g. \\date, /search, /monthly, /filter, /sort, /details, /undo
     from bot.commands import (
         edit_command, delete_command, history_command, balance_command,
-        date_command, search_command, monthly_command, filter_command, sort_command, details_command, amount_command
+        date_command, search_command, monthly_command, filter_command, sort_command, details_command, amount_command,
+        undo_command
     )
     cmd_lower = text.lower()
     
-    if cmd_lower in (r'\\edit', 'edit', '/edit'):
+    if cmd_lower in (r'\\undo', 'undo', '/undo', 'revert', '/revert'):
+        await undo_command(update, context)
+        return
+    elif cmd_lower in (r'\\edit', 'edit', '/edit'):
         await edit_command(update, context)
         return
     elif cmd_lower in (r'\\delete', 'delete', '/delete'):
@@ -1126,6 +1148,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif field == 'ref':
             updates['reference_number'] = text
 
+        tx = get_transaction_by_id(tx_id)
+        if tx:
+            from services.undo_service import record_edit_action
+            record_edit_action(tx)
+
         success = update_transaction(tx_id, updates)
         context.user_data.pop('action', None)
         context.user_data.pop('edit_tx_id', None)
@@ -1144,6 +1171,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if updated_tx and 'balance_before' in updated_tx and 'balance_after' in updated_tx:
                 bal_flow = f"\n💰 <b>Balance Flow:</b> {html.escape(format_currency(updated_tx['balance_before']))} ➔ <b>{html.escape(format_currency(updated_tx['balance_after']))}</b>"
 
+            from bot.keyboards import get_undo_keyboard
             try:
                 from services.backup_service import backup_to_telegram
                 asyncio.create_task(backup_to_telegram(context.bot))
@@ -1162,6 +1190,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"👤 <b>Person:</b> {html.escape(str(person))}\n"
                 f"💵 <b>Amount:</b> <b>{html.escape(amt_s)}</b>{bal_flow}\n\n"
                 f"💳 <b>Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>",
+                reply_markup=get_undo_keyboard(),
                 parse_mode='HTML'
             )
             return
