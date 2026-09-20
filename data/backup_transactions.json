@@ -1,12 +1,25 @@
 {
-  "version": 1,
-  "exported_at": "2026-09-20T23:52:40.774070",
+  "version": 2,
+  "revision": 2,
+  "checksum": "9791c980c865bad09ce57e8a6de734ce5e6a07d1c35b0e5d63ccd02a4a93b17e",
+  "exported_at": "2026-09-21T00:18:05.505864",
   "transaction_count": 16,
+  "live_count": 16,
+  "balance": 4480.0,
   "settings": {
     "initial_balance": "0.0",
     "current_balance": "4480.0",
+    "backup_revision": "2",
     "monthly_budget": "25000.0"
   },
+  "custom_menu_items": [
+    {
+      "name": "Chicken Biryani",
+      "price": 100.0,
+      "category": "Rice",
+      "is_veg": 1
+    }
+  ],
   "transactions": [
     {
       "id": 1,
@@ -33,7 +46,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-04 10:02:00",
       "updated_at": "2026-09-04 10:02:00",
-      "category": "General"
+      "category": "Transfers & P2P",
+      "uid": "1103324ee5d649c8a3a0051662049803",
+      "deleted_at": null
     },
     {
       "id": 2,
@@ -60,7 +75,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-04 12:47:00",
       "updated_at": "2026-09-04 12:47:00",
-      "category": "General"
+      "category": "Transfers & P2P",
+      "uid": "17c7af9695cc4042b39d71531c93bea9",
+      "deleted_at": null
     },
     {
       "id": 3,
@@ -87,7 +104,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-05 15:00:00",
       "updated_at": "2026-09-05 15:00:00",
-      "category": "General"
+      "category": "Bills & Utilities",
+      "uid": "2461d5dd207e4eacbf19834e63d81368",
+      "deleted_at": null
     },
     {
       "id": 4,
@@ -114,7 +133,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-06 21:57:00",
       "updated_at": "2026-09-06 21:57:00",
-      "category": "General"
+      "category": "Transfers & P2P",
+      "uid": "684fa8b5b799430ea30ef5ff9d3c991c",
+      "deleted_at": null
     },
     {
       "id": 5,
@@ -141,7 +162,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-08 13:44:00",
       "updated_at": "2026-09-08 13:44:00",
-      "category": "General"
+      "category": "Transfers & P2P",
+      "uid": "70cf2134c87247cb858786f1aeeeb10d",
+      "deleted_at": null
     },
     {
       "id": 6,
@@ -168,7 +191,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-09 10:00:00",
       "updated_at": "2026-09-09 10:00:00",
-      "category": "General"
+      "category": "Transfers & P2P",
+      "uid": "5e15f1da1cdb4d728d5c5cd2af6278de",
+      "deleted_at": null
     },
     {
       "id": 7,
@@ -195,7 +220,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-09 11:00:00",
       "updated_at": "2026-09-09 11:00:00",
-      "category": "General"
+      "category": "Transfers & P2P",
+      "uid": "ae397659a2964249a135ada05f63bcb6",
+      "deleted_at": null
     },
     {
       "id": 8,
@@ -222,7 +249,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-09 11:30:00",
       "updated_at": "2026-09-09 11:30:00",
-      "category": "General"
+      "category": "Transfers & P2P",
+      "uid": "bc3c402e56484177ade18150d5972199",
+      "deleted_at": null
     },
     {
       "id": 9,
@@ -249,7 +278,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-09 12:17:00",
       "updated_at": "2026-09-09 12:17:00",
-      "category": "General"
+      "category": "Transfers & P2P",
+      "uid": "2d510d59b13c45dda39d793b8c5e3a53",
+      "deleted_at": null
     },
     {
       "id": 10,
@@ -276,7 +307,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-10 10:00:00",
       "updated_at": "2026-09-10 10:00:00",
-      "category": "General"
+      "category": "Transfers & P2P",
+      "uid": "2c3308bdb7d94a5ca2000c05593be2cf",
+      "deleted_at": null
     },
     {
       "id": 11,
@@ -303,7 +336,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-11 10:00:00",
       "updated_at": "2026-09-11 10:00:00",
-      "category": "General"
+      "category": "Transfers & P2P",
+      "uid": "eaa0410504b149d2a9b33c6b7f2699c4",
+      "deleted_at": null
     },
     {
       "id": 12,
@@ -330,7 +365,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-15 10:00:00",
       "updated_at": "2026-09-15 10:00:00",
-      "category": "General"
+      "category": "Transfers & P2P",
+      "uid": "d141faa6833948dc87f74f9c737e3fce",
+      "deleted_at": null
     },
     {
       "id": 13,
@@ -357,7 +394,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-15 19:54:00",
       "updated_at": "2026-09-15 19:54:00",
-      "category": "General"
+      "category": "Transfers & P2P",
+      "uid": "6032cc64f7604c828bbff0e06930d6d1",
+      "deleted_at": null
     },
     {
       "id": 14,
@@ -384,7 +423,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-18 10:51:00",
       "updated_at": "2026-09-18 10:51:00",
-      "category": "General"
+      "category": "General",
+      "uid": "9567b8ee10174b0cbb934e32c95f286c",
+      "deleted_at": null
     },
     {
       "id": 15,
@@ -411,7 +452,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-19 13:23:00",
       "updated_at": "2026-09-19 13:23:00",
-      "category": "General"
+      "category": "General",
+      "uid": "5a03560d841f486791fe7779d3a0577a",
+      "deleted_at": null
     },
     {
       "id": 16,
@@ -438,7 +481,9 @@
       "telegram_chat_id": "-1004310685141",
       "created_at": "2026-09-19 13:30:00",
       "updated_at": "2026-09-19 13:30:00",
-      "category": "General"
+      "category": "General",
+      "uid": "d1ae91c5edbb4159b908c7402961b25a",
+      "deleted_at": null
     }
   ]
 }

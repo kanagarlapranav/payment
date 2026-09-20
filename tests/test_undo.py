@@ -56,6 +56,12 @@ class TestUndoService(unittest.TestCase):
         success, msg = perform_undo()
         self.assertTrue(success)
         self.assertIn("Undo Successful", msg)
+        
+        # Verify transaction is restored with the same ID and permanent UID
+        restored_tx = get_transaction_by_id(tx_id)
+        self.assertIsNotNone(restored_tx)
+        self.assertEqual(restored_tx['uid'], tx['uid'])
+        self.assertIsNone(restored_tx['deleted_at'])
 
     def test_undo_empty(self):
         _UNDO_STACK.clear()

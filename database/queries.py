@@ -1,3 +1,4 @@
+import uuid
 from database.models import Transaction
 from database.db import get_db_connection
 from datetime import datetime
@@ -6,14 +7,16 @@ from config import logger
 def insert_transaction(t: Transaction) -> int:
     """Inserts a new transaction into the database."""
     category = getattr(t, 'category', 'General') or 'General'
+    tx_uid = getattr(t, 'uid', None) or uuid.uuid4().hex
+    t.uid = tx_uid
     query = '''
         INSERT INTO transactions (
             transaction_type, amount, person_name, sender_name, recipient_name,
             upi_id, phone_number, transaction_date, transaction_time, reference_number,
             transaction_id, payment_app, bank_name, bank_account, payment_status,
             category, balance_before, balance_after, ocr_text, original_image_path,
-            telegram_message_id, telegram_chat_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            telegram_message_id, telegram_chat_id, uid, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     '''
     
     values = (
@@ -21,7 +24,7 @@ def insert_transaction(t: Transaction) -> int:
         t.upi_id, t.phone_number, t.transaction_date, t.transaction_time, t.reference_number,
         t.transaction_id, t.payment_app, t.bank_name, t.bank_account, t.payment_status,
         category, t.balance_before, t.balance_after, t.ocr_text, t.original_image_path,
-        t.telegram_message_id, t.telegram_chat_id
+        t.telegram_message_id, t.telegram_chat_id, tx_uid, getattr(t, 'deleted_at', None)
     )
     
     with get_db_connection() as conn:
@@ -36,7 +39,7 @@ def get_transaction_by_reference(reference_number: str):
         return None
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM transactions WHERE reference_number = ?", (reference_number,))
+        cursor.execute("SELECT * FROM transactions WHERE reference_number = ? AND deleted_at IS NULL", (reference_number,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
@@ -44,28 +47,28 @@ def get_recent_transactions(limit: int = 10):
     """Fetches recent transactions ordered by transaction date and creation date."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM transactions ORDER BY transaction_date DESC, created_at DESC, id DESC LIMIT ?", (limit,))
+        cursor.execute("SELECT * FROM transactions WHERE deleted_at IS NULL ORDER BY transaction_date DESC, created_at DESC, id DESC LIMIT ?", (limit,))
         return [dict(row) for row in cursor.fetchall()]
 
 def get_transactions_by_date(target_date):
     """Fetches transactions for a specific date."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM transactions WHERE transaction_date = ?", (target_date,))
+        cursor.execute("SELECT * FROM transactions WHERE transaction_date = ? AND deleted_at IS NULL", (target_date,))
         return [dict(row) for row in cursor.fetchall()]
 
 def get_all_transactions():
     """Fetches all transactions for export."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM transactions ORDER BY transaction_date DESC, created_at DESC")
+        cursor.execute("SELECT * FROM transactions WHERE deleted_at IS NULL ORDER BY transaction_date DESC, created_at DESC")
         return [dict(row) for row in cursor.fetchall()]
 
 def get_all_transactions_asc():
     """Fetches all transactions in ascending order (oldest first, ID #1 first)."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM transactions ORDER BY transaction_date ASC, created_at ASC, id ASC")
+        cursor.execute("SELECT * FROM transactions WHERE deleted_at IS NULL ORDER BY transaction_date ASC, created_at ASC, id ASC")
         return [dict(row) for row in cursor.fetchall()]
 
 def search_transactions(
@@ -80,7 +83,7 @@ def search_transactions(
     limit: int = 50
 ):
     """Flexible query function for searching, filtering, and sorting transactions."""
-    conditions = []
+    conditions = ["deleted_at IS NULL"]
     params = []
     
     if exact_amount is not None and float(exact_amount) > 0:
@@ -145,7 +148,7 @@ def get_monthly_summary(year: int, month: int):
                 COUNT(*) as count,
                 SUM(amount) as total_amount
             FROM transactions 
-            WHERE strftime('%Y-%m', transaction_date) = ?
+            WHERE strftime('%Y-%m', transaction_date) = ? AND deleted_at IS NULL
             GROUP BY transaction_type
         """, (month_str,))
         rows = cursor.fetchall()
@@ -165,7 +168,7 @@ def get_monthly_summary(year: int, month: int):
         cursor.execute("""
             SELECT person_name, SUM(amount) as total
             FROM transactions
-            WHERE strftime('%Y-%m', transaction_date) = ? AND transaction_type = 'SENT' AND person_name != ''
+            WHERE strftime('%Y-%m', transaction_date) = ? AND transaction_type = 'SENT' AND person_name != '' AND deleted_at IS NULL
             GROUP BY person_name
             ORDER BY total DESC LIMIT 1
         """, (month_str,))
@@ -183,10 +186,20 @@ def get_monthly_summary(year: int, month: int):
         }
 
 def get_transaction_by_id(tx_id: int):
-    """Fetches a transaction by its ID."""
+    """Fetches a transaction by its ID (live only)."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,))
+        cursor.execute("SELECT * FROM transactions WHERE id = ? AND deleted_at IS NULL", (tx_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+def get_transaction_by_uid(uid: str):
+    """Fetches a transaction by its permanent UID (live or deleted)."""
+    if not uid:
+        return None
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM transactions WHERE uid = ?", (uid,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
@@ -203,22 +216,58 @@ def update_transaction(tx_id: int, updates: dict) -> bool:
         return cursor.rowcount > 0
 
 def delete_transaction(tx_id: int) -> bool:
-    """Deletes a transaction by its ID, resequences remaining IDs consecutively, and recalculates balances."""
+    """
+    Soft-deletes a transaction by setting deleted_at = CURRENT_TIMESTAMP.
+    Recalculates balances over remaining live rows.
+    Does NOT resequence transaction IDs (preserves stable IDs and accepts gaps).
+    Purges any tombstones older than 90 days.
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
-        conn.commit()
+        cursor.execute("UPDATE transactions SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL", (tx_id,))
         deleted = cursor.rowcount > 0
+        
+        # Purge ancient tombstones older than 90 days
+        try:
+            cursor.execute("DELETE FROM transactions WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', '-90 days')")
+        except Exception as purge_err:
+            logger.debug(f"Ancient tombstone purge notice: {purge_err}")
+            
+        conn.commit()
 
     if deleted:
         try:
-            from services.balance_service import resequence_transaction_ids, recalculate_all_balances
-            resequence_transaction_ids()
+            from services.balance_service import recalculate_all_balances
             recalculate_all_balances()
         except Exception as e:
-            logger.error(f"Error during post-delete resequence/recalculate: {e}")
+            logger.error(f"Error during post-delete balance recalculation: {e}")
 
     return deleted
+
+def restore_soft_deleted_transaction(tx_id: int = None, uid: str = None) -> bool:
+    """
+    Restores a soft-deleted transaction by clearing its deleted_at timestamp.
+    Recalculates running balances over live rows.
+    """
+    if not tx_id and not uid:
+        return False
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if uid:
+            cursor.execute("UPDATE transactions SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE uid = ?", (uid,))
+        else:
+            cursor.execute("UPDATE transactions SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (tx_id,))
+        conn.commit()
+        restored = cursor.rowcount > 0
+
+    if restored:
+        try:
+            from services.balance_service import recalculate_all_balances
+            recalculate_all_balances()
+        except Exception as e:
+            logger.error(f"Error during post-restore balance recalculation: {e}")
+
+    return restored
 
 def update_balance_setting(new_balance: float):
     """Updates the current balance in the settings table."""
@@ -258,7 +307,7 @@ def get_monthly_spending(year: int, month: int) -> float:
         cursor.execute("""
             SELECT SUM(amount) as total
             FROM transactions
-            WHERE strftime('%Y-%m', transaction_date) = ? AND transaction_type = 'SENT'
+            WHERE strftime('%Y-%m', transaction_date) = ? AND transaction_type = 'SENT' AND deleted_at IS NULL
         """, (month_str,))
         row = cursor.fetchone()
         return float(row['total']) if (row and row['total'] is not None) else 0.0
@@ -275,7 +324,7 @@ def get_category_summary(year: int, month: int):
                 COUNT(*) as count,
                 SUM(amount) as total_amount
             FROM transactions
-            WHERE strftime('%Y-%m', transaction_date) = ?
+            WHERE strftime('%Y-%m', transaction_date) = ? AND deleted_at IS NULL
             GROUP BY category, transaction_type
             ORDER BY total_amount DESC
         """, (month_str,))
@@ -291,7 +340,7 @@ def get_daily_summary_stats(target_date_str: str):
                 COUNT(*) as count,
                 SUM(amount) as total_amount
             FROM transactions 
-            WHERE transaction_date = ?
+            WHERE transaction_date = ? AND deleted_at IS NULL
             GROUP BY transaction_type
         """, (target_date_str,))
         rows = cursor.fetchall()
@@ -311,7 +360,7 @@ def get_daily_summary_stats(target_date_str: str):
         cursor.execute("""
             SELECT id, transaction_type, amount, person_name, category, payment_app, transaction_time, balance_after
             FROM transactions
-            WHERE transaction_date = ?
+            WHERE transaction_date = ? AND deleted_at IS NULL
             ORDER BY id ASC
         """, (target_date_str,))
         transactions = [dict(row) for row in cursor.fetchall()]
@@ -331,10 +380,11 @@ def get_cafeteria_transactions(limit: int = 50):
         cursor = conn.cursor()
         cursor.execute("""
             SELECT * FROM transactions 
-            WHERE lower(person_name) LIKE '%vikraman%' 
+            WHERE (lower(person_name) LIKE '%vikraman%' 
                OR lower(person_name) LIKE '%cafeteria%' 
                OR lower(person_name) LIKE '%canteen%'
-               OR lower(upi_id) LIKE '%vikraman%'
+               OR lower(upi_id) LIKE '%vikraman%')
+               AND deleted_at IS NULL
             ORDER BY transaction_date DESC, id DESC
             LIMIT ?
         """, (limit,))
@@ -357,7 +407,7 @@ def get_payee_category(payee_name: str) -> str | None:
         # Also check existing transactions history as fallback
         cursor.execute("""
             SELECT category FROM transactions 
-            WHERE lower(person_name) = ? AND category IS NOT NULL AND category != 'General'
+            WHERE lower(person_name) = ? AND category IS NOT NULL AND category != 'General' AND deleted_at IS NULL
             ORDER BY id DESC LIMIT 1
         """, (normalized,))
         t_row = cursor.fetchone()
@@ -390,7 +440,7 @@ def find_potential_duplicate(amount: float, reference_number: str = None, person
         # Check by reference number first (strongest indicator)
         if reference_number and len(str(reference_number).strip()) > 3:
             clean_ref = str(reference_number).strip()
-            cursor.execute("SELECT * FROM transactions WHERE reference_number = ? ORDER BY id DESC LIMIT 1", (clean_ref,))
+            cursor.execute("SELECT * FROM transactions WHERE reference_number = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1", (clean_ref,))
             row = cursor.fetchone()
             if row:
                 res = dict(row)
@@ -407,6 +457,7 @@ def find_potential_duplicate(amount: float, reference_number: str = None, person
                         WHERE abs(amount - ?) < 0.01 
                           AND lower(person_name) LIKE ?
                           AND abs(julianday(transaction_date) - julianday(?)) <= 2
+                          AND deleted_at IS NULL
                         ORDER BY id DESC LIMIT 1
                     """, (float(amount), f"%{clean_person}%", tx_date))
                 else:
@@ -414,6 +465,7 @@ def find_potential_duplicate(amount: float, reference_number: str = None, person
                         SELECT * FROM transactions 
                         WHERE abs(amount - ?) < 0.01 
                           AND lower(person_name) LIKE ?
+                          AND deleted_at IS NULL
                         ORDER BY id DESC LIMIT 1
                     """, (float(amount), f"%{clean_person}%"))
                 row = cursor.fetchone()
@@ -441,6 +493,7 @@ def get_top_payees(limit: int = 5, year: int = None, month: int = None):
               AND person_name IS NOT NULL 
               AND TRIM(person_name) != ''
               AND person_name != 'Unknown'
+              AND deleted_at IS NULL
         """
         params = []
         if year and month:
@@ -468,7 +521,7 @@ def get_daily_spend_series(year: int, month: int):
                 SUM(CASE WHEN transaction_type = 'RECEIVED' THEN amount ELSE 0 END) as received,
                 COUNT(*) as count
             FROM transactions
-            WHERE strftime('%Y-%m', transaction_date) = ?
+            WHERE strftime('%Y-%m', transaction_date) = ? AND deleted_at IS NULL
             GROUP BY transaction_date
             ORDER BY transaction_date ASC
         """, (month_str,))
@@ -508,7 +561,7 @@ def get_month_comparison_stats(year: int, month: int):
 
 def get_transactions_paginated(page: int = 1, page_size: int = 25, search: str = None, category: str = None, tx_type: str = None, year: int = None, month: int = None):
     """Fetches paginated transactions with optional filters."""
-    conditions = []
+    conditions = ["deleted_at IS NULL"]
     params = []
     
     if search and search.strip():
@@ -572,7 +625,7 @@ def get_contact_ledger():
                 MAX(transaction_date) as last_transaction_date,
                 MAX(category) as primary_category
             FROM transactions
-            WHERE person_name IS NOT NULL AND TRIM(person_name) != '' AND person_name != 'Unknown'
+            WHERE person_name IS NOT NULL AND TRIM(person_name) != '' AND person_name != 'Unknown' AND deleted_at IS NULL
             GROUP BY lower(TRIM(person_name))
             ORDER BY (SUM(CASE WHEN transaction_type = 'SENT' THEN amount ELSE 0 END) + SUM(CASE WHEN transaction_type = 'RECEIVED' THEN amount ELSE 0 END)) DESC
         """)

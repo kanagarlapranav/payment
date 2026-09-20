@@ -68,57 +68,65 @@ def perform_undo() -> tuple[bool, str]:
         from database.queries import update_transaction, delete_transaction, get_balance_setting
         from utils.currency import format_currency
         from services.backup_service import export_database_to_json
+        from database.queries import restore_soft_deleted_transaction
         import html
 
         if action_type == 'delete':
-            # Re-insert the deleted transaction
+            # Restore the soft-deleted transaction
             tx = action['data']
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO transactions (
-                        transaction_type, amount, person_name, sender_name, recipient_name,
-                        upi_id, phone_number, transaction_date, transaction_time, reference_number,
-                        transaction_id, payment_app, bank_name, bank_account, payment_status,
-                        category, balance_before, balance_after, ocr_text, original_image_path,
-                        telegram_message_id, telegram_chat_id, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    tx.get('transaction_type', 'RECEIVED'),
-                    float(tx.get('amount', 0.0)),
-                    tx.get('person_name', ''),
-                    tx.get('sender_name', ''),
-                    tx.get('recipient_name', ''),
-                    tx.get('upi_id', ''),
-                    tx.get('phone_number', ''),
-                    tx.get('transaction_date'),
-                    tx.get('transaction_time', ''),
-                    tx.get('reference_number', ''),
-                    tx.get('transaction_id', ''),
-                    tx.get('payment_app', ''),
-                    tx.get('bank_name', ''),
-                    tx.get('bank_account', ''),
-                    tx.get('payment_status', 'SUCCESS'),
-                    tx.get('category', 'General'),
-                    float(tx.get('balance_before', 0.0)),
-                    float(tx.get('balance_after', 0.0)),
-                    tx.get('ocr_text', ''),
-                    tx.get('original_image_path', ''),
-                    str(tx.get('telegram_message_id', '')),
-                    str(tx.get('telegram_chat_id', '')),
-                    tx.get('created_at'),
-                    tx.get('updated_at')
-                ))
-                conn.commit()
+            tx_id = tx.get('id')
+            tx_uid = tx.get('uid')
+            
+            restored = restore_soft_deleted_transaction(tx_id=tx_id, uid=tx_uid)
+            if not restored:
+                # Fallback: if row was somehow physically deleted, re-insert with its original uid
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        INSERT INTO transactions (
+                            id, transaction_type, amount, person_name, sender_name, recipient_name,
+                            upi_id, phone_number, transaction_date, transaction_time, reference_number,
+                            transaction_id, payment_app, bank_name, bank_account, payment_status,
+                            category, balance_before, balance_after, ocr_text, original_image_path,
+                            telegram_message_id, telegram_chat_id, uid, deleted_at, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                    ''', (
+                        tx_id,
+                        tx.get('transaction_type', 'RECEIVED'),
+                        float(tx.get('amount', 0.0)),
+                        tx.get('person_name', ''),
+                        tx.get('sender_name', ''),
+                        tx.get('recipient_name', ''),
+                        tx.get('upi_id', ''),
+                        tx.get('phone_number', ''),
+                        tx.get('transaction_date'),
+                        tx.get('transaction_time', ''),
+                        tx.get('reference_number', ''),
+                        tx.get('transaction_id', ''),
+                        tx.get('payment_app', ''),
+                        tx.get('bank_name', ''),
+                        tx.get('bank_account', ''),
+                        tx.get('payment_status', 'SUCCESS'),
+                        tx.get('category', 'General'),
+                        float(tx.get('balance_before', 0.0)),
+                        float(tx.get('balance_after', 0.0)),
+                        tx.get('ocr_text', ''),
+                        tx.get('original_image_path', ''),
+                        str(tx.get('telegram_message_id', '')),
+                        str(tx.get('telegram_chat_id', '')),
+                        tx_uid,
+                        tx.get('created_at'),
+                        tx.get('updated_at')
+                    ))
+                    conn.commit()
 
-            resequence_transaction_ids()
             new_bal = recalculate_all_balances()
             export_database_to_json()
 
             amt_s = format_currency(tx.get('amount', 0))
             person_s = tx.get('person_name') or 'Unknown'
             return True, (
-                f"↩️ <b>Undo Successful! Restored Deleted Transaction</b>\n\n"
+                f"↩️ <b>Undo Successful! Restored Deleted Transaction #{tx_id}</b>\n\n"
                 f"• <b>Type:</b> {html.escape(str(tx.get('transaction_type')))}\n"
                 f"• <b>Person:</b> {html.escape(str(person_s))}\n"
                 f"• <b>Amount:</b> <b>{html.escape(amt_s)}</b>\n\n"
@@ -155,7 +163,6 @@ def perform_undo() -> tuple[bool, str]:
         elif action_type == 'insert':
             tx_id = action['tx_id']
             delete_transaction(tx_id)
-            resequence_transaction_ids()
             new_bal = recalculate_all_balances()
             export_database_to_json()
             return True, (

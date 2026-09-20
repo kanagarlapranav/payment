@@ -589,14 +589,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text("❌ Transaction not found or already removed.", reply_markup=get_back_to_menu_keyboard())
             return
         delete_transaction(tx_id)
-        resequence_transaction_ids()
         new_bal = recalculate_all_balances()
         try:
             from services.backup_service import backup_to_telegram, export_database_to_json
             export_database_to_json()
-            asyncio.create_task(backup_to_telegram(context.bot))
-        except Exception:
-            pass
+            await backup_to_telegram(context.bot)
+        except Exception as bkp_err:
+            logger.debug(f"Undo backup notice: {bkp_err}")
         await query.edit_message_text(
             f"↩️ <b>Transaction #{tx_id} Undone!</b>\n"
             "━━━━━━━━━━━━━━\n"
@@ -755,12 +754,18 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
         success = delete_transaction(tx_id)
         if success:
-            resequence_transaction_ids()
             new_bal = recalculate_all_balances()
+            backup_status = "✅"
             try:
-                asyncio.create_task(backup_to_telegram(context.bot))
-            except Exception:
-                pass
+                from services.backup_service import backup_to_telegram, export_database_to_json
+                export_database_to_json()
+                backed_up = await backup_to_telegram(context.bot)
+                if not backed_up:
+                    backup_status = "⚠️ (cloud backup pending)"
+            except Exception as bkp_err:
+                logger.warning(f"Delete cloud backup notice: {bkp_err}")
+                backup_status = "⚠️ (cloud backup pending)"
+
             if is_gdrive_available():
                 try:
                     from config import DATA_DIR
@@ -771,7 +776,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     pass
             from bot.keyboards import get_undo_keyboard
             await query.edit_message_text(
-                f"🗑️ <b>Transaction #{tx_id} Deleted</b>\n\n"
+                f"🗑️ <b>Transaction #{tx_id} Deleted {backup_status}</b>\n\n"
                 f"• <b>Amount:</b> {html.escape(amt_str)}\n"
                 f"• <b>Person:</b> {html.escape(str(person))}\n\n"
                 f"💰 <b>Updated Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>",

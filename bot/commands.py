@@ -235,8 +235,6 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await details_command(update, context)
         return
         
-    from services.balance_service import resequence_transaction_ids
-    resequence_transaction_ids()
     recalculate_all_balances()
 
     if not context.args or context.args[0].lower() not in ('full', 'all'):
@@ -1127,10 +1125,9 @@ async def delmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ {html.escape(msg)}", parse_mode='HTML')
 
 async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Restores database transactions from clean text JSON backup file."""
+    """Restores database transactions from clean text JSON backup file via idempotent upsert."""
     if not await is_authorized(update): return
     from services.backup_service import import_database_from_json, BACKUP_JSON_PATH
-    from services.balance_service import resequence_transaction_ids, recalculate_all_balances
     from database.queries import get_all_transactions
     import html
 
@@ -1138,14 +1135,21 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ No text backup file found to restore from.", parse_mode='HTML')
         return
 
-    await update.message.reply_text("⏳ Restoring text transactions from backup...")
-    success = import_database_from_json()
+    await update.message.reply_text("⏳ Restoring ledger from backup via idempotent upsert...")
+    result = import_database_from_json()
+    if not result.get('success'):
+        await update.message.reply_text(f"❌ Restore failed: {html.escape(str(result.get('error')))}", parse_mode='HTML')
+        return
+
     txs = get_all_transactions()
+    ins = result.get('inserted', 0)
+    upd = result.get('updated', 0)
     await update.message.reply_text(
         f"✅ <b>Database Restored Successfully!</b>\n\n"
-        f"• Restored <b>{len(txs)}</b> text transactions from JSON backup.\n"
-        f"• All transaction IDs resequenced consecutively (`1..N`).\n"
-        f"• Running balances & starting balance recalculated.\n\n"
+        f"• <b>{ins}</b> new records inserted.\n"
+        f"• <b>{upd}</b> existing records updated.\n"
+        f"• <b>{len(txs)}</b> active live transactions now available.\n"
+        f"• Permanent UIDs & running balances verified.\n\n"
         f"Use <code>/history</code> or <code>/balance</code> to view restored transactions.",
         parse_mode='HTML'
     )

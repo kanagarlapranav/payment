@@ -48,16 +48,23 @@ def setup_database():
                     original_image_path TEXT,
                     telegram_message_id TEXT,
                     telegram_chat_id TEXT,
+                    uid TEXT UNIQUE,
+                    deleted_at TIMESTAMP DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
-            # Migration check: Ensure category column exists
+            # Migration checks: Ensure category, uid, deleted_at columns exist
             cursor.execute("PRAGMA table_info(transactions)")
             columns = [row[1] for row in cursor.fetchall()]
             if "category" not in columns:
                 cursor.execute("ALTER TABLE transactions ADD COLUMN category TEXT DEFAULT 'General'")
+            if "uid" not in columns:
+                cursor.execute("ALTER TABLE transactions ADD COLUMN uid TEXT")
+                cursor.execute("UPDATE transactions SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL OR uid = ''")
+            if "deleted_at" not in columns:
+                cursor.execute("ALTER TABLE transactions ADD COLUMN deleted_at TIMESTAMP DEFAULT NULL")
             
             # Settings table (for balance, budget, digest)
             cursor.execute('''
@@ -104,15 +111,22 @@ def setup_database():
             ''')
             
             # Create indexes
+            cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_uid ON transactions(uid)')
+            cursor.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_ref_live ON transactions(reference_number)
+                WHERE reference_number IS NOT NULL AND reference_number != '' AND deleted_at IS NULL
+            ''')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_reference_number ON transactions(reference_number)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_date ON transactions(transaction_date)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_type ON transactions(transaction_type)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_category ON transactions(category)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_deleted_at ON transactions(deleted_at)')
             
             # Ensure default settings exist without overwriting live values
             cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('initial_balance', '0.0'))
             cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('current_balance', '0.0'))
             cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('monthly_budget', '0.0'))
+            cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('backup_revision', '1'))
             
             conn.commit()
             logger.info("Database initialized successfully.")
