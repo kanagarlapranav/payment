@@ -134,3 +134,29 @@ def setup_database():
         logger.error(f"Error setting up database: {e}")
         raise
 
+def get_custom_menu_items() -> list:
+    """Returns all custom cafeteria menu items from the database."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, price, category, is_veg, created_at FROM custom_menu_items ORDER BY id ASC")
+        return [dict(row) for row in cursor.fetchall()]
+
+def delete_custom_menu_item_by_id(item_id: int):
+    """Deletes a custom cafeteria menu item by its ID. Returns (success, item_name)."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM custom_menu_items WHERE id = ?", (item_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False, "Item not found"
+        name = row['name']
+        cursor.execute("DELETE FROM custom_menu_items WHERE id = ?", (item_id,))
+        conn.commit()
+    try:
+        from services.backup_service import export_database_to_json
+        export_database_to_json()
+    except Exception as e:
+        logger.warning(f"Backup after custom menu deletion failed: {e}")
+    return True, name
+
+

@@ -276,21 +276,24 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     "━━━━━━━━━━━━━━\n"
                     f"💳 <b>Current Balance:</b> <b>{format_currency(balance)}</b>\n\n"
                     f"📅 <b>Today's Cash Flow:</b>\n"
-                    f"• 🟢 Received: +{format_currency(today_stats['total_received'])}\n"
-                    f"• 🔴 Spent: -{format_currency(today_stats['total_sent'])}\n"
-                    f"• 📈 Net Change: {format_currency(today_stats['net_change'])}\n\n"
+                    f"• 🟢 Received: +{format_currency(today_stats.total_received)}\n"
+                    f"• 🔴 Spent: -{format_currency(today_stats.total_sent)}\n"
+                    f"• 📈 Net Change: {format_currency(today_stats.net_change)}\n\n"
                     f"📊 <b>All-Time Totals:</b>\n"
-                    f"• Total Received: {format_currency(overall['total_received'])}\n"
-                    f"• Total Spent: {format_currency(overall['total_sent'])}\n"
-                    f"• Total Records: {overall['tx_count']}\n"
+                    f"• Total Received: {format_currency(overall.total_received)}\n"
+                    f"• Total Spent: {format_currency(overall.total_sent)}\n"
+                    f"• Total Records: {overall.transaction_count}\n"
                     "━━━━━━━━━━━━━━"
                 )
                 from telegram import InlineKeyboardButton
                 extra_btn = [InlineKeyboardButton("➕ Quick Add", callback_data="nav:quickadd")]
                 await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(extra_btn), parse_mode='HTML')
             elif nav_target == "today":
+                from database.queries import get_transactions_by_date
+                from utils.dates import get_current_time_in_tz
                 today_stats = get_today_summary()
-                txs = today_stats.get('transactions', [])
+                today_date = get_current_time_in_tz().date()
+                txs = get_transactions_by_date(today_date)
                 lines = [
                     "📅 <b>Today's Transactions</b>",
                     "━━━━━━━━━━━━━━"
@@ -306,7 +309,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                             f"   🏷 {html.escape(t.get('category') or 'General')} | 💼 Bal: <code>{format_currency(t.get('balance_after', 0))}</code>\n"
                         )
                 lines.append("━━━━━━━━━━━━━━")
-                lines.append(f"🔴 Spent: {format_currency(today_stats['total_sent'])} | 🟢 Recv: {format_currency(today_stats['total_received'])}")
+                lines.append(f"🔴 Spent: {format_currency(today_stats.total_sent)} | 🟢 Recv: {format_currency(today_stats.total_received)}")
                 from telegram import InlineKeyboardButton
                 extra_btn = [InlineKeyboardButton("➕ Quick Add", callback_data="nav:quickadd")]
                 await query.edit_message_text("\n".join(lines), reply_markup=get_back_to_menu_keyboard(extra_btn), parse_mode='HTML')
@@ -1207,7 +1210,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         from database.db import get_custom_menu_items
         custom_items = get_custom_menu_items()
         if not custom_items:
-            await query.message.reply_text("ℹ️ No custom menu items found to delete. Predefined standard items cannot be removed.", parse_mode='HTML')
+            await query.message.reply_text(
+                "ℹ️ No custom menu items found to delete. Predefined standard items cannot be removed.",
+                reply_markup=get_back_to_menu_keyboard(),
+                parse_mode='HTML'
+            )
         else:
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup
             keyboard = []
@@ -1225,12 +1232,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         from database.db import delete_custom_menu_item_by_id
         success, name = delete_custom_menu_item_by_id(item_id)
         if success:
-            await query.edit_message_text(f"✅ Removed custom item: <b>{html.escape(name)}</b> from cafeteria menu.", parse_mode='HTML')
+            await query.edit_message_text(f"✅ Removed custom item: <b>{html.escape(name)}</b> from cafeteria menu.", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         else:
-            await query.edit_message_text("❌ Failed to remove menu item.", parse_mode='HTML')
+            await query.edit_message_text("❌ Failed to remove menu item.", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
 
     elif action == "cafe_del_cancel":
-        await query.edit_message_text("❌ Menu item deletion cancelled.")
+        await query.edit_message_text("❌ Menu item deletion cancelled.", reply_markup=get_back_to_menu_keyboard())
+
 
     elif action == "cafe_edit_last":
         from database.queries import get_cafeteria_transactions

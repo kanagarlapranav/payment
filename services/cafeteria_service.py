@@ -141,6 +141,11 @@ def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea"
                 (name_clean, float(price), category)
             )
             conn.commit()
+        try:
+            from services.backup_service import export_database_to_json
+            export_database_to_json()
+        except Exception:
+            pass
         return True, f"✅ Added '<b>{name_clean}</b>' (₹{price:.0f}) to {category}!"
     except Exception as e:
         return False, f"Database error: {e}"
@@ -155,11 +160,19 @@ def delete_custom_menu_item(name: str) -> Tuple[bool, str]:
             cursor.execute("DELETE FROM custom_menu_items WHERE lower(name) = lower(?)", (name.strip(),))
             if cursor.rowcount > 0:
                 conn.commit()
+                try:
+                    from services.backup_service import export_database_to_json
+                    export_database_to_json()
+                except Exception:
+                    pass
                 return True, f"🗑️ Removed '<b>{name}</b>' from menu."
             else:
                 return False, f"Item '<b>{name}</b>' not found in custom items."
     except Exception as e:
         return False, f"Error deleting item: {e}"
+
+from database.db import get_custom_menu_items, delete_custom_menu_item_by_id
+
 
 def is_cafeteria_payment(person_name: str = "", upi_id: str = "", ocr_text: str = "") -> bool:
     """Checks if a payment was made to Vikraman Nair / Cafeteria."""

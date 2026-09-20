@@ -35,14 +35,14 @@ def render_home_menu_text() -> str:
     if b_info.get('budget', 0) > 0:
         budget_line = f"🎯 <b>Budget:</b> <code>{b_info['progress_bar']}</code> {b_info['percentage']:.0f}% (₹{b_info['spent']:,.0f} / ₹{b_info['budget']:,.0f})\n"
         
-    net_today = today_stats['net_change']
+    net_today = today_stats.net_change
     net_sign = "+" if net_today >= 0 else "-"
     
     return (
         f"⚡ <b>Payment Tracker Dashboard</b>\n"
         f"━━━━━━━━━━━━━━\n"
         f"💰 <b>Balance:</b> <b>{format_currency(balance)}</b>\n"
-        f"📅 <b>Today:</b> {net_sign}{format_currency(abs(net_today))} ({today_stats['tx_count']} txs)\n"
+        f"📅 <b>Today:</b> {net_sign}{format_currency(abs(net_today))} ({today_stats.transaction_count} txs)\n"
         f"🗓️ <b>{m_name} {now.year} Spent:</b> {format_currency(monthly['total_sent'])}\n"
         f"{budget_line}"
         f"━━━━━━━━━━━━━━\n"
@@ -63,11 +63,17 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
         text = "🧾 <b>Transaction History</b>\n━━━━━━━━━━━━━━\n<i>No transactions found for this filter.</i>"
         return text, get_back_to_menu_keyboard()
         
+    if page == 1 and filter_type == "ALL":
+        header = "🧾 <b>Latest 5 Transactions</b>"
+    else:
+        header = f"🧾 <b>Transaction History ({filter_type})</b>"
+
     lines = [
-        f"🧾 <b>Transaction History ({filter_type})</b>",
+        header,
         f"<i>Page {page} of {total_pages} ({total_count} records)</i>",
         "━━━━━━━━━━━━━━"
     ]
+
     
     for t in items:
         is_recv = t['transaction_type'] == 'RECEIVED'
@@ -172,7 +178,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /dashboard — View interactive dark-mode charts & live web analytics\n\n"
         "📊 <b>4. Balance & History</b>\n"
         "• /balance — Current balance, total sent/received today & net flow\n"
-        "• /history — Clean sequential transaction list with dates & amounts\n"
+        "• /history — Clean sequential transaction list with pagination & filters\n"
+        "• /last5 (or /recent) — View the latest 5 transactions immediately\n"
         "• /details — Detailed view with database IDs & UTR numbers\n"
         "• /date &lt;date&gt; — View transactions on a specific date\n"
         "• /search &lt;query&gt; — Search by person name, bank, or UTR\n"
@@ -244,6 +251,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     transactions = get_all_transactions_asc()
     if not transactions:
+
         await update.message.reply_text("ℹ️ No transactions recorded yet.")
         return
 
@@ -287,6 +295,13 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(part, parse_mode='Markdown')
     else:
         await update.message.reply_text(text, parse_mode='Markdown')
+
+async def last5_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays the latest 5 transactions immediately without pagination confusion."""
+    if not await is_authorized(update): return
+    recalculate_all_balances()
+    text, markup = render_history_page(page=1, filter_type="ALL", page_size=5)
+    await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
 
 async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays transactions WITH IDs and full technical details on demand."""
