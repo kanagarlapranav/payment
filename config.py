@@ -42,7 +42,7 @@ TESSERACT_CMD = os.getenv('TESSERACT_CMD', r'C:\Program Files\Tesseract-OCR\tess
 DEFAULT_TIMEZONE = 'Asia/Kolkata'
 
 # Google Gemini Vision AI Configuration
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+GEMINI_API_KEY = os.getenv('GOOGLE_API_KEY') or os.getenv('GEMINI_API_KEY')
 GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-3.6-flash')
 
 # Google Drive Cloud Storage Configuration
