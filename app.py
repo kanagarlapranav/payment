@@ -169,7 +169,6 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
         elif path == '/api/data':
             dash_token = DASHBOARD_TOKEN or os.getenv("DASHBOARD_TOKEN", "")
 
-            # Verify authentication via X-Dash-Token header OR ?token= query parameter
             supplied_header = self.headers.get("X-Dash-Token", "")
             supplied_query = query_params.get("token", [""])[0]
             supplied = supplied_header or supplied_query
@@ -183,48 +182,112 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
 
             from database.queries import (
                 get_balance_setting, get_monthly_summary, get_category_summary,
-                get_recent_transactions, get_all_transactions
+                get_recent_transactions, get_all_transactions, get_month_comparison_stats,
+                get_daily_spend_series, get_top_payees, get_transactions_paginated
             )
             from services.budget_service import get_budget_info
 
             now = datetime.now()
+            try:
+                year = int(query_params.get("year", [now.year])[0])
+            except (ValueError, TypeError):
+                year = now.year
+                
+            try:
+                month = int(query_params.get("month", [now.month])[0])
+            except (ValueError, TypeError):
+                month = now.month
+
             balance = get_balance_setting()
-            monthly = get_monthly_summary(now.year, now.month)
-            cat_summary = get_category_summary(now.year, now.month)
-            budget_data = get_budget_info(now.year, now.month)
-            recent_txs = get_recent_transactions(limit=25)
+            monthly = get_monthly_summary(year, month)
+            cat_summary = get_category_summary(year, month)
+            budget_data = get_budget_info(year, month)
+            comp_stats = get_month_comparison_stats(year, month)
+            daily_series = get_daily_spend_series(year, month)
+            top_payees = get_top_payees(limit=5, year=year, month=month)
+            txs_data = get_transactions_paginated(page=1, page_size=100, year=year, month=month)
             all_txs = get_all_transactions()
 
             month_names = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
-            period_str = f"{month_names[now.month]} {now.year}"
+            period_str = f"{month_names[month]} {year}"
 
-            # Spending categories
+            # Spending categories with percentage
             sent_categories = []
+            total_spent_val = float(monthly['total_sent'] or 0.0)
             for c in cat_summary:
                 if c['transaction_type'] == 'SENT':
+                    amt = float(c['total_amount'])
+                    pct = (amt / total_spent_val * 100) if total_spent_val > 0 else 0.0
                     sent_categories.append({
                         'category': c['category'] or 'General',
-                        'amount': float(c['total_amount']),
+                        'amount': amt,
+                        'percentage': round(pct, 1),
                         'count': int(c['count'])
                     })
 
             payload = {
+                'year': year,
+                'month': month,
                 'period_name': period_str,
                 'current_balance': balance,
                 'total_received': monthly['total_received'],
                 'total_spent': monthly['total_sent'],
                 'net_savings': monthly['net_savings'],
                 'total_transactions': len(all_txs),
+                'month_transactions_count': txs_data['total_count'],
+                'comparison': comp_stats,
                 'budget_info': budget_data,
                 'categories': sent_categories,
-                'recent_transactions': recent_txs
+                'daily_series': daily_series,
+                'top_payees': top_payees,
+                'recent_transactions': txs_data['transactions']
             }
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
-            # Public Access-Control-Allow-Origin: * header has been removed
             self.end_headers()
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
+
+        # 4. CSV Export API
+        elif path == '/api/export.csv':
+            dash_token = DASHBOARD_TOKEN or os.getenv("DASHBOARD_TOKEN", "")
+            supplied_header = self.headers.get("X-Dash-Token", "")
+            supplied_query = query_params.get("token", [""])[0]
+            supplied = supplied_header or supplied_query
+
+            if not dash_token or not hmac.compare_digest(supplied, dash_token):
+                self.send_response(401)
+                self.end_headers()
+                return
+
+            from database.queries import get_all_transactions_asc
+            import csv
+            import io
+
+            txs = get_all_transactions_asc()
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(['ID', 'Date', 'Time', 'Type', 'Amount (INR)', 'Payee / Person', 'Category', 'Bank / App', 'Reference / UTR', 'Balance After'])
+            for t in txs:
+                writer.writerow([
+                    t['id'],
+                    t['transaction_date'],
+                    t['transaction_time'] or '',
+                    t['transaction_type'],
+                    f"{t['amount']:.2f}",
+                    t['person_name'] or '',
+                    t['category'] or 'General',
+                    t['bank_name'] or t['payment_app'] or '',
+                    t['reference_number'] or '',
+                    f"{t['balance_after']:.2f}"
+                ])
+
+            csv_content = output.getvalue().encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-type', 'text/csv; charset=utf-8')
+            self.send_header('Content-Disposition', 'attachment; filename="payment_tracker_ledger.csv"')
+            self.end_headers()
+            self.wfile.write(csv_content)
 
         else:
             self.send_response(404)
