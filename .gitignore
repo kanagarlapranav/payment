@@ -15,6 +15,7 @@ data/*.json
 !data/backup_transactions.json
 data/*.xlsx
 data/*.pdf
+data/archive/
 *.db
 *.sqlite3
 data/images/*

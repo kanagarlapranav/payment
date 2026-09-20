@@ -23,20 +23,32 @@ from bot.handlers import handle_image, handle_callback_query, handle_text
 from services.scheduler_service import scheduler
 
 async def on_startup(app):
-    """Restores database state from cloud backup only if database is empty on fresh container spins."""
+    """Restores database state from cloud backup only if database is completely empty on fresh container spins."""
     try:
-        from services.backup_service import restore_from_telegram, import_database_from_json, BACKUP_JSON_PATH
-        from database.queries import get_all_transactions
+        from services.backup_service import restore_from_telegram, import_database_from_json, export_database_to_json, BACKUP_JSON_PATH
+        from database.db import get_db_connection
 
-        existing = get_all_transactions()
-        if not existing:
-            logger.info("Database is empty on fresh container spin. Restoring data...")
-            restored = await restore_from_telegram(app.bot)
-            if not restored and BACKUP_JSON_PATH.exists():
-                import_database_from_json(BACKUP_JSON_PATH)
-                logger.info("Restored database from local JSON backup on startup.")
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM transactions")
+            total_rows = cur.fetchone()[0]
+
+        if total_rows > 0:
+            logger.info(f"Startup check: [SKIPPED RESTORE] - Local database has {total_rows} records.")
         else:
-            logger.info(f"Database contains {len(existing)} transactions.")
+            logger.info("Startup check: [EMPTY DB] - Fresh container spin detected. Attempting cloud restore from Telegram...")
+            restored = await restore_from_telegram(app.bot)
+            if restored:
+                logger.info("Startup check: [RESTORE SUCCESS] - Database restored successfully from cloud backup.")
+                export_database_to_json()
+            elif BACKUP_JSON_PATH.exists():
+                res = import_database_from_json(BACKUP_JSON_PATH)
+                if res.get('success'):
+                    logger.info("Startup check: [LOCAL RESTORE] - Restored from local backup file.")
+                else:
+                    logger.warning("Startup check: [EMPTY & NO BACKUP] - Local backup file present but import failed.")
+            else:
+                logger.warning("Startup check: [EMPTY & NO BACKUP] - Starting with brand new database.")
 
         # Clean up any leftover temporary images from prior runs
         try:
@@ -61,11 +73,22 @@ async def on_startup(app):
     except Exception as sched_err:
         logger.error(f"Scheduler startup error: {sched_err}")
 
+async def on_shutdown(app):
+    """Executes graceful final backup on SIGTERM or container stop."""
+    try:
+        from services.backup_service import backup_to_telegram, export_database_to_json
+        logger.info("Executing graceful pre-shutdown database backup...")
+        export_database_to_json()
+        await backup_to_telegram(app.bot)
+        logger.info("Pre-shutdown backup completed.")
+    except Exception as e:
+        logger.warning(f"Shutdown backup notice: {e}")
+
 def build_application():
     """Builds and configures the Telegram Application."""
     setup_database()
     req = HTTPXRequest(read_timeout=60.0, write_timeout=60.0, connect_timeout=30.0, pool_timeout=60.0)
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(req).post_init(on_startup).build()
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(req).post_init(on_startup).post_shutdown(on_shutdown).build()
 
     # Core commands
     app.add_handler(CommandHandler("start", start_command))

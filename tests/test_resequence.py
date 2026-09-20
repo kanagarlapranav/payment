@@ -58,21 +58,27 @@ class TestResequenceAndBalance(unittest.TestCase):
     def test_resequence_on_deletion(self):
         txs = get_all_transactions_asc()
         initial_count = len(txs)
-        self.assertGreaterEqual(initial_count, 4)
+        self.assertEqual(initial_count, 5)
         
-        # Verify initial IDs are strictly 1..N
+        # Verify initial IDs are strictly 1..5
         ids = [t['id'] for t in txs]
-        self.assertEqual(ids, list(range(1, initial_count + 1)))
+        self.assertEqual(ids, [1, 2, 3, 4, 5])
         
         # Delete transaction #2
         deleted = delete_transaction(2)
         self.assertTrue(deleted)
         
-        # After deletion, IDs must be strictly 1..(N-1) with NO gaps
+        # After deletion, live count is 4 and ID #2 is missing with gap preserved: [1, 3, 4, 5]
         txs_after = get_all_transactions_asc()
-        self.assertEqual(len(txs_after), initial_count - 1)
+        self.assertEqual(len(txs_after), 4)
         ids_after = [t['id'] for t in txs_after]
-        self.assertEqual(ids_after, list(range(1, initial_count)))
+        self.assertEqual(ids_after, [1, 3, 4, 5])
+        
+        # Verify row #2 still exists in the database as a tombstone
+        with get_db_connection() as conn:
+            row2 = conn.execute("SELECT * FROM transactions WHERE id = 2").fetchone()
+            self.assertIsNotNone(row2)
+            self.assertIsNotNone(row2['deleted_at'])
         
         # Balances should remain consistent
         running = 0.0

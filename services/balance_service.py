@@ -25,12 +25,12 @@ def update_balance_for_transaction(transaction: Transaction) -> Transaction:
     return transaction
 
 def get_today_summary() -> TransactionSummary:
-    """Calculates summary of today's transactions."""
+    """Calculates summary of today's transactions (live rows only)."""
     today = get_current_time_in_tz().date()
     
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT transaction_type, amount FROM transactions WHERE transaction_date = ?", (today,))
+        cursor.execute("SELECT transaction_type, amount FROM transactions WHERE transaction_date = ? AND deleted_at IS NULL", (today,))
         rows = cursor.fetchall()
         
         summary = TransactionSummary()
@@ -47,10 +47,10 @@ def get_today_summary() -> TransactionSummary:
         return summary
 
 def get_overall_summary() -> TransactionSummary:
-    """Calculates summary across ALL transactions."""
+    """Calculates summary across ALL live transactions."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT transaction_type, amount FROM transactions")
+        cursor.execute("SELECT transaction_type, amount FROM transactions WHERE deleted_at IS NULL")
         rows = cursor.fetchall()
         
         summary = TransactionSummary()
@@ -68,45 +68,27 @@ def get_overall_summary() -> TransactionSummary:
 
 def resequence_transaction_ids() -> None:
     """
-    Resequences all transactions so that IDs are strictly consecutive 1, 2, 3, ... N
-    in chronological order with NO missing IDs or gaps.
-    Updates sqlite_sequence so the next inserted record receives ID N+1.
+    DISCONTINUED: Stable permanent IDs are now maintained.
+    Gaps in sequence are accepted and preserved to avoid shifting IDs across backups.
     """
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM transactions ORDER BY transaction_date ASC, created_at ASC, id ASC")
-        rows = cursor.fetchall()
-        if not rows:
-            cursor.execute("UPDATE sqlite_sequence SET seq = 0 WHERE name = 'transactions'")
-            conn.commit()
-            return
-        
-        # Step 1: Temporarily assign negative sequential IDs to avoid UNIQUE constraint conflicts
-        for idx, row in enumerate(rows, 1):
-            cursor.execute("UPDATE transactions SET id = ? WHERE id = ?", (-idx, row['id']))
-            
-        # Step 2: Invert negative IDs back to positive contiguous 1..N IDs
-        cursor.execute("UPDATE transactions SET id = -id WHERE id < 0")
-        
-        # Step 3: Update sqlite autoincrement sequence counter
-        cursor.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = 'transactions'", (len(rows),))
-        conn.commit()
+    logger.debug("resequence_transaction_ids called — skipped to preserve stable permanent transaction IDs.")
+    return
 
 def recalculate_all_balances() -> float:
     """
-    Recalculates balance_before and balance_after for all transactions in chronological order.
-    Updates the settings table with the final current balance and returns it.
+    Recalculates balance_before and balance_after for all live transactions in chronological order.
+    Updates the settings table with the final derived current balance and returns it.
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         
-        # Get initial balance
+        # Get initial balance anchor
         cursor.execute("SELECT value FROM settings WHERE key = 'initial_balance'")
         row = cursor.fetchone()
         running_balance = float(row['value']) if row else 0.0
         
-        # Fetch all transactions in chronological order
-        cursor.execute("SELECT id, transaction_type, amount FROM transactions ORDER BY transaction_date ASC, created_at ASC, id ASC")
+        # Fetch all live transactions in chronological order
+        cursor.execute("SELECT id, transaction_type, amount FROM transactions WHERE deleted_at IS NULL ORDER BY transaction_date ASC, created_at ASC, id ASC")
         txs = cursor.fetchall()
         
         for tx in txs:
@@ -144,7 +126,7 @@ def set_explicit_balance(new_balance: float) -> float:
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT transaction_type, amount FROM transactions ORDER BY transaction_date ASC, created_at ASC, id ASC")
+        cursor.execute("SELECT transaction_type, amount FROM transactions WHERE deleted_at IS NULL ORDER BY transaction_date ASC, created_at ASC, id ASC")
         txs = cursor.fetchall()
         net_delta = 0.0
         for tx in txs:
