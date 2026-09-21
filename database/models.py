@@ -29,6 +29,7 @@ class Transaction:
     telegram_message_id: str = ""
     telegram_chat_id: str = ""
     uid: Optional[str] = None
+    occurred_at: Optional[str] = None
     deleted_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

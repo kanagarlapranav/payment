@@ -119,11 +119,9 @@ def commit_transaction(transaction: Transaction) -> bool:
                     tx_type=transaction.transaction_type or ""
                 )
                 
-            # Update balance
-            transaction = update_balance_for_transaction(transaction)
-            
-            # Save to DB
-            transaction_id = insert_transaction(transaction)
+            # Save to DB and atomically recalculate entire balance chain
+            from database.queries import insert_transaction_with_balance
+            transaction_id = insert_transaction_with_balance(transaction)
             transaction.id = transaction_id
             
             # Keep local JSON snapshot in sync

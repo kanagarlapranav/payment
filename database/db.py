@@ -67,13 +67,14 @@ def setup_database():
                         telegram_message_id TEXT,
                         telegram_chat_id TEXT,
                         uid TEXT UNIQUE,
-                        deleted_at TIMESTAMP DEFAULT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        occurred_at TEXT,
+                        deleted_at TEXT DEFAULT NULL,
+                        created_at TEXT,
+                        updated_at TEXT
                     )
                 ''')
                 
-                # Migration checks: Ensure category, uid, deleted_at columns exist
+                # Migration checks: Ensure category, uid, deleted_at, occurred_at columns exist
                 cursor.execute("PRAGMA table_info(transactions)")
                 columns = [row[1] for row in cursor.fetchall()]
                 if "category" not in columns:
@@ -82,14 +83,16 @@ def setup_database():
                     cursor.execute("ALTER TABLE transactions ADD COLUMN uid TEXT")
                 cursor.execute("UPDATE transactions SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL OR uid = ''")
                 if "deleted_at" not in columns:
-                    cursor.execute("ALTER TABLE transactions ADD COLUMN deleted_at TIMESTAMP DEFAULT NULL")
+                    cursor.execute("ALTER TABLE transactions ADD COLUMN deleted_at TEXT DEFAULT NULL")
+                if "occurred_at" not in columns:
+                    cursor.execute("ALTER TABLE transactions ADD COLUMN occurred_at TEXT")
                 
                 # Settings table (for balance, budget, digest)
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS settings (
                         key TEXT PRIMARY KEY,
                         value TEXT NOT NULL,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        updated_at TEXT
                     )
                 ''')
                 
@@ -101,7 +104,7 @@ def setup_database():
                         price REAL NOT NULL,
                         category TEXT DEFAULT 'Snacks & Tea',
                         is_veg INTEGER DEFAULT 1,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        created_at TEXT
                     )
                 ''')
                 
@@ -110,7 +113,7 @@ def setup_database():
                     CREATE TABLE IF NOT EXISTS payee_categories (
                         payee_name TEXT PRIMARY KEY,
                         category TEXT NOT NULL,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        updated_at TEXT
                     )
                 ''')
 
@@ -124,7 +127,7 @@ def setup_database():
                         category TEXT DEFAULT 'Bills & Utilities',
                         is_active INTEGER DEFAULT 1,
                         last_notified DATE,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        created_at TEXT
                     )
                 ''')
                 
@@ -136,15 +139,36 @@ def setup_database():
                 ''')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_reference_number ON transactions(reference_number)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_date ON transactions(transaction_date)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_occurred_at ON transactions(occurred_at)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_type ON transactions(transaction_type)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_category ON transactions(category)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_deleted_at ON transactions(deleted_at)')
                 
+                # Idempotent Schema Migration v3: Backfill occurred_at and set updated_at to migration time in UTC
+                from utils.dates import build_occurred_at, utc_now_iso
+                cursor.execute("SELECT value FROM settings WHERE key = 'schema_version'")
+                ver_row = cursor.fetchone()
+                current_schema_ver = int(ver_row['value']) if ver_row and str(ver_row['value']).isdigit() else 0
+
+                if current_schema_ver < 3:
+                    cursor.execute("SELECT id, transaction_date, transaction_time FROM transactions WHERE occurred_at IS NULL OR occurred_at = ''")
+                    backfill_rows = cursor.fetchall()
+                    for r in backfill_rows:
+                        occ = build_occurred_at(r['transaction_date'], r['transaction_time'])
+                        cursor.execute("UPDATE transactions SET occurred_at = ? WHERE id = ?", (occ, r['id']))
+
+                    mig_time = utc_now_iso()
+                    cursor.execute("UPDATE transactions SET updated_at = ?", (mig_time,))
+                    cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('schema_version', '3', ?)", (mig_time,))
+                    logger.info(f"Executed schema migration v3: backfilled occurred_at for {len(backfill_rows)} rows, stamped updated_at with {mig_time}")
+
+                now_utc = utc_now_iso()
                 # Ensure default settings exist without overwriting live values
-                cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('initial_balance', '0.0'))
-                cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('current_balance', '0.0'))
-                cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('monthly_budget', '0.0'))
-                cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('backup_revision', '1'))
+                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('initial_balance', '0.0', now_utc))
+                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('current_balance', '0.0', now_utc))
+                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('monthly_budget', '0.0', now_utc))
+                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('backup_revision', '1', now_utc))
+                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('schema_version', '3', now_utc))
                 
                 conn.commit()
                 logger.info("Database initialized successfully.")
