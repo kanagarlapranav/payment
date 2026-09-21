@@ -150,3 +150,35 @@ def format_display_date(d) -> str:
     if parsed:
         return parsed.strftime("%d %b %Y")
     return str(d)
+
+def parse_utc_iso(ts_str: Any) -> datetime | None:
+    """
+    Parses an ISO 8601 timestamp string into a timezone-aware UTC datetime.
+    Handles 'Z', timezone offsets, naive timestamps (assumed UTC), and datetime objects.
+    Returns None if parsing fails or input is empty.
+    """
+    if not ts_str:
+        return None
+    if isinstance(ts_str, datetime):
+        if ts_str.tzinfo is None:
+            return ts_str.replace(tzinfo=timezone.utc)
+        return ts_str.astimezone(timezone.utc)
+    s = str(ts_str).strip()
+    if not s:
+        return None
+    try:
+        if s.endswith('Z') or s.endswith('z'):
+            s = s[:-1] + '+00:00'
+        # Handle space separator instead of 'T'
+        if ' ' in s and 'T' not in s:
+            s = s.replace(' ', 'T')
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt
+    except Exception as e:
+        logger.debug(f"Failed to parse timestamp {ts_str!r}: {e}")
+        return None
+

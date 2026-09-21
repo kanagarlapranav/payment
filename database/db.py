@@ -195,7 +195,14 @@ def setup_database():
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('last_local_backup_at', '', now_utc))
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('last_telegram_backup_at', '', now_utc))
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('last_drive_backup_at', '', now_utc))
+                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('database_initialized', '0', now_utc))
+                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('backup_blocked', '0', now_utc))
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('schema_version', '3', now_utc))
+                
+                # If transactions already exist, ensure database is marked initialized
+                cursor.execute("SELECT COUNT(*) FROM transactions")
+                if cursor.fetchone()[0] > 0:
+                    cursor.execute("UPDATE settings SET value = '1' WHERE key = 'database_initialized' AND value = '0'")
                 
                 conn.commit()
                 logger.info("Database initialized successfully.")

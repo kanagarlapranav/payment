@@ -1149,14 +1149,54 @@ async def delmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ {html.escape(msg)}", parse_mode='HTML')
 
 async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Restores database transactions from clean text JSON backup file via idempotent upsert."""
+    """Restores database transactions from clean text JSON backup file via idempotent upsert with admin confirmation."""
     if not await is_authorized(update): return
-    from services.backup_service import import_database_from_json, BACKUP_JSON_PATH
+    if not is_admin_user(update):
+        await update.message.reply_text("⛔ <b>Admin Only:</b> Only the bot owner can restore backups.", parse_mode='HTML')
+        return
+
+    from services.backup_service import import_database_from_json, preview_database_import, BACKUP_JSON_PATH, backup_to_telegram
     from database.queries import get_all_transactions
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
     import html
 
     if not BACKUP_JSON_PATH.exists():
-        await update.message.reply_text("❌ No text backup file found to restore from.", parse_mode='HTML')
+        await update.message.reply_text("❌ No backup file found to restore from.", parse_mode='HTML')
+        return
+
+    is_confirmed = bool(context.args and context.args[0].lower() in ('confirm', 'yes', 'force'))
+
+    if not is_confirmed:
+        preview = preview_database_import(BACKUP_JSON_PATH)
+        if not preview.get('success'):
+            await update.message.reply_text(f"❌ <b>Invalid Backup:</b> {html.escape(str(preview.get('error')))}", parse_mode='HTML')
+            return
+
+        to_add = preview.get('to_add', 0)
+        to_upd = preview.get('to_update', 0)
+        to_skp = preview.get('to_skip', 0)
+        tot = preview.get('total', 0)
+        rev = preview.get('revision', 1)
+        ver = preview.get('version', 2)
+        bal = preview.get('backup_balance', 0.0)
+
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Confirm Restore", callback_data="restore_confirm"),
+                InlineKeyboardButton("❌ Cancel", callback_data="restore_cancel")
+            ]
+        ])
+        text = (
+            f"📦 <b>Backup Restore Preview (Format v{ver}, Rev {rev})</b>\n\n"
+            f"• <b>Total Records in Backup:</b> {tot}\n"
+            f"• <b>Will Add:</b> {to_add} records\n"
+            f"• <b>Will Update:</b> {to_upd} records\n"
+            f"• <b>Will Skip:</b> {to_skp} records\n"
+            f"• <b>Recorded Balance:</b> {format_currency(bal)}\n\n"
+            f"⚠️ <b>Confirm Restore?</b>\n"
+            f"Tap <b>Confirm Restore</b> below or type <code>/restore confirm</code> to apply."
+        )
+        await update.message.reply_text(text, reply_markup=keyboard, parse_mode='HTML')
         return
 
     await update.message.reply_text("⏳ Restoring ledger from backup via idempotent upsert...")
@@ -1165,19 +1205,32 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Nothing was saved: {html.escape(str(result.get('error')))}", parse_mode='HTML')
         return
 
-    from services.backup_service import backup_to_telegram
     backed_up = await backup_to_telegram(context.bot)
     status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
 
     txs = get_all_transactions()
     ins = result.get('inserted', 0)
     upd = result.get('updated', 0)
+    skp = result.get('skipped', 0)
+
+    mismatch_warning = ""
+    if not result.get('balance_match', True):
+        bk_b = format_currency(result.get('backup_balance', 0))
+        dr_b = format_currency(result.get('derived_balance', 0))
+        mismatch_warning = (
+            f"\n\n🚨 <b>BALANCE MISMATCH REPORTED:</b>\n"
+            f"• Backup stated: {bk_b}\n"
+            f"• Recalculated ledger: {dr_b}\n"
+            f"<i>The ledger running balance was not silently overwritten.</i>\n"
+        )
+
     await update.message.reply_text(
         f"✅ <b>Database Restored Successfully!</b>\n\n"
         f"• <b>{ins}</b> new records inserted.\n"
         f"• <b>{upd}</b> existing records updated.\n"
+        f"• <b>{skp}</b> records unchanged (skipped).\n"
         f"• <b>{len(txs)}</b> active live transactions now available.\n"
-        f"• Permanent UIDs & running balances verified.\n"
+        f"• Permanent UIDs & running balances verified.{mismatch_warning}\n"
         f"• <b>Cloud Status:</b> {status_line}\n\n"
         f"Use <code>/history</code> or <code>/balance</code> to view restored transactions.",
         parse_mode='HTML'

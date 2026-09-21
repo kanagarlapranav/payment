@@ -117,6 +117,8 @@ def insert_transaction_with_balance(t: Transaction) -> int:
             # Step 5: Recalculate chain in this connection
             recalculate_in_connection(conn)
             increment_revision_and_mark_dirty(conn)
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('database_initialized', '1', ?)", (now_utc,))
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('backup_blocked', '0', ?)", (now_utc,))
 
             # Step 6: Commit happens on exit of context manager
             return new_id
@@ -177,9 +179,13 @@ def insert_transaction(t: Transaction) -> int:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(query, values)
+            new_id = cursor.lastrowid
+            t.id = new_id
             increment_revision_and_mark_dirty(conn)
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('database_initialized', '1', ?)", (now_utc,))
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('backup_blocked', '0', ?)", (now_utc,))
             conn.commit()
-            return cursor.lastrowid
+            return new_id
 
 def get_transaction_by_reference(reference_number: str):
     """Fetches a transaction by its reference number."""
