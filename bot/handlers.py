@@ -634,6 +634,32 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text("🗑️ <b>Recurring payment deleted.</b>", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         return
 
+    elif action == "restore_confirm":
+        from services.backup_service import import_database_from_json, backup_to_telegram
+        from database.queries import get_all_transactions, get_balance_setting
+        from utils.formatting import format_currency
+        await query.edit_message_text("⏳ <b>Restoring ledger from backup...</b>", parse_mode='HTML')
+        result = await asyncio.to_thread(import_database_from_json)
+        if not result.get('success'):
+            await query.edit_message_text(f"❌ <b>Restore Failed:</b> {html.escape(str(result.get('error')))}", parse_mode='HTML')
+            return
+        await backup_to_telegram(context.bot)
+        txs = await asyncio.to_thread(get_all_transactions)
+        cur_b = format_currency(get_balance_setting())
+        await query.edit_message_text(
+            f"✅ <b>Database Restored Successfully!</b>\n\n"
+            f"• <b>{len(txs)}</b> live transactions available.\n"
+            f"• <b>Current Balance:</b> {cur_b}\n\n"
+            f"Use <code>/balance</code> or <code>/history</code> to view your ledger.",
+            reply_markup=get_back_to_menu_keyboard(),
+            parse_mode='HTML'
+        )
+        return
+
+    elif action == "restore_cancel":
+        await query.edit_message_text("❌ <b>Restore Cancelled.</b>", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+        return
+
     # --- 1. Transaction Detail, Duplicate & Backup Actions ---
     elif action == "tx_view":
         tx_id = int(parts[1])
