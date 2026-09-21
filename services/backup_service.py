@@ -139,7 +139,15 @@ def export_database_to_json(output_path: Path = None) -> dict:
                         json.dump(backup_data, f, indent=2, ensure_ascii=False)
                         f.flush()
                         os.fsync(f.fileno())
-                    tmp_path.replace(path)
+                    for attempt in range(10):
+                        try:
+                            tmp_path.replace(path)
+                            break
+                        except PermissionError:
+                            if attempt == 9:
+                                raise
+                            import time
+                            time.sleep(0.02 * (attempt + 1))
                 finally:
                     if tmp_path.exists():
                         try:
