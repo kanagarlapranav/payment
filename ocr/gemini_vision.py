@@ -4,31 +4,30 @@ import json
 import requests
 import io
 from PIL import Image
-from config import GEMINI_API_KEY, GEMINI_MODEL, logger
+from config import GEMINI_MODEL, logger
 from database.models import Transaction
 from utils.dates import parse_date
 
-FALLBACK_GEMINI_KEY = ""
-REVOKED_LEAKED_KEY = "AIzaSyBxSq2mRHzoayVdItKrQqTC-4UIGqXiU8E"
 GEMINI_MODELS = ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-flash-latest"]
+GEMINI_API_KEY = None  # May be set or overridden in tests
 
 def get_effective_gemini_api_key() -> str:
     """
-    Returns valid Gemini API Key.
-    If missing or set to the revoked leaked key, returns empty string.
+    Returns valid Gemini API Key from environment variables GOOGLE_API_KEY or GEMINI_API_KEY.
+    The values DISABLED, NONE, and NULL mean 'no key'.
+    Supports module-level GEMINI_API_KEY override for testing.
     """
-    import ocr.gemini_vision as gv
-    key = getattr(gv, 'GEMINI_API_KEY', None)
-    if key == "DISABLED" or key is False:
-        return ''
-    if not key:
-        key = os.getenv('GOOGLE_API_KEY') or os.getenv('GEMINI_API_KEY')
-    fb = getattr(gv, 'FALLBACK_GEMINI_KEY', '')
-    if key is None:
-        return fb or ''
+    global GEMINI_API_KEY
+    if GEMINI_API_KEY is not None:
+        key = str(GEMINI_API_KEY).strip()
+        if key.upper() in {"DISABLED", "NONE", "NULL", "FALSE", ""}:
+            return ""
+        return key
+
+    key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or ""
     key = str(key).strip()
-    if not key or key == REVOKED_LEAKED_KEY or key.startswith('gen-lang-client'):
-        return fb or ''
+    if key.upper() in {"DISABLED", "NONE", "NULL", "FALSE", ""}:
+        return ""
     return key
 
 
@@ -61,6 +60,20 @@ def _prepare_image_b64(image_path: str) -> tuple[str, str]:
         ext = os.path.splitext(image_path)[1].lower()
         mime = "image/png" if ext == ".png" else "image/jpeg"
         return raw_b64, mime
+
+def _call_gemini_api(model_name: str, api_key: str, payload: dict, timeout: float = 6.0) -> requests.Response | None:
+    """Makes a POST request to Gemini API passing the key in x-goog-api-key header only."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+    try:
+        return requests.post(url, headers=headers, json=payload, timeout=timeout)
+    except requests.RequestException as req_err:
+        err_msg = str(req_err).replace(api_key, "[REDACTED]") if api_key else str(req_err)
+        logger.warning(f"Gemini model {model_name} request failed/timed out: {err_msg}")
+        return None
 
 def extract_transaction_with_gemini(image_path: str, caption: str = "") -> tuple[Transaction | None, int]:
     """
@@ -106,7 +119,6 @@ def extract_transaction_with_gemini(image_path: str, caption: str = "") -> tuple
 
         last_error = None
         for model_name in models_to_try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
             payload = {
                 "contents": [
                     {
@@ -129,8 +141,10 @@ def extract_transaction_with_gemini(image_path: str, caption: str = "") -> tuple
 
             try:
                 logger.info(f"Invoking Gemini Vision API ({model_name}) for {image_path}...")
-                response = requests.post(url, json=payload, timeout=6.0)
-
+                response = _call_gemini_api(model_name, api_key, payload, timeout=6.0)
+                if response is None:
+                    last_error = "Request failed / timed out"
+                    continue
 
                 if response.status_code == 200:
                     data = response.json()
@@ -184,21 +198,24 @@ def extract_transaction_with_gemini(image_path: str, caption: str = "") -> tuple
                     logger.info(f"Gemini Vision ({model_name}) successfully parsed receipt: {tx_type} Rs. {amount} to/from {person} (Confidence: {confidence}%)")
                     return transaction, confidence
                 else:
-                    logger.warning(f"Gemini model {model_name} returned status {response.status_code}: {response.text[:200]}")
+                    resp_preview = response.text[:200].replace(api_key, "[REDACTED]") if api_key else response.text[:200]
+                    logger.warning(f"Gemini model {model_name} returned status {response.status_code}: {resp_preview}")
                     last_error = f"Status {response.status_code}"
                     if response.status_code in (401, 403):
                         logger.error("Gemini API key rejected (401/403). Halting further model attempts.")
                         break
             except requests.RequestException as req_err:
-                logger.warning(f"Gemini model {model_name} request failed/timed out: {req_err}")
-                last_error = str(req_err)
+                err_msg = str(req_err).replace(api_key, "[REDACTED]") if api_key else str(req_err)
+                logger.warning(f"Gemini model {model_name} request failed/timed out: {err_msg}")
+                last_error = err_msg
                 continue
 
         logger.warning(f"All Gemini Vision models failed or timed out: {last_error}")
         return None, 0
 
     except Exception as e:
-        logger.error(f"Error during Gemini Vision processing: {e}", exc_info=True)
+        err_msg = str(e).replace(api_key, "[REDACTED]") if api_key else str(e)
+        logger.error(f"Error during Gemini Vision processing: {err_msg}", exc_info=True)
         return None, 0
 
 def parse_text_with_gemini(text: str) -> tuple[Transaction | None, int]:
@@ -224,14 +241,13 @@ def parse_text_with_gemini(text: str) -> tuple[Transaction | None, int]:
     )
 
     for model_name in GEMINI_MODELS:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"response_mime_type": "application/json", "temperature": 0.1}
         }
         try:
-            res = requests.post(url, json=payload, timeout=8.0)
-            if res.status_code == 200:
+            res = _call_gemini_api(model_name, api_key, payload, timeout=8.0)
+            if res and res.status_code == 200:
                 data = res.json()
                 parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
                 if not parts:
@@ -279,14 +295,13 @@ def generate_gemini_spending_advice(metrics_summary: str) -> str:
     )
 
     for model_name in GEMINI_MODELS:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.3}
         }
         try:
-            res = requests.post(url, json=payload, timeout=8.0)
-            if res.status_code == 200:
+            res = _call_gemini_api(model_name, api_key, payload, timeout=8.0)
+            if res and res.status_code == 200:
                 parts = res.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
                 if parts:
                     return parts[0].get("text", "").strip()
@@ -307,14 +322,13 @@ def generate_gemini_daily_commentary(daily_summary: str) -> str:
     )
 
     for model_name in GEMINI_MODELS:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.3}
         }
         try:
-            res = requests.post(url, json=payload, timeout=8.0)
-            if res.status_code == 200:
+            res = _call_gemini_api(model_name, api_key, payload, timeout=8.0)
+            if res and res.status_code == 200:
                 parts = res.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
                 if parts:
                     return parts[0].get("text", "").strip()

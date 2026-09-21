@@ -274,7 +274,7 @@ def generate_report(output_filename="Codebase_Audit_Report.pdf"):
         [
             Paragraph(
                 "<b>Observation:</b> <code>check_messages.py</code> (line 6) and <code>setup_env.py</code> (line 6) hardcoded the live production Telegram Bot Token: "
-                "<code>8863268724:AAFcDfpdgTXas2E6OnNIQj9mRIwRzQ8WV94</code>.<br/>"
+                "<code>8863268724:AAFc...[REVOKED]</code>.<br/>"
                 "<b>Git Verification:</b> Confirmed. Both files were included in initial commit <code>affae64155db5ab9eddcce8afe31bf6379790193</code> and pushed to remote <code>origin/main</code>. "
                 "Because Git retains full commit history, removing the lines in a future commit does not protect the token — any user or crawler viewing public commit history can extract it.<br/>"
                 "<b>Impact:</b> Full takeover of bot identity, access to payment screenshots, and potential tampering with financial data.<br/>"
