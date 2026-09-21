@@ -43,6 +43,10 @@ def get_more_menu_keyboard():
             InlineKeyboardButton("🍽️ Cafeteria", callback_data="nav:cafe")
         ],
         [
+            InlineKeyboardButton("🔄 Recurring Dues", callback_data="nav:recurring"),
+            InlineKeyboardButton("📊 Month Closing", callback_data="nav:month_close")
+        ],
+        [
             InlineKeyboardButton("☁️ Backup Status", callback_data="nav:backup_status"),
             InlineKeyboardButton("🌐 Web Dashboard", callback_data="nav:dash_info")
         ],
@@ -58,6 +62,49 @@ def get_more_menu_keyboard():
 
 # Backward-compatibility alias
 get_settings_menu_keyboard = get_more_menu_keyboard
+
+def get_recurring_menu_keyboard(upcoming_items: list = None):
+    """Returns recurring payments overview keyboard with quick pay/skip buttons."""
+    keyboard = []
+    if upcoming_items:
+        for it in upcoming_items[:4]:
+            rec_id = it['id']
+            payee = (it.get('payee_name') or 'Due')[:12]
+            try:
+                amt = int(float(it.get('amount', 0)))
+            except Exception:
+                amt = 0
+            keyboard.append([
+                InlineKeyboardButton(f"✅ Pay #{rec_id} {payee} (₹{amt})", callback_data=f"rec_paid:{rec_id}"),
+                InlineKeyboardButton(f"⏭️ Skip", callback_data=f"rec_skip:{rec_id}")
+            ])
+    keyboard.append([
+        InlineKeyboardButton("➕ Add Recurring", callback_data="nav:rec_add"),
+        InlineKeyboardButton("📋 All Recurring", callback_data="nav:rec_all")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("⬅️ Back", callback_data="nav:more")
+    ])
+    return InlineKeyboardMarkup(keyboard)
+
+def get_recurring_detail_keyboard(rec_id: int, status: str = "ACTIVE"):
+    """Returns action keyboard for a single recurring payment."""
+    toggle_text = "⏸️ Pause" if status == "ACTIVE" else "▶️ Resume"
+    toggle_cb = f"rec_pause:{rec_id}" if status == "ACTIVE" else f"rec_resume:{rec_id}"
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Mark Paid", callback_data=f"rec_paid:{rec_id}"),
+            InlineKeyboardButton("⏭️ Skip Cycle", callback_data=f"rec_skip:{rec_id}")
+        ],
+        [
+            InlineKeyboardButton(toggle_text, callback_data=toggle_cb),
+            InlineKeyboardButton("🗑️ Delete", callback_data=f"rec_del:{rec_id}")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data="nav:recurring")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 def get_transaction_detail_keyboard(tx_id: int):
     """Returns the Transaction Detail keyboard with Edit, Delete, Duplicate, and Back."""

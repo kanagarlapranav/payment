@@ -527,9 +527,90 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     "━━━━━━━━━━━━━━"
                 )
                 await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+            elif nav_target == "recurring":
+                from services.recurring_service import get_upcoming_recurring
+                from bot.commands import render_recurring_overview_text
+                from bot.keyboards import get_recurring_menu_keyboard
+                upcoming = await asyncio.to_thread(get_upcoming_recurring, 30)
+                text = render_recurring_overview_text()
+                await query.edit_message_text(text, reply_markup=get_recurring_menu_keyboard(upcoming_items=upcoming), parse_mode='HTML')
+            elif nav_target == "rec_all":
+                from bot.commands import render_all_recurring_text
+                text = render_all_recurring_text()
+                await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+            elif nav_target == "rec_add":
+                context.user_data['action'] = 'waiting_rec_add'
+                text = (
+                    "➕ <b>Add Recurring Payment</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "Please reply with the details in the format:\n"
+                    "<code>Payee, Amount, Frequency</code>\n\n"
+                    "Examples:\n"
+                    "• <code>Netflix, 649, Monthly</code>\n"
+                    "• <code>House Rent, 15000, Monthly</code>\n"
+                    "• <code>SIP Mutual Fund, 5000, Monthly</code>\n"
+                    "• <code>Gym Membership, 12000, Yearly</code>\n"
+                    "━━━━━━━━━━━━━━━━━━━━"
+                )
+                await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         except Exception as nav_err:
             if "Message is not modified" not in str(nav_err):
                 logger.warning(f"Nav error ({nav_target}): {nav_err}")
+        return
+
+    # --- 1. Transaction Detail, Duplicate & Backup Actions ---
+    elif action == "rec_paid":
+        rec_id = int(parts[1])
+        from services.recurring_service import mark_recurring_paid, get_recurring_by_id
+        from bot.keyboards import get_quick_undo_keyboard
+        tx_id, next_due = await asyncio.to_thread(mark_recurring_paid, rec_id)
+        rec = await asyncio.to_thread(get_recurring_by_id, rec_id)
+        text = (
+            f"✅ <b>Recurring Payment Logged to Ledger!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"• <b>Payee:</b> {html.escape(rec['payee_name'])}\n"
+            f"• <b>Amount:</b> {format_currency(rec['amount'])}\n"
+            f"• <b>Transaction Created:</b> #{tx_id}\n"
+            f"• <b>New Next Due Date:</b> <code>{next_due}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━"
+        )
+        await query.edit_message_text(text, reply_markup=get_quick_undo_keyboard(tx_id), parse_mode='HTML')
+        return
+
+    elif action == "rec_skip":
+        rec_id = int(parts[1])
+        from services.recurring_service import skip_recurring_due, get_recurring_by_id
+        next_due = await asyncio.to_thread(skip_recurring_due, rec_id)
+        rec = await asyncio.to_thread(get_recurring_by_id, rec_id)
+        text = (
+            f"⏭️ <b>Recurring Cycle Skipped</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"• <b>Payee:</b> {html.escape(rec['payee_name'])}\n"
+            f"• <b>New Next Due Date:</b> <code>{next_due}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━"
+        )
+        await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+        return
+
+    elif action == "rec_pause":
+        rec_id = int(parts[1])
+        from services.recurring_service import update_recurring_status
+        await asyncio.to_thread(update_recurring_status, rec_id, 'PAUSED')
+        await query.edit_message_text("⏸️ <b>Recurring payment paused.</b>", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+        return
+
+    elif action == "rec_resume":
+        rec_id = int(parts[1])
+        from services.recurring_service import update_recurring_status
+        await asyncio.to_thread(update_recurring_status, rec_id, 'ACTIVE')
+        await query.edit_message_text("▶️ <b>Recurring payment resumed.</b>", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+        return
+
+    elif action == "rec_del":
+        rec_id = int(parts[1])
+        from services.recurring_service import delete_recurring_payment
+        await asyncio.to_thread(delete_recurring_payment, rec_id)
+        await query.edit_message_text("🗑️ <b>Recurring payment deleted.</b>", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         return
 
     # --- 1. Transaction Detail, Duplicate & Backup Actions ---
@@ -1929,6 +2010,36 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML'
             )
             return
+
+    elif pending_action == 'waiting_rec_add':
+        context.user_data.pop('action', None)
+        raw_parts = [p.strip() for p in text.split(",")]
+        if len(raw_parts) < 2:
+            await update.message.reply_text("❌ Please provide at least Payee and Amount separated by comma (e.g. <code>Netflix, 649, Monthly</code>).", parse_mode='HTML')
+            return
+        payee = raw_parts[0]
+        try:
+            from utils.validation import parse_decimal_amount
+            amt = float(parse_decimal_amount(raw_parts[1], allow_zero=False))
+        except Exception as err:
+            await update.message.reply_text(f"❌ Invalid amount: {err}")
+            return
+        freq = raw_parts[2].upper() if len(raw_parts) > 2 and raw_parts[2].upper() in ('DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY') else 'MONTHLY'
+        from services.recurring_service import add_recurring_payment, get_upcoming_recurring
+        from bot.commands import render_recurring_overview_text
+        from bot.keyboards import get_recurring_menu_keyboard
+        rec_id = add_recurring_payment(payee, amt, frequency=freq)
+        upcoming = get_upcoming_recurring(30)
+        await update.message.reply_text(
+            f"✅ <b>Recurring Payment #{rec_id} Created!</b>\n"
+            f"• <b>Payee:</b> {html.escape(payee)}\n"
+            f"• <b>Amount:</b> {format_currency(amt)}\n"
+            f"• <b>Frequency:</b> {freq.capitalize()}\n\n"
+            f"{render_recurring_overview_text()}",
+            reply_markup=get_recurring_menu_keyboard(upcoming_items=upcoming),
+            parse_mode='HTML'
+        )
+        return
 
     # Check quick menu trigger
     if text.strip().lower() in ('menu', 'home', 'start'):

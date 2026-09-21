@@ -46,7 +46,9 @@ ADMIN_CALLBACK_ACTIONS = {
     "cafe_addon", "cafe_edit", "cafe_menu_add_prompt", "cafe_menu_del_prompt",
     "cafe_del_item", "cafe_del_cancel", "cafe_edit_last", "cafe_skip",
     # Backup & Restore Confirmation
-    "restore_confirm", "restore_cancel", "backup_now"
+    "restore_confirm", "restore_cancel", "backup_now",
+    # Recurring & Monthly Reviews
+    "rec_paid", "rec_skip", "rec_pause", "rec_resume", "rec_del", "close_month"
 }
 
 def get_effective_user_id(update: Update) -> Optional[int]:
