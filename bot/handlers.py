@@ -6,6 +6,7 @@ import json
 import asyncio
 import html
 import re
+from datetime import datetime, timedelta, date
 from config import TELEGRAM_USER_ID, IMAGE_DIR, logger
 from bot.auth import (
     require_authorized, require_admin, is_owner, is_authorized_user,
@@ -352,7 +353,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(extra_btn), parse_mode='HTML')
             elif nav_target == "today":
                 from database.queries import get_transactions_by_date
-                from utils.dates import get_current_time_in_tz
                 today_stats = get_today_summary()
                 today_date = get_current_time_in_tz().date()
                 txs = get_transactions_by_date(today_date)
@@ -724,7 +724,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if success:
             # Check budget alerts (Requirement 5: After saving a transaction, add a one-line alert if a budget crosses 80% or 100%)
             from services.budget_service import get_budget_info
-            now = datetime.now()
+            now = get_current_time_in_tz()
             b_info = get_budget_info(now.year, now.month)
             budget_alert = ""
             if b_info.get('budget', 0) > 0:
@@ -1018,13 +1018,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
 
             if is_gdrive_available():
-                try:
-                    from config import DATA_DIR
-                    bkp = DATA_DIR / 'backup_transactions.json'
-                    if os.path.exists(bkp):
-                        asyncio.create_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)))
-                except Exception:
-                    pass
+                from config import DATA_DIR
+                from services.task_manager import create_tracked_task
+                bkp = DATA_DIR / 'backup_transactions.json'
+                if os.path.exists(bkp):
+                    create_tracked_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)), name="gdrive_backup_upload")
             from bot.keyboards import get_undo_keyboard
             await query.edit_message_text(
                 f"🗑️ <b>Transaction #{tx_id} Deleted</b>\n\n"
@@ -1076,13 +1074,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             from services.task_manager import schedule_debounced_backup
             schedule_debounced_backup(context.bot)
             if is_gdrive_available():
-                try:
-                    from config import DATA_DIR
-                    bkp = DATA_DIR / 'backup_transactions.json'
-                    if os.path.exists(bkp):
-                        asyncio.create_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)))
-                except Exception:
-                    pass
+                from config import DATA_DIR
+                from services.task_manager import create_tracked_task
+                bkp = DATA_DIR / 'backup_transactions.json'
+                if os.path.exists(bkp):
+                    create_tracked_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)), name="gdrive_backup_upload")
             await query.edit_message_text(
                 f"✅ <b>Transaction updated successfully!</b>\n\n"
                 f"• <b>Amount corrected to:</b> <b>{html.escape(format_currency(new_amt))}</b>\n"
@@ -1638,7 +1634,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if clean_num.isdigit() and len(clean_num) >= 2:
         val = float(clean_num)
         if 'action' not in context.user_data:
-            txs = search_transactions(amount=val)
+            txs = search_transactions(exact_amount=val)
             if txs:
                 context.args = [clean_num]
                 await amount_command(update, context)
@@ -1790,13 +1786,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from services.task_manager import schedule_debounced_backup
             schedule_debounced_backup(context.bot)
             if is_gdrive_available():
-                try:
-                    from config import DATA_DIR
-                    bkp = DATA_DIR / 'backup_transactions.json'
-                    if os.path.exists(bkp):
-                        asyncio.create_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)))
-                except Exception:
-                    pass
+                from config import DATA_DIR
+                from services.task_manager import create_tracked_task
+                bkp = DATA_DIR / 'backup_transactions.json'
+                if os.path.exists(bkp):
+                    create_tracked_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)), name="gdrive_backup_upload")
             await update.message.reply_text(
                 f"✅ <b>Transaction #{tx_id} Updated</b>\n\n"
                 f"👤 <b>Person:</b> {html.escape(str(person))}\n"
