@@ -52,7 +52,7 @@ def render_home_menu_text() -> str:
 def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int = 5):
     """Renders a formatted page of transactions with navigation keyboard."""
     from database.queries import get_transactions_paginated
-    tx_filter = filter_type if filter_type in ('SENT', 'RECEIVED') else None
+    tx_filter = filter_type if filter_type in ('SENT', 'RECEIVED', 'TRANSFER') else None
     data = get_transactions_paginated(page=page, page_size=page_size, tx_type=tx_filter)
     
     items = data['transactions']
@@ -81,9 +81,17 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
     ]
     
     for t in items:
-        is_recv = t['transaction_type'] == 'RECEIVED'
-        badge = "🟢" if is_recv else "🔴"
-        arrow = "+" if is_recv else "-"
+        ttype = t.get('transaction_type')
+        if ttype == 'RECEIVED':
+            badge = "🟢"
+            arrow = "+"
+        elif ttype == 'SENT':
+            badge = "🔴"
+            arrow = "-"
+        else:
+            badge = "🔄"
+            arrow = "⇄"
+            
         amt = format_currency(t['amount'])
         person = t.get('person_name') or 'Unknown'
         cat = t.get('category') or 'General'
@@ -107,9 +115,16 @@ def render_transaction_detail(tx_id: int):
     if not tx:
         return "❌ <b>Transaction not found or deleted.</b>", get_back_to_menu_keyboard()
         
-    is_recv = tx['transaction_type'] == 'RECEIVED'
-    badge = "🟢" if is_recv else "🔴"
-    type_str = "Received (Income)" if is_recv else "Sent (Expense)"
+    ttype = tx.get('transaction_type')
+    if ttype == 'RECEIVED':
+        badge = "🟢"
+        type_str = "Received (Income)"
+    elif ttype == 'SENT':
+        badge = "🔴"
+        type_str = "Sent (Expense)"
+    else:
+        badge = "🔄"
+        type_str = "Transfer (Internal / Neutral)"
     amt = format_currency(tx['amount'])
     person = tx.get('person_name') or 'Unknown'
     cat = tx.get('category') or 'General'
