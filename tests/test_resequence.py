@@ -13,33 +13,24 @@ from config import DB_PATH
 
 from services.backup_service import BACKUP_JSON_PATH
 
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
 class TestResequenceAndBalance(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        # Snapshot current database and backup file to restore after tests
-        cls.db_backup = None
-        cls.json_backup = None
-        if os.path.exists(DB_PATH):
-            with open(DB_PATH, 'rb') as f:
-                cls.db_backup = f.read()
-        if os.path.exists(BACKUP_JSON_PATH):
-            with open(BACKUP_JSON_PATH, 'rb') as f:
-                cls.json_backup = f.read()
-
-    @classmethod
-    def tearDownClass(cls):
-        # Restore original database and backup file
-        if cls.db_backup is not None:
-            with open(DB_PATH, 'wb') as f:
-                f.write(cls.db_backup)
-        if cls.json_backup is not None:
-            with open(BACKUP_JSON_PATH, 'wb') as f:
-                f.write(cls.json_backup)
-
     def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.test_db_path = Path(self.temp_dir.name) / "test_resequence.sqlite3"
+        self.db_patcher = patch("database.db.DB_PATH", self.test_db_path)
+        self.cfg_patcher = patch("config.DB_PATH", self.test_db_path)
+        self.db_patcher.start()
+        self.cfg_patcher.start()
+
         setup_database()
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(self.test_db_path) as conn:
             conn.execute("DELETE FROM transactions")
+            conn.execute("DELETE FROM settings")
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('initial_balance', '0.0')")
             # Insert 5 self-contained test transactions
             for i in range(1, 6):
                 conn.execute("""
@@ -53,7 +44,9 @@ class TestResequenceAndBalance(unittest.TestCase):
         recalculate_all_balances()
 
     def tearDown(self):
-        pass
+        self.db_patcher.stop()
+        self.cfg_patcher.stop()
+        self.temp_dir.cleanup()
 
     def test_resequence_on_deletion(self):
         txs = get_all_transactions_asc()

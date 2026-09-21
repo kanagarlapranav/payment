@@ -7,9 +7,23 @@ services:
     startCommand: python app.py
     autoDeploy: true
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.14
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_USER_ID
         sync: false
       - key: TELEGRAM_GROUP_ID
         sync: false
+      - key: DASHBOARD_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        sync: false
+      - key: DEFAULT_TIMEZONE
+        sync: false
+      - key: DAILY_DIGEST_TIME
+        value: "22:00"
+      - key: PORT
+        value: "10000"

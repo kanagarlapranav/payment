@@ -9,15 +9,13 @@ A 24/7 autonomous financial companion and personal ledger bot built on Telegram.
 
 - **Status**: Active & Live (Production)
 - **Deployment URL**: `https://payment-3-kldp.onrender.com`
-- **Repository**: `https://github.com/kanagarlapranav/payment.git` (Branch: `main`)
-- **Total Commits**: 61 commits
-- **Total Unit Tests**: 72 passing tests across 14 test suites (100% pass rate)
-- **Runtime**: Python 3.13 / `python-telegram-bot` (v21+ AsyncIO)
+- **Repository**: `https://github.com/kanagarlapranav/payment.git` (Branch: `fix/ledger-backup-security-ux`)
+- **Total Unit & Integration Tests**: 330+ passing tests (100% pass rate)
+- **Runtime**: Python 3.13 / `python-telegram-bot` (v22+ AsyncIO with JobQueue)
 - **Deployment Platform**: Render Web Service (24/7 Always-On Background Polling + HTTP Keep-Alive Self-Pinger)
 - **Primary Vision AI**: Google Gemini Vision (`gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-flash-latest` with in-memory compression)
-- **Backup OCR**: Local RapidOCR ONNX with smart Telegram chat/caption/artifact filtering
-- **Cloud Storage & Sync**: Triple-tier backup (Telegram Cloud Pinned Msg + Google Drive 5TB + Local JSON Sync with Backup Format v2)
-
+- **Backup OCR**: Local RapidOCR ONNX Runtime (no external Tesseract required)
+- **Cloud Storage & Sync**: Triple-tier backup (Telegram Cloud Pinned Msg + Google Drive 5TB + Local JSON Sync with Backup Format v2 & SHA-256 Checksums)
 
 ---
 
@@ -47,7 +45,7 @@ Customized specifically for your college cafeteria (**VIKRAMAN NAIR K**):
 
 ### 1. Auto-Detection & Interactive Selection
 - Whenever a payment to **VIKRAMAN NAIR K** / `vikramannair066@fbl` is recorded, the bot automatically tags it as 🍔 **Food & Dining** and displays interactive item selection buttons:
-  - **`1️⃣ 1 Item Mode`**: Shows all single items that match the bill amount exactly (or prompts for price).
+  - **`1️⃣ 1 Item Mode`**: Shows all single items that match the bill amount exactly.
   - **`2️⃣ 2 Items Mode`**: Shows popular 2-item pairings summing to the bill (e.g., *Rice + Packing*, *Dosa + Tea*).
   - **`🛒 Build Plate / Cart`**: Multi-item builder allowing you to tap and bundle multiple dishes onto a single plate.
   - **`🍨 Ice Cream (Enter ₹)`**: Instant custom prompt to type the exact Ice Cream price (e.g. `40`, `60`).
@@ -75,7 +73,7 @@ Customized specifically for your college cafeteria (**VIKRAMAN NAIR K**):
    - Automatically queries `gemini-3.6-flash`, falling back to `gemini-3.7-flash` and `gemini-flash-latest` if rate-limited or unavailable.
    - Structured JSON response isolates payment card details from Telegram chat bubbles and captions.
 3. **Tier 2 (RapidOCR + Chat Artifact Stripper):**
-   - If offline or encountering rate limits, RapidOCR runs with chat artifact cleaning (stripping bot replies like `Amount: 8` or `link.super.money`), extracting the actual receipt amount with 100% accuracy.
+   - Embedded ONNX Runtime RapidOCR with chat artifact cleaning, extracting the actual receipt amount without external binaries.
 4. **Immediate Ephemeral Cleanup:**
    - Temporary receipt images are deleted immediately after parsing to safeguard privacy and reduce disk footprint.
 5. **Auto-Update & Duplicate Detection:**
@@ -91,7 +89,7 @@ Customized specifically for your college cafeteria (**VIKRAMAN NAIR K**):
 | **Natural Text** | `Paid 500 to Ramesh`<br>`Received 6200 from Johnson` | Instantly logs expense or income without forms or buttons |
 | **`/balance`** | `/balance` | Current balance with structured All-Time and Today breakdown |
 | **`/today`** | `/today` | Quick breakdown of today's total transactions and net balance |
-| **`/history`** | `/history` | Interactive paginated ledger (defaults to Latest 5 Transactions on Page 1) with filter chips (`All`, `Sent`, `Recv`) |
+| **`/history`** | `/history` | Interactive paginated ledger with filter chips (`All`, `Sent`, `Recv`) |
 | **`/last5`** | `/last5` (or `/recent`) | Instantly displays the 5 most recent transactions without pagination |
 | **`/details`** | `/details` | Shows database IDs, bank details, and full 12-digit UTR numbers |
 | **`/date <date>`** | `/date yesterday`<br>`/date 15/09/2026` | Shows all transactions recorded on a specific date |
@@ -103,8 +101,8 @@ Customized specifically for your college cafeteria (**VIKRAMAN NAIR K**):
 | **`/insights`** | `/insights` | AI category breakdown, spending percentages, and smart advice |
 | **`/budget`** | `/budget` | Monthly budget progress bar (`[██████░░░░] 60%`) and remaining funds |
 | **`/setbudget <amt>`** | `/setbudget 20000` | Sets monthly spending limit with proactive threshold warnings (50%, 80%, 100%) |
-| **`/digest`** | `/digest` | Generates closing financial digest on demand (also automated at 10:00 PM IST) |
-| **`/dashboard`** | `/dashboard` | Interactive Dark-Mode Web Dashboard with live Chart.js charts |
+| **`/digest`** | `/digest` | Generates closing financial digest on demand (also automated at `DAILY_DIGEST_TIME` IST) |
+| **`/dashboard`** | `/dashboard` | Generates single-use 60-second secure login link for web analytics dashboard |
 | **`/menu`** | `/menu` | Displays complete vegetarian cafeteria menu with add/delete buttons |
 | **`/addmenu`** | `/addmenu Paneer Roll 45 Snacks` | Adds custom vegetarian item to menu database |
 | **`/delmenu`** | `/delmenu Paneer Roll` | Removes custom item with interactive buttons or by name |
@@ -117,90 +115,3 @@ Customized specifically for your college cafeteria (**VIKRAMAN NAIR K**):
 | **`/restore`** | `/restore` | Idempotent upsert restore from cloud or clean JSON backup without wiping existing data |
 | **`/export`** | `/export` (or `/report`, `/statement`) | Generates official PDF Statement or Excel spreadsheet (`.xlsx`) |
 | **`/help`** | `/help` | Complete comprehensive interactive guide |
-
-
----
-
-## 🎨 Clean HTML UI Output Example
-
-```html
-✅ <b>🔴 Payment Sent</b>
-
-👤 <b>To:</b> Kanagarlasaiakhil
-💵 <b>Amount:</b> <b>₹400.00</b> • <i>Amazon Pay</i>
-📅 <b>Date:</b> 15 Sep 2026 (7:54 PM)
-🏷️ <b>Category:</b> 👥 Transfers & P2P
-🏦 <b>Bank:</b> Statebankof India
-🔢 <b>Ref / UTR:</b> <code>625827208126</code>
-
-💰 <b>Balance:</b> ₹7,400.00 ➔ <b>₹7,000.00</b>
-```
-
----
-
-## 🛠️ Core Engineering Engines
-
-### 1. Gemini Vision AI Engine (`ocr/gemini_vision.py`)
-- Multimodal parsing with **Gemini 3.6 Flash** primary engine and automated failover (`gemini-3.7-flash`, `gemini-flash-latest`).
-- Extracts amount, transaction type, recipient/sender, payment app, bank name, UTR, and timestamp in structured JSON.
-
-### 2. Smart Auto-Categorization & Insights (`services/category_service.py`)
-- Automatically classifies payments into `Food & Dining`, `Groceries`, `Shopping`, `Travel & Transport`, `Bills & Utilities`, `Entertainment`, `Health & Medical`, and `Transfers & P2P`.
-- Computes spending shares, category percentages, and actionable financial advice.
-
-### 3. Proactive Budget Tracking (`services/budget_service.py`)
-- Real-time monitoring against monthly limits.
-- Generates 10-block visual progress bars (`[██████░░░░]`) and attaches threshold warnings (50%, 80%, 100%) directly to receipt confirmations.
-
-### 4. Automated 9:00 PM IST Closing Digest (`services/scheduler_service.py`)
-- Background scheduler delivers daily financial briefings in Indian Standard Time (IST) summarizing money in, money out, net flow, and closing balance.
-
-### 5. Interactive Dark-Mode Web Analytics Dashboard (`web/templates/dashboard.html` + `web/dashboard.py`)
-- Built-in HTTP server on port `$PORT` serving `/dashboard` and `/api/data` JSON with Chart.js donut and bar graphs.
-
-### 6. Permanent UIDs & Soft-Delete Tombstone Architecture (`database/db.py` & `database/queries.py`)
-- Every transaction is assigned an immutable 32-character hexadecimal `uid`.
-- Live reference numbers are indexed via a partial unique index (`idx_tx_ref_live`) to prevent duplicate entries while allowing legitimate re-entry of previously deleted references.
-- Deletions are executed as soft-deletes setting `deleted_at = CURRENT_TIMESTAMP`, leaving permanent tombstones so records can never be accidentally resurrected by restores.
-- Resequencing has been discontinued in favor of stable permanent IDs.
-- Ancient tombstones older than 90 days are automatically pruned during delete routines.
-
-### 7. Real-Time Dynamic Balance Propagation Engine (`services/balance_service.py`)
-- When any past transaction is edited or deleted, `recalculate_all_balances()` cascades balance updates across all subsequent live transactions (`WHERE deleted_at IS NULL`) to guarantee exact ledger balance math.
-
-### 8. Undo & State Restoration Engine (`services/undo_service.py`)
-- Maintains an in-memory stack of recent modifications (additions, updates, deletions). Triggering `/undo` or tapping the interactive button immediately clears `deleted_at = NULL` via `restore_soft_deleted_transaction()`, restoring the original state and recalculating running balances without modifying other row IDs.
-
-### 9. Backup Format v2 & Idempotent Cloud Upsert (`services/backup_service.py`)
-- **Format v2**: Encodes `version: 2`, monotonic `revision` counter, SHA-256 payload `checksum`, soft-deleted tombstones, custom cafeteria dishes (`custom_menu_items`), and user settings.
-- **Idempotent Upsert**: Restores match transactions by `uid`, updating matching records and inserting new records without wiping existing data or dropping local rows.
-- **Zero Data Loss Guard**: System strictly refuses to overwrite backups or upload an empty database to cloud storage.
-- **Pinned Telegram Cloud Backup**: `#PAYMENT_TRACKER_BACKUP_V2` message pinned in chat guarantees state survival across container rebuilds.
-- **Google Drive Auto-Sync**: 5TB cloud storage auto-uploads database snapshots and statements.
-
-### 10. Interactive App Menu & Navigation Engine (`bot/commands.py` & `bot/handlers.py`)
-- **Home Menu Dashboard**: `/start` renders a live financial dashboard card with an 8-button interactive grid (`💰 Balance`, `📅 Today`, `🧾 History`, `➕ Quick Add`, `📊 Stats`, `🍽️ Cafeteria`, `🎯 Budgets`, `⚙️ Settings`).
-- **In-Place Message Editing**: Seamlessly updates existing messages via `edit_message_text` with persistent `⬅️ Back to Menu` buttons across all views.
-- **Latest 5 Transactions Display**: Page 1 of `/history` prominently displays the 5 newest transactions (`#16` down to `#12`) with filter chips (`All`, `Sent`, `Recv`) and working page navigation.
-- **`/last5` Shortcut**: Instant 1-tap view of the last 5 transactions without pagination.
-- **Interactive Cafeteria Menu Management**: Interactive `➕ Add Menu Item` and `🗑️ Manage / Delete Item` buttons powered by `get_custom_menu_items()` and `delete_custom_menu_item_by_id()`.
-
----
-
-## 🧪 Test Suite
-
-All **72 unit tests** across **14 test suites** are automated and passing with 100% success rate:
-- `tests/test_backup_v2.py` ✅
-- `tests/test_balance.py` ✅
-- `tests/test_budget_service.py` ✅
-- `tests/test_cafeteria_service.py` ✅
-- `tests/test_category_service.py` ✅
-- `tests/test_dashboard_api.py` ✅
-- `tests/test_dates.py` ✅
-- `tests/test_gdrive_service.py` ✅
-- `tests/test_gemini_vision.py` ✅
-- `tests/test_menu_and_history.py` ✅
-- `tests/test_parser.py` ✅
-- `tests/test_resequence.py` ✅
-- `tests/test_scheduler_service.py` ✅
-- `tests/test_undo.py` ✅
