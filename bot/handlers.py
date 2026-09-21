@@ -118,8 +118,11 @@ async def deliver_response(status_msg, message, text: str, reply_markup=None, pa
                 except Exception as final_err:
                     logger.error(f"Failed to deliver message: {final_err}")
 
+ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
+MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
+
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles incoming images (screenshots) with Gemini Vision AI + RapidOCR fallback."""
+    """Handles incoming images (screenshots) with RapidOCR + Gemini Vision AI fallback & cross-verification."""
     if not await require_admin(update): return
     
     message = update.message
@@ -127,29 +130,52 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = str(message.message_id)
     caption = message.caption or ""
     
-    # Get the file (photo or document)
+    # 1. Image validation & extension check
+    file_id = None
+    ext = ".jpg"
+    
     if message.photo:
-        file_id = message.photo[-1].file_id
-    elif message.document and message.document.mime_type.startswith('image/'):
-        file_id = message.document.file_id
+        photo_obj = message.photo[-1]
+        if photo_obj.file_size and photo_obj.file_size > MAX_IMAGE_FILE_SIZE:
+            await message.reply_text("⚠️ Image file is too large (exceeds 20MB limit).")
+            return
+        file_id = photo_obj.file_id
+        ext = ".jpg"
+    elif message.document:
+        doc = message.document
+        if doc.file_size and doc.file_size > MAX_IMAGE_FILE_SIZE:
+            await message.reply_text("⚠️ Image file is too large (exceeds 20MB limit).")
+            return
+        doc_mime = (doc.mime_type or "").lower()
+        orig_ext = os.path.splitext(doc.file_name or "")[1].lower()
+        if orig_ext in ALLOWED_IMAGE_EXTENSIONS:
+            ext = orig_ext
+        elif doc_mime in {'image/jpeg', 'image/jpg'}:
+            ext = '.jpg'
+        elif doc_mime == 'image/png':
+            ext = '.png'
+        elif doc_mime == 'image/webp':
+            ext = '.webp'
+        else:
+            await message.reply_text("⚠️ Unsupported image format. Allowed formats: JPG, PNG, WEBP.")
+            return
+        file_id = doc.file_id
     else:
         return # Ignore non-images
         
     status_msg = await message.reply_text("🔍 Reading receipt…")
+    image_path = None
     
     try:
-        # Download image with resilient timeout and retry
-        ext = ".jpg" # Default
-        if message.document:
-            ext = os.path.splitext(message.document.file_name)[1] or ".jpg"
-            
-        filename = f"tx_{uuid.uuid4().hex[:8]}{ext}"
+        # Safe UUID-based filename (never use Telegram filename as local path)
+        filename = f"rcpt_{uuid.uuid4().hex}{ext}"
         image_path = IMAGE_DIR / filename
         
+        # Download image with resilient timeout
         for attempt in range(2):
             try:
-                file = await context.bot.get_file(file_id, read_timeout=60.0, connect_timeout=30.0)
-                await file.download_to_drive(custom_path=image_path, read_timeout=60.0, connect_timeout=30.0)
+                file = await context.bot.get_file(file_id, read_timeout=30.0, connect_timeout=15.0)
+                await file.download_to_drive(custom_path=image_path, read_timeout=30.0, connect_timeout=15.0)
                 break
             except Exception as dl_err:
                 if attempt == 1:
@@ -162,70 +188,59 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+        # Run OCR first with thread executor & timeout for deterministic cross-verification
+        ocr_text = await asyncio.to_thread(perform_ocr, str(image_path))
+
         transaction = None
         confidence = 0
 
         # Tier 1: Try Google Gemini Vision AI if API key is configured
         if is_gemini_available():
             try:
-                logger.info("Attempting Gemini Vision extraction...")
-                g_tx, g_conf = await asyncio.to_thread(extract_transaction_with_gemini, str(image_path), caption)
-                if g_tx and g_conf >= 50:
+                logger.info("Attempting Gemini Vision extraction with OCR cross-verification...")
+                g_tx, g_conf = await asyncio.to_thread(
+                    extract_transaction_with_gemini, str(image_path), caption, ocr_text
+                )
+                if g_tx and g_conf >= 40:
                     transaction = g_tx
                     confidence = g_conf
                     transaction.telegram_message_id = message_id
                     transaction.telegram_chat_id = chat_id
                     transaction.original_image_path = str(image_path)
             except Exception as gem_err:
-                logger.warning(f"Gemini Vision error, falling back to local OCR: {gem_err}")
+                logger.warning(f"Gemini Vision error, falling back to local OCR parser: {gem_err}")
 
         # Tier 2: Fallback to local RapidOCR + Regex Heuristic Parser
         if not transaction or not transaction.amount:
-            try:
-                raw_text = await asyncio.wait_for(
-                    asyncio.to_thread(perform_ocr, str(image_path)),
-                    timeout=60.0  # Hard 60-second limit
+            if not ocr_text or not ocr_text.strip():
+                await deliver_response(
+                    status_msg, message,
+                    "❌ Could not extract any readable text from the image. Please upload a clearer screenshot."
                 )
-            except asyncio.TimeoutError:
-                logger.error(f"OCR timed out after 60s on {image_path}")
-                await deliver_response(status_msg, message, "⏱️ OCR took too long. Please try a clearer/smaller screenshot.")
-                try:
-                    if os.path.exists(image_path):
-                        os.remove(image_path)
-                except OSError:
-                    pass
                 return
 
-            if not raw_text or not raw_text.strip():
-                await deliver_response(status_msg, message, "❌ Could not extract any readable text from the image. Please upload a clearer screenshot.")
-                try:
-                    if os.path.exists(image_path):
-                        os.remove(image_path)
-                except OSError:
-                    pass
-                return
+            transaction, confidence = await asyncio.to_thread(
+                process_transaction, ocr_text, str(image_path), message_id, chat_id, caption
+            )
 
-            transaction, confidence = process_transaction(raw_text, str(image_path), message_id, chat_id, caption=caption)
-
-        # Always clean up temporary image file immediately after text/data extraction
-        try:
-            if os.path.exists(image_path):
-                os.remove(image_path)
-                logger.info(f"Cleaned up temporary image after OCR: {image_path}")
-        except OSError as cleanup_err:
-            logger.warning(f"Could not delete temp image {image_path}: {cleanup_err}")
-        
         # Basic validation
         if not transaction or not transaction.amount or transaction.amount <= 0:
-            await deliver_response(status_msg, message, "⚠️ Could not detect a valid amount from the receipt.\n\n💡 <b>Tip:</b> You can log it instantly by typing:\n<code>120 dosa</code> or <code>Paid 500 to Ramesh</code>", parse_mode='HTML')
+            await deliver_response(
+                status_msg, message,
+                "⚠️ Could not detect a valid amount from the receipt.\n\n💡 <b>Tip:</b> You can log it instantly by typing:\n<code>120 dosa</code> or <code>Paid 500 to Ramesh</code>",
+                parse_mode='HTML'
+            )
             return
             
-        if not transaction.transaction_type:
-            await deliver_response(status_msg, message, f"⚠️ Transaction type (SENT/RECEIVED) could not be determined reliably.\nAmount found: {format_currency(transaction.amount)}")
+        if not transaction.transaction_type or transaction.transaction_type == "UNKNOWN":
+            await deliver_response(
+                status_msg, message,
+                f"⚠️ Transaction type (SENT/RECEIVED) could not be determined reliably.\nAmount found: {format_currency(transaction.amount)}"
+            )
             return
 
         # 1. Payee Category Memory: check if payee category is remembered from past
-        rem_cat = get_payee_category(transaction.person_name)
+        rem_cat = await asyncio.to_thread(get_payee_category, transaction.person_name)
         if rem_cat:
             transaction.category = rem_cat
         elif not transaction.category or transaction.category == 'General':
@@ -234,7 +249,8 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 transaction.category = "Food & Dining"
 
         # 2. Duplicate Check: compare reference number or amount/person/date against existing rows
-        dup = find_potential_duplicate(
+        dup = await asyncio.to_thread(
+            find_potential_duplicate,
             amount=transaction.amount,
             reference_number=transaction.reference_number,
             person_name=transaction.person_name,
@@ -254,7 +270,15 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"Error handling image: {e}", exc_info=True)
-        await deliver_response(status_msg, message, f"❌ Error processing image: {e}")
+        await deliver_response(status_msg, message, "❌ Error processing image. Please try again or type the expense manually.")
+    finally:
+        # Guarantee deletion of temporary file in finally block
+        if image_path and os.path.exists(image_path):
+            try:
+                os.remove(image_path)
+                logger.info(f"Cleaned up temporary image in finally: {image_path}")
+            except OSError as cleanup_err:
+                logger.warning(f"Could not delete temp image {image_path}: {cleanup_err}")
 
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):

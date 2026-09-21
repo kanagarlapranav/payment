@@ -364,10 +364,23 @@ def get_live_transaction_by_uid(uid: str):
     """Fetches an active, non-deleted transaction by permanent UID."""
     return get_transaction_by_uid(uid, live_only=True)
 
+ALLOWED_UPDATE_COLUMNS = {
+    'amount', 'transaction_type', 'person_name', 'sender_name', 'recipient_name',
+    'payment_app', 'transaction_date', 'transaction_time', 'bank_name',
+    'reference_number', 'category', 'raw_text', 'payment_status', 'note',
+    'uid', 'occurred_at', 'confidence', 'ocr_text'
+}
+
 def update_transaction(tx_id: int, updates: dict) -> bool:
-    """Updates specific fields of a transaction with validation, occurred_at recalculation, and thread locking."""
+    """Updates specific fields of an active transaction with validation, occurred_at recalculation, and thread locking."""
     if not updates:
         return False
+
+    # Enforce whitelist of allowed columns
+    for key in updates.keys():
+        if key not in ALLOWED_UPDATE_COLUMNS:
+            raise ValueError(f"Disallowed column in updates: '{key}'. Allowed columns are: {sorted(ALLOWED_UPDATE_COLUMNS)}")
+
     with LEDGER_LOCK:
         from services.balance_service import recalculate_in_connection
 
@@ -392,21 +405,24 @@ def update_transaction(tx_id: int, updates: dict) -> bool:
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
+            # Ensure the row is active/live (deleted_at IS NULL)
+            cursor.execute("SELECT id, transaction_date, transaction_time FROM transactions WHERE id = ? AND deleted_at IS NULL", (tx_id,))
+            cur_row = cursor.fetchone()
+            if not cur_row:
+                return False
+
             # If transaction_date or transaction_time changed, recalculate occurred_at
             if 'transaction_date' in validated_updates or 'transaction_time' in validated_updates:
-                cursor.execute("SELECT transaction_date, transaction_time FROM transactions WHERE id = ?", (tx_id,))
-                cur_row = cursor.fetchone()
-                if cur_row:
-                    new_date = validated_updates.get('transaction_date', cur_row['transaction_date'])
-                    new_time = validated_updates.get('transaction_time', cur_row['transaction_time'])
-                    validated_updates['occurred_at'] = build_occurred_at(new_date, new_time)
+                new_date = validated_updates.get('transaction_date', cur_row['transaction_date'])
+                new_time = validated_updates.get('transaction_time', cur_row['transaction_time'])
+                validated_updates['occurred_at'] = build_occurred_at(new_date, new_time)
 
             now_utc = utc_now_iso()
             validated_updates['updated_at'] = now_utc
 
             set_clause = ", ".join([f"{k} = ?" for k in validated_updates.keys()])
             values = list(validated_updates.values()) + [tx_id]
-            cursor.execute(f"UPDATE transactions SET {set_clause} WHERE id = ?", values)
+            cursor.execute(f"UPDATE transactions SET {set_clause} WHERE id = ? AND deleted_at IS NULL", values)
             success = cursor.rowcount > 0
 
             # If balance-impacting fields changed, recalculate the chain in this connection
