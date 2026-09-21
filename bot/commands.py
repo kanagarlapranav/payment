@@ -1321,14 +1321,39 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Restores database transactions from clean text JSON backup file via idempotent upsert with admin confirmation."""
     if not await require_admin(update): return
 
-    from services.backup_service import import_database_from_json, preview_database_import, BACKUP_JSON_PATH, backup_to_telegram
-    from database.queries import get_all_transactions
+    from services.backup_service import import_database_from_json, preview_database_import, BACKUP_JSON_PATH, backup_to_telegram, restore_from_telegram
+    from database.queries import get_all_transactions, get_balance_setting
     from telegram import InlineKeyboardMarkup, InlineKeyboardButton
     import html
 
+    # 1. If replying to a document attachment, download it directly
+    if update.message and update.message.reply_to_message and update.message.reply_to_message.document:
+        doc = update.message.reply_to_message.document
+        try:
+            file_obj = await context.bot.get_file(doc.file_id)
+            await file_obj.download_to_drive(custom_path=BACKUP_JSON_PATH)
+        except Exception as dl_err:
+            await update.message.reply_text(f"❌ Failed to download attached backup document: {dl_err}")
+            return
+
+    # 2. If no local backup exists, fetch from pinned Telegram cloud backup
     if not BACKUP_JSON_PATH.exists():
-        await update.message.reply_text("❌ No backup file found to restore from.", parse_mode='HTML')
-        return
+        await update.message.reply_text("⏳ Fetching latest cloud backup from Telegram...")
+        cloud_ok = await restore_from_telegram(context.bot)
+        if cloud_ok:
+            txs = await asyncio.to_thread(get_all_transactions)
+            cur_b = format_currency(get_balance_setting())
+            await update.message.reply_text(
+                f"✅ <b>Cloud Restore Completed Successfully!</b>\n\n"
+                f"• <b>{len(txs)}</b> live transactions available.\n"
+                f"• <b>Current Balance:</b> {cur_b}\n\n"
+                f"Use <code>/balance</code> or <code>/history</code> to view your ledger.",
+                parse_mode='HTML'
+            )
+            return
+        elif not BACKUP_JSON_PATH.exists():
+            await update.message.reply_text("❌ No backup file found to restore from.", parse_mode='HTML')
+            return
 
     is_confirmed = bool(context.args and context.args[0].lower() in ('confirm', 'yes', 'force'))
 
