@@ -1,3 +1,4 @@
+from decimal import Decimal
 import uuid
 from datetime import datetime
 from database.models import Transaction
@@ -8,6 +9,7 @@ from utils.validation import (
     validate_transaction_type,
     validate_uid,
     validate_string_length,
+    CENT,
 )
 from config import logger
 
@@ -102,9 +104,11 @@ def insert_transaction_with_balance(t: Transaction) -> int:
                     occurred_at, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             '''
+            date_val = str(t.transaction_date) if t.transaction_date is not None else None
+            time_val = str(t.transaction_time) if t.transaction_time is not None else None
             values = (
                 t.transaction_type, t.amount, t.person_name, t.sender_name, t.recipient_name,
-                t.upi_id, t.phone_number, t.transaction_date, t.transaction_time, t.reference_number,
+                t.upi_id, t.phone_number, date_val, time_val, t.reference_number,
                 t.transaction_id, t.payment_app, t.bank_name, t.bank_account, t.payment_status,
                 category, 0.0, 0.0, t.ocr_text, t.original_image_path,
                 t.telegram_message_id, t.telegram_chat_id, tx_uid, getattr(t, 'deleted_at', None),
@@ -126,66 +130,7 @@ def insert_transaction_with_balance(t: Transaction) -> int:
 def insert_transaction(t: Transaction) -> int:
     """Inserts a new transaction into the database with decimal validation, occurred_at, and thread locking."""
     with LEDGER_LOCK:
-        dec_amount = parse_decimal_amount(t.amount, allow_zero=False)
-        t.amount = float(dec_amount)
-        t.transaction_type = validate_transaction_type(t.transaction_type)
-        
-        category = validate_string_length(getattr(t, 'category', 'General') or 'General', max_length=100, field_name="Category")
-        t.category = category
-        
-        raw_uid = getattr(t, 'uid', None)
-        if raw_uid:
-            tx_uid = validate_uid(raw_uid)
-        else:
-            tx_uid = uuid.uuid4().hex
-        t.uid = tx_uid
-        
-        t.person_name = validate_string_length(t.person_name, max_length=120, field_name="Person name")
-        t.sender_name = validate_string_length(t.sender_name, max_length=120, field_name="Sender name")
-        t.recipient_name = validate_string_length(t.recipient_name, max_length=120, field_name="Recipient name")
-        t.reference_number = validate_string_length(t.reference_number, max_length=100, field_name="Reference number")
-        
-        t.balance_before = round(float(t.balance_before), 2)
-        t.balance_after = round(float(t.balance_after), 2)
-
-        occurred_at = build_occurred_at(t.transaction_date, t.transaction_time)
-        t.occurred_at = occurred_at
-        now_utc = utc_now_iso()
-        created_at = getattr(t, 'created_at', None) or now_utc
-        if isinstance(created_at, datetime):
-            created_at = created_at.isoformat()
-        updated_at = now_utc
-
-        query = '''
-            INSERT INTO transactions (
-                transaction_type, amount, person_name, sender_name, recipient_name,
-                upi_id, phone_number, transaction_date, transaction_time, reference_number,
-                transaction_id, payment_app, bank_name, bank_account, payment_status,
-                category, balance_before, balance_after, ocr_text, original_image_path,
-                telegram_message_id, telegram_chat_id, uid, deleted_at,
-                occurred_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        '''
-        
-        values = (
-            t.transaction_type, t.amount, t.person_name, t.sender_name, t.recipient_name,
-            t.upi_id, t.phone_number, t.transaction_date, t.transaction_time, t.reference_number,
-            t.transaction_id, t.payment_app, t.bank_name, t.bank_account, t.payment_status,
-            category, t.balance_before, t.balance_after, t.ocr_text, t.original_image_path,
-            t.telegram_message_id, t.telegram_chat_id, tx_uid, getattr(t, 'deleted_at', None),
-            occurred_at, created_at, updated_at
-        )
-        
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, values)
-            new_id = cursor.lastrowid
-            t.id = new_id
-            increment_revision_and_mark_dirty(conn)
-            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('database_initialized', '1', ?)", (now_utc,))
-            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('backup_blocked', '0', ?)", (now_utc,))
-            conn.commit()
-            return new_id
+        return insert_transaction_with_balance(t)
 
 def get_transaction_by_reference(reference_number: str):
     """Fetches a transaction by its reference number."""
@@ -292,7 +237,7 @@ def search_transactions(
         return [dict(row) for row in cursor.fetchall()]
 
 def get_monthly_summary(year: int, month: int):
-    """Calculates summary statistics for a given month."""
+    """Calculates summary statistics for a given month with Decimal precision."""
     month_str = f"{year:04d}-{month:02d}"
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -307,16 +252,17 @@ def get_monthly_summary(year: int, month: int):
         """, (month_str,))
         rows = cursor.fetchall()
         
-        total_sent = 0.0
-        total_received = 0.0
+        dec_sent = Decimal('0.00')
+        dec_received = Decimal('0.00')
         tx_count = 0
         
         for r in rows:
             tx_count += r['count']
+            amt = Decimal(str(r['total_amount'] or '0.00')).quantize(CENT)
             if r['transaction_type'] == 'SENT':
-                total_sent = r['total_amount'] or 0.0
+                dec_sent = amt
             elif r['transaction_type'] == 'RECEIVED':
-                total_received = r['total_amount'] or 0.0
+                dec_received = amt
                 
         # Top recipient (most money sent to)
         cursor.execute("""
@@ -332,9 +278,9 @@ def get_monthly_summary(year: int, month: int):
         return {
             'year': year,
             'month': month,
-            'total_sent': total_sent,
-            'total_received': total_received,
-            'net_savings': total_received - total_sent,
+            'total_sent': float(dec_sent),
+            'total_received': float(dec_received),
+            'net_savings': float(dec_received - dec_sent),
             'tx_count': tx_count,
             'top_recipient': top_recipient
         }
@@ -368,7 +314,7 @@ ALLOWED_UPDATE_COLUMNS = {
     'amount', 'transaction_type', 'person_name', 'sender_name', 'recipient_name',
     'payment_app', 'transaction_date', 'transaction_time', 'bank_name',
     'reference_number', 'category', 'raw_text', 'payment_status', 'note',
-    'uid', 'occurred_at', 'confidence', 'ocr_text'
+    'occurred_at', 'confidence', 'ocr_text'
 }
 
 def update_transaction(tx_id: int, updates: dict) -> bool:
@@ -376,7 +322,7 @@ def update_transaction(tx_id: int, updates: dict) -> bool:
     if not updates:
         return False
 
-    # Enforce whitelist of allowed columns
+    # Enforce whitelist of allowed columns (UID is strictly immutable)
     for key in updates.keys():
         if key not in ALLOWED_UPDATE_COLUMNS:
             raise ValueError(f"Disallowed column in updates: '{key}'. Allowed columns are: {sorted(ALLOWED_UPDATE_COLUMNS)}")
@@ -389,8 +335,6 @@ def update_transaction(tx_id: int, updates: dict) -> bool:
             validated_updates['amount'] = float(parse_decimal_amount(validated_updates['amount'], allow_zero=False))
         if 'transaction_type' in validated_updates:
             validated_updates['transaction_type'] = validate_transaction_type(validated_updates['transaction_type'])
-        if 'uid' in validated_updates and validated_updates['uid']:
-            validated_updates['uid'] = validate_uid(validated_updates['uid'])
         if 'person_name' in validated_updates:
             validated_updates['person_name'] = validate_string_length(validated_updates['person_name'], max_length=120, field_name="Person name")
         if 'sender_name' in validated_updates:
@@ -592,7 +536,7 @@ def get_category_summary(year: int, month: int):
         return [dict(row) for row in cursor.fetchall()]
 
 def get_daily_summary_stats(target_date_str: str):
-    """Calculates summary statistics for a specific date (YYYY-MM-DD)."""
+    """Calculates summary statistics for a specific date (YYYY-MM-DD) with Decimal precision."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -603,19 +547,20 @@ def get_daily_summary_stats(target_date_str: str):
             FROM transactions 
             WHERE transaction_date = ? AND deleted_at IS NULL
             GROUP BY transaction_type
-        """, (target_date_str,))
+        """, (str(target_date_str),))
         rows = cursor.fetchall()
         
-        total_sent = 0.0
-        total_received = 0.0
+        dec_sent = Decimal('0.00')
+        dec_received = Decimal('0.00')
         tx_count = 0
         
         for r in rows:
             tx_count += r['count']
+            amt = Decimal(str(r['total_amount'] or '0.00')).quantize(CENT)
             if r['transaction_type'] == 'SENT':
-                total_sent = float(r['total_amount'] or 0.0)
+                dec_sent = amt
             elif r['transaction_type'] == 'RECEIVED':
-                total_received = float(r['total_amount'] or 0.0)
+                dec_received = amt
                 
         # Get list of transactions for the day
         cursor.execute("""
@@ -623,14 +568,14 @@ def get_daily_summary_stats(target_date_str: str):
             FROM transactions
             WHERE transaction_date = ? AND deleted_at IS NULL
             ORDER BY id ASC
-        """, (target_date_str,))
+        """, (str(target_date_str),))
         transactions = [dict(row) for row in cursor.fetchall()]
         
         return {
-            'date': target_date_str,
-            'total_sent': total_sent,
-            'total_received': total_received,
-            'net_change': total_received - total_sent,
+            'date': str(target_date_str),
+            'total_sent': float(dec_sent),
+            'total_received': float(dec_received),
+            'net_change': float(dec_received - dec_sent),
             'tx_count': tx_count,
             'transactions': transactions
         }
@@ -821,30 +766,65 @@ def get_month_comparison_stats(year: int, month: int):
         'net_delta': calc_delta(current_summary['net_savings'], prev_summary['net_savings'])
     }
 
-def get_transactions_paginated(page: int = 1, page_size: int = 25, search: str = None, category: str = None, tx_type: str = None, year: int = None, month: int = None):
-    """Fetches paginated transactions with optional filters."""
+def get_transactions_paginated(
+    page: int = 1,
+    page_size: int = 25,
+    search: str = None,
+    category: str = None,
+    tx_type: str = None,
+    transaction_type: str = None,
+    year: int = None,
+    month: int = None
+):
+    """Fetches paginated transactions with optional filters and safe bounds."""
+    try:
+        page = max(1, int(page or 1))
+    except (ValueError, TypeError):
+        page = 1
+        
+    try:
+        page_size = max(1, min(int(page_size or 25), 200))
+    except (ValueError, TypeError):
+        page_size = 25
+
     conditions = ["deleted_at IS NULL"]
     params = []
     
     if search and search.strip():
-        s = f"%{search.strip()}%"
+        clean_search = search.strip()[:100]
+        s = f"%{clean_search}%"
         conditions.append("(person_name LIKE ? OR category LIKE ? OR reference_number LIKE ? OR payment_app LIKE ?)")
         params.extend([s, s, s, s])
         
     if category and category.strip() and category.lower() != 'all':
         conditions.append("category = ?")
-        params.append(category.strip())
+        params.append(category.strip()[:100])
         
-    if tx_type and tx_type.strip() and tx_type.upper() in ('SENT', 'RECEIVED', 'TRANSFER'):
-        conditions.append("transaction_type = ?")
-        params.append(tx_type.upper())
+    effective_type = (tx_type or transaction_type or "").strip().upper()
+    if effective_type and effective_type != "ALL":
+        if effective_type in ('SENT', 'RECEIVED', 'TRANSFER'):
+            conditions.append("transaction_type = ?")
+            params.append(effective_type)
+        else:
+            raise ValueError(f"Invalid transaction type filter: '{effective_type}'")
         
     if year and month:
+        if not (1900 <= int(year) <= 2200):
+            raise ValueError(f"Year out of range: {year}")
+        if not (1 <= int(month) <= 12):
+            raise ValueError(f"Month out of range: {month}")
         conditions.append("strftime('%Y-%m', transaction_date) = ?")
-        params.append(f"{year:04d}-{month:02d}")
+        params.append(f"{int(year):04d}-{int(month):02d}")
     elif year:
+        if not (1900 <= int(year) <= 2200):
+            raise ValueError(f"Year out of range: {year}")
         conditions.append("strftime('%Y', transaction_date) = ?")
-        params.append(str(year))
+        params.append(str(int(year)))
+    elif month:
+        if not (1 <= int(month) <= 12):
+            raise ValueError(f"Month out of range: {month}")
+        conditions.append("strftime('%m', transaction_date) = ?")
+        params.append(f"{int(month):02d}")
         
     where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     

@@ -78,13 +78,13 @@ class TestBackupV2AndSoftDelete(unittest.TestCase):
         t1.transaction_date = "2026-09-20"
         tx1_id = insert_transaction(t1)
 
-        # Attempting to insert another LIVE transaction with same ref should fail due to idx_tx_ref_live
+        # Attempting to insert another LIVE transaction with same ref should fail due to duplicate reference constraint
         t2 = Transaction()
         t2.amount = 123.0
         t2.reference_number = "TEST_REF_999999"
         t2.transaction_type = "SENT"
         t2.transaction_date = "2026-09-20"
-        with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaises((sqlite3.IntegrityError, ValueError)):
             insert_transaction(t2)
 
         # Now soft-delete t1

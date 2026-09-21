@@ -4,20 +4,22 @@ Calculates net savings, savings rate %, top spend category, top payee,
 peak single expense, and budget usage. Records frozen monthly reviews.
 """
 
+from decimal import Decimal
 from typing import Dict, Optional
 from database.db import get_db_connection, LEDGER_LOCK
 from database.queries import increment_revision_and_mark_dirty
 from services.budget_service import get_budget_info
 from utils.dates import utc_now_iso, get_current_time_in_tz
+from utils.validation import CENT
 
 def calculate_monthly_closing_metrics(year: int, month: int) -> Dict:
-    """Calculates all key performance and retrospective metrics for a month."""
+    """Calculates all key performance and retrospective metrics for a month with Decimal precision."""
     month_str = f"{year:04d}-{month:02d}"
     
     with get_db_connection() as conn:
         cursor = conn.cursor()
         
-        # 1. Total Income & Total Expenses (excluding TRANSFER)
+        # 1. Total Income & Total Expenses (strictly excluding TRANSFER)
         cursor.execute("""
             SELECT 
                 transaction_type,
@@ -29,18 +31,26 @@ def calculate_monthly_closing_metrics(year: int, month: int) -> Dict:
         """, (month_str,))
         rows = cursor.fetchall()
         
-        total_income = 0.0
-        total_expense = 0.0
+        dec_income = Decimal('0.00')
+        dec_expense = Decimal('0.00')
         tx_count = 0
         for r in rows:
             tx_count += r['count']
+            amt = Decimal(str(r['total_amount'] or '0.00')).quantize(CENT)
             if r['transaction_type'] == 'RECEIVED':
-                total_income = float(r['total_amount'] or 0.0)
+                dec_income = amt
             elif r['transaction_type'] == 'SENT':
-                total_expense = float(r['total_amount'] or 0.0)
+                dec_expense = amt
                 
-        net_savings = round(total_income - total_expense, 2)
-        savings_rate = round((net_savings / total_income * 100.0), 1) if total_income > 0 else (0.0 if total_expense == 0 else -100.0)
+        dec_net = dec_income - dec_expense
+        if dec_income > Decimal('0.00'):
+            savings_rate = float(round((dec_net / dec_income * Decimal('100.0')), 1))
+        else:
+            savings_rate = 0.0 if dec_expense == Decimal('0.00') else -100.0
+            
+        total_income = float(dec_income)
+        total_expense = float(dec_expense)
+        net_savings = float(dec_net)
         
         # 2. Top Category
         cursor.execute("""

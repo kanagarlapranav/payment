@@ -37,11 +37,24 @@ def export_database_to_json(output_path: Path = None) -> dict:
                 with get_db_connection() as conn:
                     cursor = conn.cursor()
                     
-                    # 1. Total row count check (Zero-Data-Loss safety)
+                    # Check database initialization and backup blocked status
+                    cursor.execute("SELECT value FROM settings WHERE key = 'database_initialized'")
+                    i_row = cursor.fetchone()
+                    is_initialized = bool(i_row and i_row['value'] in ('1', 'true', 'True'))
+
+                    cursor.execute("SELECT value FROM settings WHERE key = 'backup_blocked'")
+                    b_row = cursor.fetchone()
+                    is_blocked = bool(b_row and b_row['value'] in ('1', 'true', 'True'))
+
                     cursor.execute("SELECT COUNT(*) FROM transactions")
                     total_rows = cursor.fetchone()[0]
-                    if total_rows == 0:
-                        logger.warning("Database contains 0 transactions. Refusing to overwrite backup with empty database.")
+                    
+                    if not is_initialized and total_rows == 0:
+                        logger.warning("Database is uninitialized with 0 transactions. Refusing backup export to prevent overwriting cloud state before restore.")
+                        return {}
+
+                    if is_blocked:
+                        logger.warning("Backup is currently blocked (backup_blocked=1). Refusing backup export.")
                         return {}
 
                     cursor.execute("SELECT * FROM transactions ORDER BY occurred_at ASC, created_at ASC, id ASC")
@@ -421,6 +434,9 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None) -
                 skipped_count = 0
 
                 if version >= 2:
+                    now_utc = utc_now_iso()
+                    if data_dict.get('empty_ledger') and len(transactions) == 0:
+                        cursor.execute("UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE deleted_at IS NULL", (now_utc, now_utc))
                     for tx in transactions:
                         tx_uid = tx['uid']
                         amt_dec = parse_decimal_amount(tx.get('amount'), allow_zero=False)
@@ -660,8 +676,8 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None) -
             logger.error(f"Error importing database from JSON (rolled back): {e}", exc_info=True)
             return {'success': False, 'error': str(e)}
 
-def record_confirmed_backup(timestamp_iso: str = None) -> str:
-    """Records the timestamp of a confirmed backup upload in the settings table."""
+def record_confirmed_backup(timestamp_iso: str = None, revision: int = None) -> str:
+    """Records the timestamp of a confirmed backup upload in the settings table and clears dirty state."""
     from utils.dates import utc_now_iso
     ts = timestamp_iso or utc_now_iso()
     with LEDGER_LOCK:
@@ -671,6 +687,23 @@ def record_confirmed_backup(timestamp_iso: str = None) -> str:
                 "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_confirmed_backup_at', ?, ?)",
                 (ts, ts)
             )
+            cursor.execute(
+                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('is_dirty', '0', ?)",
+                (ts,)
+            )
+            if revision is not None:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_backup_ok_revision', ?, ?)",
+                    (str(revision), ts)
+                )
+            else:
+                cursor.execute("SELECT value FROM settings WHERE key = 'backup_revision'")
+                r_row = cursor.fetchone()
+                if r_row and r_row['value']:
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_backup_ok_revision', ?, ?)",
+                        (str(r_row['value']), ts)
+                    )
             conn.commit()
     logger.info(f"Recorded confirmed backup upload timestamp: {ts}")
     return ts
@@ -725,9 +758,20 @@ async def backup_to_telegram(bot, chat_id: str = None, timeout: float = 20.0, fo
         live_count = data.get("live_count", 0)
         rev = data.get("revision", 1)
 
-        # Empty rule: if transactions table has ZERO rows including tombstones, never upload
-        if tx_count == 0:
-            logger.warning("Empty rule enforced: database contains 0 transactions (including tombstones). Refusing cloud backup.")
+        # Check if backup is blocked or database is uninitialized
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM settings WHERE key = 'backup_blocked'")
+            b_row = cursor.fetchone()
+            if b_row and b_row['value'] in ('1', 'true', 'True') and not force:
+                logger.warning("Refusing cloud backup: database backup is blocked (backup_blocked=1).")
+                return False
+            cursor.execute("SELECT value FROM settings WHERE key = 'database_initialized'")
+            i_row = cursor.fetchone()
+            is_init = bool(i_row and i_row['value'] in ('1', 'true', 'True'))
+
+        if not is_init and tx_count == 0 and not force:
+            logger.warning("Empty rule enforced: database is uninitialized with 0 transactions. Refusing cloud backup.")
             return False
 
         # Cloud revision check: refuse if local revision is lower than newest cloud revision
@@ -887,15 +931,16 @@ async def restore_from_telegram(bot, chat_id: str = None) -> bool:
         logger.info(f"Found pinned cloud backup: {pinned.document.file_name}. Downloading...")
         file = await bot.get_file(pinned.document.file_id)
         download_path = DATA_DIR / "temp_cloud_backup.json"
-        await file.download_to_drive(custom_path=download_path)
-
-        res = import_database_from_json(input_path=download_path)
-        if download_path.exists():
-            try:
-                os.remove(download_path)
-            except OSError:
-                pass
-        return bool(res.get('success'))
+        try:
+            await file.download_to_drive(custom_path=download_path)
+            res = import_database_from_json(input_path=download_path)
+            return bool(res.get('success'))
+        finally:
+            if download_path.exists():
+                try:
+                    download_path.unlink()
+                except OSError as cleanup_err:
+                    logger.warning(f"Could not remove temp cloud backup file {download_path}: {cleanup_err}")
     except Exception as e:
         logger.error(f"Error restoring backup from Telegram: {e}", exc_info=True)
         return restore_local_fallback_if_valid()

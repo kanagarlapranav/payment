@@ -84,14 +84,15 @@ class TestBackupV2WriteSide(unittest.TestCase):
         mock_bot.send_document = AsyncMock()
 
         try:
-            # Step A: Simulate zero-row database
+            # Step A: Simulate uninitialized zero-row database
             with LEDGER_LOCK, get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM transactions")
+                cursor.execute("UPDATE settings SET value = '0' WHERE key = 'database_initialized'")
                 conn.commit()
 
             try:
-                # Zero rows must return {} and NOT write file
+                # Uninitialized zero rows must return {} and NOT write file
                 res = export_database_to_json(output_path=test_path)
                 self.assertEqual(res, {})
                 self.assertFalse(test_path.exists())

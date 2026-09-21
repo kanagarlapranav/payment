@@ -101,6 +101,8 @@ def format_daily_digest(target_date_str: str = None) -> str:
 
             if t_type == "RECEIVED":
                 summary += f"• 🟢 <b>+₹{amt:,.2f}</b> from <b>{name}</b> ({cat}) {icon}{time_tag}\n"
+            elif t_type == "TRANSFER":
+                summary += f"• 🔄 <b>₹{amt:,.2f}</b> Transfer: <b>{name}</b> ({cat}) {icon}{time_tag}\n"
             else:
                 summary += f"• 🔴 <b>-₹{amt:,.2f}</b> to <b>{name}</b> ({cat}) {icon}{time_tag}\n"
 
