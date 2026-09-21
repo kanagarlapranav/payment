@@ -51,6 +51,7 @@ TELEGRAM_GROUP_ID = int(raw_group_id.strip()) if raw_group_id and raw_group_id.s
 default_tesseract = r'C:\Program Files\Tesseract-OCR\tesseract.exe' if sys.platform == 'win32' else 'tesseract'
 TESSERACT_CMD = os.getenv('TESSERACT_CMD', default_tesseract)
 DEFAULT_TIMEZONE = os.getenv('DEFAULT_TIMEZONE', 'Asia/Kolkata')
+DAILY_DIGEST_TIME = os.getenv('DAILY_DIGEST_TIME', '22:00')
 
 # Dashboard Security Token for /api/data
 DASHBOARD_TOKEN = os.getenv('DASHBOARD_TOKEN', '')

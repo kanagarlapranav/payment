@@ -1,6 +1,6 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from config import TELEGRAM_USER_ID, TELEGRAM_GROUP_ID, DATA_DIR, logger
+from config import TELEGRAM_USER_ID, TELEGRAM_GROUP_ID, DATA_DIR, DAILY_DIGEST_TIME, logger
 from database.queries import (
     get_balance_setting, get_recent_transactions, update_balance_setting,
     get_transaction_by_id, update_transaction, delete_transaction,
@@ -174,8 +174,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /insights — AI-powered category breakdown, spending percentages & advice\n"
         "• /monthly (or /stats) — Monthly total spent, income, net savings & top recipient\n"
         "• /filter — Interactive filter buttons (Today, Yesterday, Month, Sent, Received)\n"
-        "• /sort — Interactive sorting menu (Amount High ➔ Low, Low ➔ High, Date)\n"
-        "• /digest — Generate today's closing financial digest (or <code>/digest YYYY-MM-DD</code>)\n\n"
+        f"• /sort — Interactive sorting menu (Amount High ➔ Low, Low ➔ High, Date)\n"
+        f"• /digest — Generate today's closing financial digest (Auto-sent daily at {DAILY_DIGEST_TIME} IST)\n\n"
         "🍽️ <b>5. Cafeteria Vegetarian System</b> <i>[Group Read-Only / Admin Edit]</i>\n"
         "• /menu — Full vegetarian cafeteria menu with prices & add-ons\n"
         "• /cafestats — Cafeteria monthly spend totals & most ordered items\n"
