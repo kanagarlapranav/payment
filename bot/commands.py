@@ -780,11 +780,12 @@ async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def send_pdf_report(chat, bot):
+    import asyncio
     from services.export_service import generate_pdf_statement
     from services.gdrive_service import is_gdrive_available, upload_statement_to_drive
     export_path = DATA_DIR / "Payment_Tracker_Statement.pdf"
     try:
-        generate_pdf_statement(str(export_path))
+        await asyncio.to_thread(generate_pdf_statement, str(export_path))
         if is_gdrive_available():
             try:
                 asyncio.create_task(asyncio.to_thread(upload_statement_to_drive, str(export_path)))
@@ -807,11 +808,12 @@ async def send_pdf_report(chat, bot):
             except OSError: pass
 
 async def send_excel_report(chat, bot):
+    import asyncio
     from services.export_service import generate_excel_report
     from services.gdrive_service import is_gdrive_available, upload_statement_to_drive
     export_path = DATA_DIR / "transactions_export.xlsx"
     try:
-        generate_excel_report(str(export_path))
+        await asyncio.to_thread(generate_excel_report, str(export_path))
         if is_gdrive_available():
             try:
                 asyncio.create_task(asyncio.to_thread(upload_statement_to_drive, str(export_path)))
@@ -1182,7 +1184,7 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text("⏳ Restoring ledger from backup via idempotent upsert...")
-    result = import_database_from_json()
+    result = await asyncio.to_thread(import_database_from_json)
     if not result.get('success'):
         await update.message.reply_text(f"❌ Nothing was saved: {html.escape(str(result.get('error')))}", parse_mode='HTML')
         return
@@ -1190,7 +1192,7 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     backed_up = await backup_to_telegram(context.bot)
     status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
 
-    txs = get_all_transactions()
+    txs = await asyncio.to_thread(get_all_transactions)
     ins = result.get('inserted', 0)
     upd = result.get('updated', 0)
     skp = result.get('skipped', 0)
@@ -1228,7 +1230,7 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id if update.effective_chat else None
     user_id = update.effective_user.id if update.effective_user else None
 
-    success, msg = perform_undo(chat_id=chat_id, user_id=user_id)
+    success, msg = await asyncio.to_thread(perform_undo, chat_id=chat_id, user_id=user_id)
     if success:
         backed_up = await backup_to_telegram(context.bot)
         status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
