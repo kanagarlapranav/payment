@@ -570,9 +570,6 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Initiates interactive editing or applies direct edit command."""
     if not await is_authorized(update): return
     from bot.keyboards import get_edit_fields_keyboard, get_transaction_selection_keyboard
-    from services.balance_service import resequence_transaction_ids
-    
-    resequence_transaction_ids()
 
     # 1. No arguments: show list of recent transactions to tap on
     if not context.args:
@@ -1194,7 +1191,10 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from services.backup_service import backup_to_telegram
     import asyncio
 
-    success, msg = perform_undo()
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    user_id = update.effective_user.id if update.effective_user else None
+
+    success, msg = perform_undo(chat_id=chat_id, user_id=user_id)
     if success:
         try:
             asyncio.create_task(backup_to_telegram(context.bot))

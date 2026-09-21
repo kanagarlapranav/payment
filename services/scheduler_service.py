@@ -146,6 +146,13 @@ class DailyDigestScheduler:
                             logger.info(f"Sent 9:00 PM daily digest for {today_str} to chat {self.target_chat_id}")
                         except Exception as send_err:
                             logger.error(f"Failed to send scheduled daily digest: {send_err}")
+
+                        # Run daily maintenance: eligible tombstone purge
+                        try:
+                            from services.maintenance_service import purge_eligible_tombstones
+                            purge_eligible_tombstones()
+                        except Exception as m_err:
+                            logger.debug(f"Scheduled maintenance notice: {m_err}")
                             
                 # Sleep for 30 seconds before next check
                 time.sleep(30)

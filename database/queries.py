@@ -317,15 +317,22 @@ def get_transaction_by_id(tx_id: int):
         row = cursor.fetchone()
         return dict(row) if row else None
 
-def get_transaction_by_uid(uid: str):
-    """Fetches a transaction by its permanent UID (live or deleted)."""
+def get_transaction_by_uid(uid: str, live_only: bool = False):
+    """Fetches a transaction by its permanent UID (live or deleted, or live only if requested)."""
     if not uid:
         return None
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM transactions WHERE uid = ?", (uid,))
+        if live_only:
+            cursor.execute("SELECT * FROM transactions WHERE uid = ? AND deleted_at IS NULL", (uid,))
+        else:
+            cursor.execute("SELECT * FROM transactions WHERE uid = ?", (uid,))
         row = cursor.fetchone()
         return dict(row) if row else None
+
+def get_live_transaction_by_uid(uid: str):
+    """Fetches an active, non-deleted transaction by permanent UID."""
+    return get_transaction_by_uid(uid, live_only=True)
 
 def update_transaction(tx_id: int, updates: dict) -> bool:
     """Updates specific fields of a transaction with validation, occurred_at recalculation, and thread locking."""
@@ -382,49 +389,81 @@ def update_transaction(tx_id: int, updates: dict) -> bool:
 
 def delete_transaction(tx_id: int) -> bool:
     """
-    Soft-deletes a transaction by setting deleted_at = utc_now_iso().
-    Recalculates balances over remaining live rows under LEDGER_LOCK in the same connection.
-    Does NOT resequence transaction IDs (preserves stable IDs and accepts gaps).
-    Purges any tombstones older than 90 days.
+    Soft-deletes a transaction by setting deleted_at and updated_at using utc_now_iso().
+    Preserves permanent uid and recalculates balance chain over remaining live rows
+    all in one database transaction under LEDGER_LOCK.
+    Does NOT purge tombstones inside the delete path.
+    Does NOT resequence transaction IDs.
     """
     with LEDGER_LOCK:
         from services.balance_service import recalculate_in_connection
         now_utc = utc_now_iso()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL", (now_utc, now_utc, tx_id))
-            deleted = cursor.rowcount > 0
-            
-            # Purge ancient tombstones older than 90 days
-            try:
-                cursor.execute("DELETE FROM transactions WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', '-90 days')")
-            except Exception as purge_err:
-                logger.debug(f"Ancient tombstone purge notice: {purge_err}")
+            cursor.execute(
+                "UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+                (now_utc, now_utc, tx_id)
+            )
+            deleted = (cursor.rowcount == 1)
 
             if deleted:
                 recalculate_in_connection(conn)
-                
+
             conn.commit()
             return deleted
 
-def restore_soft_deleted_transaction(tx_id: int = None, uid: str = None) -> bool:
+def delete_transaction_by_uid(uid: str) -> bool:
     """
-    Restores a soft-deleted transaction by clearing its deleted_at timestamp under LEDGER_LOCK.
-    Recalculates running balances over live rows in the same connection.
+    Soft-deletes a transaction by permanent uid under LEDGER_LOCK in one database transaction.
+    Recalculates balance chain over live rows. Does not purge tombstones.
     """
-    if not tx_id and not uid:
+    if not uid:
+        return False
+    with LEDGER_LOCK:
+        from services.balance_service import recalculate_in_connection
+        now_utc = utc_now_iso()
+        valid_uid = validate_uid(uid)
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE uid = ? AND deleted_at IS NULL",
+                (now_utc, now_utc, valid_uid)
+            )
+            deleted = (cursor.rowcount == 1)
+
+            if deleted:
+                recalculate_in_connection(conn)
+
+            conn.commit()
+            return deleted
+
+def restore_soft_deleted_transaction(uid: str = None, tx_id: int = None) -> bool:
+    """
+    Restores a soft-deleted transaction by setting deleted_at = NULL and updated_at = utc_now_iso()
+    WHERE uid = ? AND deleted_at IS NOT NULL.
+    Returns success only if exactly one row changed, then recalculates the chain under LEDGER_LOCK.
+    """
+    if not uid and not tx_id:
         return False
     with LEDGER_LOCK:
         from services.balance_service import recalculate_in_connection
         now_utc = utc_now_iso()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            if uid:
-                valid_uid = validate_uid(uid)
-                cursor.execute("UPDATE transactions SET deleted_at = NULL, updated_at = ? WHERE uid = ?", (now_utc, valid_uid))
-            else:
-                cursor.execute("UPDATE transactions SET deleted_at = NULL, updated_at = ? WHERE id = ?", (now_utc, tx_id))
-            restored = cursor.rowcount > 0
+            target_uid = uid
+            if not target_uid and tx_id:
+                cursor.execute("SELECT uid FROM transactions WHERE id = ?", (tx_id,))
+                row = cursor.fetchone()
+                if not row or not row['uid']:
+                    return False
+                target_uid = row['uid']
+
+            valid_uid = validate_uid(target_uid)
+            cursor.execute(
+                "UPDATE transactions SET deleted_at = NULL, updated_at = ? WHERE uid = ? AND deleted_at IS NOT NULL",
+                (now_utc, valid_uid)
+            )
+            restored = (cursor.rowcount == 1)
 
             if restored:
                 recalculate_in_connection(conn)

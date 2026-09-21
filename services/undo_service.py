@@ -1,128 +1,232 @@
 """
 Undo Service for Payment Tracker.
-Stores reversible snapshots of recent delete, edit, and insert operations in memory/state
-so users can easily revert actions with /undo or an interactive '↩️ Undo' button.
+Stores reversible undo records in the SQLite table `undo_log` scoped by (chat_id, user_id),
+expiring after 10 minutes, and enforcing exactly-once consumption.
+Undo of a delete restores by permanent UID only without ever recreating purged rows from snapshots.
 """
-from typing import Optional, Dict, Any
-from config import logger
+import html
+from datetime import datetime, timezone
+from typing import Any
 
-# In-memory stack of recent undoable actions (holds up to last 20 actions)
+from config import TELEGRAM_GROUP_ID, TELEGRAM_USER_ID, logger
+from database.db import LEDGER_LOCK, get_db_connection
+from database.queries import (
+    delete_transaction_by_uid,
+    get_balance_setting,
+    get_transaction_by_id,
+    get_transaction_by_uid,
+    restore_soft_deleted_transaction,
+)
+from utils.currency import format_currency
+from utils.dates import utc_now_iso
+from utils.validation import validate_uid
+
+# Backwards-compatibility alias for legacy imports
 _UNDO_STACK = []
 
-def record_delete_action(deleted_tx: dict):
-    """Records a deleted transaction snapshot so it can be restored."""
-    if not deleted_tx:
-        return
-    _UNDO_STACK.append({
-        'action_type': 'delete',
-        'data': dict(deleted_tx)
-    })
-    if len(_UNDO_STACK) > 20:
-        _UNDO_STACK.pop(0)
-    logger.info(f"Recorded undo action for deleted transaction #{deleted_tx.get('id')}")
 
-def record_edit_action(previous_tx: dict):
-    """Records the prior state of a transaction before edits were applied."""
-    if not previous_tx:
-        return
-    _UNDO_STACK.append({
-        'action_type': 'edit',
-        'data': dict(previous_tx)
-    })
-    if len(_UNDO_STACK) > 20:
-        _UNDO_STACK.pop(0)
-    logger.info(f"Recorded undo action for edited transaction #{previous_tx.get('id')}")
+def _resolve_scope(chat_id: int | None, user_id: int | None) -> tuple[int, int]:
+    """Resolves effective chat_id and user_id with fallback to configured defaults."""
+    c_id = int(chat_id) if chat_id is not None else int(TELEGRAM_GROUP_ID or TELEGRAM_USER_ID or 0)
+    u_id = int(user_id) if user_id is not None else int(TELEGRAM_USER_ID or 0)
+    return c_id, u_id
 
-def record_insert_action(inserted_tx_id: int):
-    """Records a freshly inserted transaction ID so it can be undone (deleted)."""
-    _UNDO_STACK.append({
-        'action_type': 'insert',
-        'tx_id': inserted_tx_id
-    })
-    if len(_UNDO_STACK) > 20:
-        _UNDO_STACK.pop(0)
-    logger.info(f"Recorded undo action for new transaction #{inserted_tx_id}")
 
-def get_last_action() -> Optional[Dict[str, Any]]:
-    """Returns the most recent undoable action without removing it."""
-    return _UNDO_STACK[-1] if _UNDO_STACK else None
-
-def pop_last_action() -> Optional[Dict[str, Any]]:
-    """Pops and returns the most recent undoable action."""
-    return _UNDO_STACK.pop() if _UNDO_STACK else None
-
-def perform_undo() -> tuple[bool, str]:
+def record_delete_action(
+    deleted_tx: dict,
+    chat_id: int | None = None,
+    user_id: int | None = None,
+) -> bool:
     """
-    Reverts the last action performed (delete, edit, or insert).
+    Records a soft-deleted transaction in undo_log by its permanent UID.
+    Scoped by (chat_id, user_id).
+    """
+    if not deleted_tx:
+        return False
+
+    uid = deleted_tx.get('uid')
+    if not uid and deleted_tx.get('id'):
+        row = get_transaction_by_id(deleted_tx['id'])
+        if row:
+            uid = row.get('uid')
+
+    if not uid:
+        logger.warning(f"Cannot record undo for transaction without uid: {deleted_tx}")
+        return False
+
+    valid_uid = validate_uid(uid)
+    c_id, u_id = _resolve_scope(chat_id, user_id)
+    now_utc = utc_now_iso()
+
+    with LEDGER_LOCK, get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+                INSERT INTO undo_log (chat_id, user_id, action, uid, created_at)
+                VALUES (?, ?, 'delete', ?, ?)
+                """,
+            (c_id, u_id, valid_uid, now_utc),
+        )
+        conn.commit()
+
+    logger.info(f"Recorded undo delete for UID {valid_uid} scoped to chat {c_id}, user {u_id}")
+    return True
+
+
+def record_insert_action(
+    inserted_tx_uid_or_id: Any,
+    chat_id: int | None = None,
+    user_id: int | None = None,
+) -> bool:
+    """
+    Records a freshly inserted transaction in undo_log by its permanent UID so it can be undone.
+    Scoped by (chat_id, user_id).
+    """
+    uid = None
+    if isinstance(inserted_tx_uid_or_id, int) or (isinstance(inserted_tx_uid_or_id, str) and inserted_tx_uid_or_id.isdigit()):
+        row = get_transaction_by_id(int(inserted_tx_uid_or_id))
+        if row:
+            uid = row.get('uid')
+    elif inserted_tx_uid_or_id:
+        uid = str(inserted_tx_uid_or_id).strip()
+
+    if not uid:
+        return False
+
+    valid_uid = validate_uid(uid)
+    c_id, u_id = _resolve_scope(chat_id, user_id)
+    now_utc = utc_now_iso()
+
+    with LEDGER_LOCK, get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+                INSERT INTO undo_log (chat_id, user_id, action, uid, created_at)
+                VALUES (?, ?, 'insert', ?, ?)
+                """,
+            (c_id, u_id, valid_uid, now_utc),
+        )
+        conn.commit()
+
+    logger.info(f"Recorded undo insert for UID {valid_uid} scoped to chat {c_id}, user {u_id}")
+    return True
+
+
+def record_edit_action(
+    previous_tx: dict,
+    chat_id: int | None = None,
+    user_id: int | None = None,
+) -> bool:
+    """Backwards-compatibility stub for recording edit operations."""
+    return record_delete_action(previous_tx, chat_id=chat_id, user_id=user_id)
+
+
+def get_last_action(chat_id: int | None = None, user_id: int | None = None) -> dict[str, Any] | None:
+    """Returns the most recent active (unused, unexpired) undo action without consuming it."""
+    c_id, u_id = _resolve_scope(chat_id, user_id)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, chat_id, user_id, action, uid, created_at
+            FROM undo_log
+            WHERE chat_id = ? AND user_id = ? AND used_at IS NULL
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (c_id, u_id),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def perform_undo(
+    chat_id: int | None = None,
+    user_id: int | None = None,
+) -> tuple[bool, str]:
+    """
+    Reverts the last action performed for (chat_id, user_id).
+    Enforces:
+      - Scope by (chat_id, user_id)
+      - Expiration after 10 minutes
+      - Exactly-once usage
+      - Restores deletes by permanent UID only
+      - Never recreates purged rows from snapshot
     Returns (success: bool, message: str).
     """
-    if not _UNDO_STACK:
-        return False, "No recent action found to undo."
+    c_id, u_id = _resolve_scope(chat_id, user_id)
 
-    action = _UNDO_STACK.pop()
-    action_type = action.get('action_type')
+    with LEDGER_LOCK:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # Fetch latest unused undo record for this scope
+            cursor.execute(
+                """
+                SELECT id, chat_id, user_id, action, uid, created_at
+                FROM undo_log
+                WHERE chat_id = ? AND user_id = ? AND used_at IS NULL
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (c_id, u_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False, "No recent action found to undo."
 
-    try:
-        from database.db import get_db_connection
-        from services.balance_service import resequence_transaction_ids, recalculate_all_balances
-        from database.queries import update_transaction, delete_transaction, get_balance_setting
-        from utils.currency import format_currency
-        from services.backup_service import export_database_to_json
-        from database.queries import restore_soft_deleted_transaction
-        import html
+            rec_id = row['id']
+            action = row['action']
+            uid = row['uid']
+            created_at_str = row['created_at']
 
-        if action_type == 'delete':
-            # Restore the soft-deleted transaction
-            tx = action['data']
-            tx_id = tx.get('id')
-            tx_uid = tx.get('uid')
-            
-            restored = restore_soft_deleted_transaction(tx_id=tx_id, uid=tx_uid)
+            # Check 10-minute expiration window
+            try:
+                created_dt = datetime.fromisoformat(created_at_str)
+                if created_dt.tzinfo is None:
+                    created_dt = created_dt.replace(tzinfo=timezone.utc)
+                age_seconds = (datetime.now(timezone.utc) - created_dt).total_seconds()
+            except (ValueError, TypeError):
+                age_seconds = 0
+
+            now_iso = utc_now_iso()
+
+            if age_seconds > 600:
+                # Expired: mark as consumed/expired
+                cursor.execute("UPDATE undo_log SET used_at = ? WHERE id = ?", (now_iso, rec_id))
+                conn.commit()
+                return False, "Undo action has expired (window is 10 minutes)."
+
+            # Consume record exactly once
+            cursor.execute(
+                "UPDATE undo_log SET used_at = ? WHERE id = ? AND used_at IS NULL",
+                (now_iso, rec_id),
+            )
+            if cursor.rowcount != 1:
+                return False, "Undo action has already been used."
+            conn.commit()
+
+        # Execute undo action outside cursor transaction to allow sub-functions their own connection
+        if action == 'delete':
+            # Check if tombstone exists in transactions
+            tx = get_transaction_by_uid(uid)
+            if not tx:
+                return False, "Recovery is not possible: transaction record no longer exists."
+
+            if tx.get('deleted_at') is None:
+                return False, "Cannot restore transaction: transaction is already active."
+
+            restored = restore_soft_deleted_transaction(uid=uid)
             if not restored:
-                # Fallback: if row was somehow physically deleted, re-insert with its original uid
-                with get_db_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute('''
-                        INSERT INTO transactions (
-                            id, transaction_type, amount, person_name, sender_name, recipient_name,
-                            upi_id, phone_number, transaction_date, transaction_time, reference_number,
-                            transaction_id, payment_app, bank_name, bank_account, payment_status,
-                            category, balance_before, balance_after, ocr_text, original_image_path,
-                            telegram_message_id, telegram_chat_id, uid, deleted_at, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
-                    ''', (
-                        tx_id,
-                        tx.get('transaction_type', 'RECEIVED'),
-                        float(tx.get('amount', 0.0)),
-                        tx.get('person_name', ''),
-                        tx.get('sender_name', ''),
-                        tx.get('recipient_name', ''),
-                        tx.get('upi_id', ''),
-                        tx.get('phone_number', ''),
-                        tx.get('transaction_date'),
-                        tx.get('transaction_time', ''),
-                        tx.get('reference_number', ''),
-                        tx.get('transaction_id', ''),
-                        tx.get('payment_app', ''),
-                        tx.get('bank_name', ''),
-                        tx.get('bank_account', ''),
-                        tx.get('payment_status', 'SUCCESS'),
-                        tx.get('category', 'General'),
-                        float(tx.get('balance_before', 0.0)),
-                        float(tx.get('balance_after', 0.0)),
-                        tx.get('ocr_text', ''),
-                        tx.get('original_image_path', ''),
-                        str(tx.get('telegram_message_id', '')),
-                        str(tx.get('telegram_chat_id', '')),
-                        tx_uid,
-                        tx.get('created_at'),
-                        tx.get('updated_at')
-                    ))
-                    conn.commit()
+                return False, "Recovery is not possible: failed to restore transaction."
 
-            new_bal = recalculate_all_balances()
-            export_database_to_json()
+            new_bal = get_balance_setting()
+            try:
+                from services.backup_service import export_database_to_json
+                export_database_to_json()
+            except (OSError, RuntimeError) as bkp_err:
+                logger.debug(f"Undo backup notice: {bkp_err}")
 
+            tx_id = tx.get('id')
             amt_s = format_currency(tx.get('amount', 0))
             person_s = tx.get('person_name') or 'Unknown'
             return True, (
@@ -133,45 +237,23 @@ def perform_undo() -> tuple[bool, str]:
                 f"💰 <b>Updated Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>"
             )
 
-        elif action_type == 'edit':
-            # Restore the previous transaction state
-            old_tx = action['data']
-            tx_id = old_tx['id']
-            updates = {
-                'transaction_type': old_tx.get('transaction_type'),
-                'amount': float(old_tx.get('amount', 0.0)),
-                'person_name': old_tx.get('person_name', ''),
-                'sender_name': old_tx.get('sender_name', ''),
-                'recipient_name': old_tx.get('recipient_name', ''),
-                'upi_id': old_tx.get('upi_id', ''),
-                'transaction_date': old_tx.get('transaction_date'),
-                'reference_number': old_tx.get('reference_number', ''),
-                'category': old_tx.get('category', 'General')
-            }
-            update_transaction(tx_id, updates)
-            new_bal = recalculate_all_balances()
-            export_database_to_json()
+        elif action == 'insert':
+            tx = get_transaction_by_uid(uid, live_only=True)
+            if not tx:
+                return False, "Transaction is already deleted or no longer exists."
 
-            amt_s = format_currency(old_tx.get('amount', 0))
-            return True, (
-                f"↩️ <b>Undo Successful! Reverted Edit on Transaction #{tx_id}</b>\n\n"
-                f"• <b>Person:</b> {html.escape(str(old_tx.get('person_name') or 'Unknown'))}\n"
-                f"• <b>Amount:</b> <b>{html.escape(amt_s)}</b>\n\n"
-                f"💰 <b>Updated Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>"
-            )
+            tx_id = tx.get('id')
+            delete_transaction_by_uid(uid=uid)
+            new_bal = get_balance_setting()
+            try:
+                from services.backup_service import export_database_to_json
+                export_database_to_json()
+            except (OSError, RuntimeError) as bkp_err:
+                logger.debug(f"Undo insert backup notice: {bkp_err}")
 
-        elif action_type == 'insert':
-            tx_id = action['tx_id']
-            delete_transaction(tx_id)
-            new_bal = recalculate_all_balances()
-            export_database_to_json()
             return True, (
                 f"↩️ <b>Undo Successful! Removed newly added transaction #{tx_id}.</b>\n\n"
                 f"💰 <b>Updated Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>"
             )
 
-        return False, "Unknown action type to undo."
-
-    except Exception as e:
-        logger.error(f"Error performing undo: {e}", exc_info=True)
-        return False, f"Failed to undo: {e}"
+        return False, f"Unknown action type '{action}'."
