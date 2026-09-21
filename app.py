@@ -24,32 +24,62 @@ from bot.handlers import handle_image, handle_callback_query, handle_text
 from services.scheduler_service import scheduler
 
 async def on_startup(app):
-    """Restores database state from cloud backup only if database is completely empty on fresh container spins."""
+    """
+    Startup rule:
+    Restore automatically ONLY when the transactions table has zero rows including tombstones
+    AND the database is not marked initialized. Otherwise log 'restore skipped' with counts.
+    If restore fails on an empty database, set backup_blocked=true: no backup may be uploaded
+    until a restore succeeds or the first real transaction is added. Log which path was taken.
+    """
     try:
-        from services.backup_service import restore_from_telegram, import_database_from_json, export_database_to_json, BACKUP_JSON_PATH
-        from database.db import get_db_connection
+        from services.backup_service import restore_from_telegram, restore_local_fallback_if_valid, export_database_to_json, BACKUP_JSON_PATH
+        from database.db import get_db_connection, LEDGER_LOCK
+        from utils.dates import utc_now_iso
 
         with get_db_connection() as conn:
             cur = conn.cursor()
             cur.execute("SELECT COUNT(*) FROM transactions")
             total_rows = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL")
+            live_rows = cur.fetchone()[0]
+            tombstones = total_rows - live_rows
 
-        if total_rows > 0:
-            logger.info(f"Startup check: [SKIPPED RESTORE] - Local database has {total_rows} records.")
-        else:
-            logger.info("Startup check: [EMPTY DB] - Fresh container spin detected. Attempting cloud restore from Telegram...")
+            cur.execute("SELECT value FROM settings WHERE key = 'database_initialized'")
+            row = cur.fetchone()
+            is_initialized = bool(row and row['value'] in ('1', 'true', 'True'))
+
+        if total_rows == 0 and not is_initialized:
+            logger.info("Startup check: [EMPTY & UNINITIALIZED] - Attempting automatic restore...")
+            # Path 1: Cloud restore from Telegram
             restored = await restore_from_telegram(app.bot)
             if restored:
-                logger.info("Startup check: [RESTORE SUCCESS] - Database restored successfully from cloud backup.")
+                logger.info("Startup path taken: [CLOUD RESTORE SUCCESS] - Database restored successfully from Telegram cloud backup.")
+                with LEDGER_LOCK:
+                    with get_db_connection() as conn:
+                        now_utc = utc_now_iso()
+                        conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('database_initialized', '1', ?)", (now_utc,))
+                        conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('backup_blocked', '0', ?)", (now_utc,))
+                        conn.commit()
                 export_database_to_json()
-            elif BACKUP_JSON_PATH.exists():
-                res = import_database_from_json(BACKUP_JSON_PATH)
-                if res.get('success'):
-                    logger.info("Startup check: [LOCAL RESTORE] - Restored from local backup file.")
-                else:
-                    logger.warning("Startup check: [EMPTY & NO BACKUP] - Local backup file present but import failed.")
+            elif restore_local_fallback_if_valid():
+                # Path 2: Local fallback with valid checksum
+                logger.info("Startup path taken: [LOCAL RESTORE SUCCESS] - Restored from valid local JSON backup file.")
+                with LEDGER_LOCK:
+                    with get_db_connection() as conn:
+                        now_utc = utc_now_iso()
+                        conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('database_initialized', '1', ?)", (now_utc,))
+                        conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('backup_blocked', '0', ?)", (now_utc,))
+                        conn.commit()
             else:
-                logger.warning("Startup check: [EMPTY & NO BACKUP] - Starting with brand new database.")
+                # Path 3: Restore failed on empty database -> set backup_blocked=true
+                logger.warning("Startup path taken: [RESTORE FAILED ON EMPTY DB] - No valid cloud or local backup available. Setting backup_blocked=true.")
+                with LEDGER_LOCK:
+                    with get_db_connection() as conn:
+                        now_utc = utc_now_iso()
+                        conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('backup_blocked', '1', ?)", (now_utc,))
+                        conn.commit()
+        else:
+            logger.info(f"Startup check: restore skipped (total={total_rows}, live={live_rows}, tombstones={tombstones}, initialized={is_initialized})")
 
         # Clean up any leftover temporary images from prior runs
         try:
