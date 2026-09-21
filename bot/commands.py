@@ -637,25 +637,35 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     needs_recalc = False
 
     if field in ('amount', 'amt'):
-        new_amt = parse_amount(value_raw)
-        if new_amt <= 0:
-            await update.message.reply_text("❌ Invalid amount.")
+        try:
+            from utils.validation import parse_decimal_amount
+            new_amt = float(parse_decimal_amount(value_raw, allow_zero=False))
+            updates['amount'] = new_amt
+            needs_recalc = True
+        except ValueError as err:
+            await update.message.reply_text(f"❌ Invalid amount: {err}")
             return
-        updates['amount'] = new_amt
-        needs_recalc = True
     elif field in ('person', 'person_name', 'name', 'recipient', 'sender'):
-        updates['person_name'] = value_raw.title()
-        if tx['transaction_type'] == 'SENT':
-            updates['recipient_name'] = value_raw.title()
-        else:
-            updates['sender_name'] = value_raw.title()
-    elif field in ('type', 'transaction_type'):
-        new_type = value_raw.upper()
-        if new_type not in ('SENT', 'RECEIVED'):
-            await update.message.reply_text("❌ Type must be `SENT` or `RECEIVED`.", parse_mode='Markdown')
+        from utils.validation import validate_name
+        try:
+            clean_name = validate_name(value_raw.title(), max_length=120, field_name="Person name", required=True)
+        except ValueError as err:
+            await update.message.reply_text(f"❌ Invalid name: {err}")
             return
-        updates['transaction_type'] = new_type
-        needs_recalc = True
+        updates['person_name'] = clean_name
+        if tx['transaction_type'] == 'SENT':
+            updates['recipient_name'] = clean_name
+        else:
+            updates['sender_name'] = clean_name
+    elif field in ('type', 'transaction_type'):
+        try:
+            from utils.validation import validate_transaction_type
+            new_type = validate_transaction_type(value_raw)
+            updates['transaction_type'] = new_type
+            needs_recalc = True
+        except ValueError as err:
+            await update.message.reply_text(f"❌ Invalid type: {err}. Must be `SENT` or `RECEIVED`.", parse_mode='Markdown')
+            return
     elif field in ('date', 'transaction_date'):
         parsed_d = parse_date(value_raw)
         if not parsed_d:
@@ -664,7 +674,12 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         updates['transaction_date'] = parsed_d
         needs_recalc = True
     elif field in ('ref', 'reference', 'utr', 'reference_number'):
-        updates['reference_number'] = value_raw
+        from utils.validation import validate_reference
+        try:
+            updates['reference_number'] = validate_reference(value_raw, max_length=100)
+        except ValueError as err:
+            await update.message.reply_text(f"❌ Invalid reference: {err}")
+            return
     else:
         await update.message.reply_text(f"❌ Unknown field `{field}`. Supported: `amount`, `person`, `type`, `date`, `ref`.", parse_mode='Markdown')
         return
@@ -774,15 +789,16 @@ async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
         
     try:
-        new_balance = float(context.args[0].replace(',', '').replace('₹', '').strip())
+        from utils.validation import parse_decimal_amount
+        new_balance = float(parse_decimal_amount(context.args[0], allow_zero=True))
         final_bal = set_explicit_balance(new_balance)
         try:
             asyncio.create_task(backup_to_telegram(context.bot))
         except Exception:
             pass
         await update.message.reply_text(f"✅ Balance set to {format_currency(final_bal)}")
-    except ValueError:
-        await update.message.reply_text("❌ Invalid amount format. Example: /setbalance 50000")
+    except ValueError as val_err:
+        await update.message.reply_text(f"❌ Invalid amount format: {val_err}. Example: /setbalance 50000")
 
 
 async def send_pdf_report(chat, bot):
@@ -927,17 +943,18 @@ async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
         
-    raw_amt = "".join(context.args).replace(',', '').replace('₹', '').replace('rs', '').strip()
     try:
-        amt = float(raw_amt)
+        from utils.validation import parse_decimal_amount
+        raw_amt = "".join(context.args)
+        amt = float(parse_decimal_amount(raw_amt, allow_zero=True))
         msg = set_budget(amt)
         try:
             asyncio.create_task(backup_to_telegram(context.bot))
         except Exception:
             pass
         await update.message.reply_text(msg, parse_mode='HTML')
-    except ValueError:
-        await update.message.reply_text("❌ Invalid amount format. Example: <code>/setbudget 20000</code>", parse_mode='HTML')
+    except ValueError as val_err:
+        await update.message.reply_text(f"❌ Invalid amount format: {val_err}. Example: <code>/setbudget 20000</code>", parse_mode='HTML')
 
 async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates the daily financial closing digest on demand."""
@@ -1046,6 +1063,7 @@ async def addmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    from utils.validation import parse_decimal_amount, validate_name
     full_arg = " ".join(args)
     name, price, category = None, None, "Custom"
     if "," in full_arg:
@@ -1053,7 +1071,7 @@ async def addmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name = parts[0]
         if len(parts) > 1:
             try:
-                price = float(parts[1])
+                price = float(parse_decimal_amount(parts[1], allow_zero=False))
             except ValueError:
                 price = None
         if len(parts) > 2:
@@ -1063,7 +1081,7 @@ async def addmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         price_idx = -1
         for idx, tok in enumerate(tokens):
             try:
-                p_val = float(tok)
+                p_val = float(parse_decimal_amount(tok, allow_zero=False))
                 if p_val > 0:
                     price = p_val
                     price_idx = idx

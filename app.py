@@ -213,14 +213,32 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
             from services.budget_service import get_budget_info
 
             now = datetime.now()
-            try:
-                year = int(query_params.get("year", [now.year])[0])
-            except (ValueError, TypeError):
+            if "year" in query_params:
+                try:
+                    year = int(query_params.get("year", [""])[0])
+                    if not (1900 <= year <= 2100):
+                        raise ValueError("Year out of range")
+                except (ValueError, TypeError):
+                    self.send_response(400)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "Invalid year parameter. Must be an integer between 1900 and 2100."}).encode('utf-8'))
+                    return
+            else:
                 year = now.year
-                
-            try:
-                month = int(query_params.get("month", [now.month])[0])
-            except (ValueError, TypeError):
+
+            if "month" in query_params:
+                try:
+                    month = int(query_params.get("month", [""])[0])
+                    if not (1 <= month <= 12):
+                        raise ValueError("Month out of range")
+                except (ValueError, TypeError):
+                    self.send_response(400)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "Invalid month parameter. Must be an integer between 1 and 12."}).encode('utf-8'))
+                    return
+            else:
                 month = now.month
 
             balance = get_balance_setting()

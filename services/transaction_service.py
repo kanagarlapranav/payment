@@ -1,8 +1,15 @@
 from parsers import get_best_parser
 from database.models import Transaction
 from database.queries import insert_transaction
+from database.db import LEDGER_LOCK
 from services.balance_service import update_balance_for_transaction
 from services.duplicate_service import is_duplicate
+from utils.validation import (
+    parse_decimal_amount,
+    validate_transaction_type,
+    validate_string_length,
+    validate_caption,
+)
 from config import logger
 
 _PROMO_PATTERNS = (
@@ -33,6 +40,7 @@ def process_transaction(raw_text: str, image_path: str, message_id: str, chat_id
     Uses Gemini AI as primary extractor for both natural text and vision receipts, with regex/OCR backup.
     Returns: (Transaction object, confidence score)
     """
+    caption = validate_caption(caption)
     full_text = f"{raw_text}\n{caption}".strip() if caption else raw_text
     full_text = _strip_promo_lines(full_text)
 
@@ -82,40 +90,51 @@ def process_transaction(raw_text: str, image_path: str, message_id: str, chat_id
 
 def commit_transaction(transaction: Transaction) -> bool:
     """
-    Saves the transaction to DB and updates balance.
+    Saves the transaction to DB and updates balance under LEDGER_LOCK with Decimal precision.
     Must be called only if confident or after user confirmation.
     """
-    try:
-        # Check duplicate
-        if is_duplicate(transaction):
-            logger.warning("Duplicate transaction detected during commit.")
-            return False
-            
-        # Ensure category is populated
-        if not getattr(transaction, 'category', None) or transaction.category == 'General':
-            from services.category_service import predict_category
-            transaction.category = predict_category(
-                text=transaction.ocr_text or "",
-                person_name=transaction.person_name or "",
-                tx_type=transaction.transaction_type or ""
-            )
-            
-        # Update balance
-        transaction = update_balance_for_transaction(transaction)
-        
-        # Save to DB
-        transaction_id = insert_transaction(transaction)
-        transaction.id = transaction_id
-        
-        # Keep local JSON snapshot in sync
+    with LEDGER_LOCK:
         try:
-            from services.backup_service import export_database_to_json
-            export_database_to_json()
-        except Exception as bkp_err:
-            logger.warning(f"Could not update local JSON backup: {bkp_err}")
-        
-        logger.info(f"Transaction committed successfully. ID: {transaction_id}")
-        return True
-    except Exception as e:
-        logger.error(f"Error committing transaction: {e}")
-        raise e
+            # Validate core transaction fields
+            dec_amt = parse_decimal_amount(transaction.amount, allow_zero=False)
+            transaction.amount = float(dec_amt)
+            transaction.transaction_type = validate_transaction_type(transaction.transaction_type)
+            
+            transaction.person_name = validate_string_length(transaction.person_name, max_length=120, field_name="Person name")
+            transaction.sender_name = validate_string_length(transaction.sender_name, max_length=120, field_name="Sender name")
+            transaction.recipient_name = validate_string_length(transaction.recipient_name, max_length=120, field_name="Recipient name")
+            transaction.reference_number = validate_string_length(transaction.reference_number, max_length=100, field_name="Reference number")
+
+            # Check duplicate
+            if is_duplicate(transaction):
+                logger.warning("Duplicate transaction detected during commit.")
+                return False
+                
+            # Ensure category is populated
+            if not getattr(transaction, 'category', None) or transaction.category == 'General':
+                from services.category_service import predict_category
+                transaction.category = predict_category(
+                    text=transaction.ocr_text or "",
+                    person_name=transaction.person_name or "",
+                    tx_type=transaction.transaction_type or ""
+                )
+                
+            # Update balance
+            transaction = update_balance_for_transaction(transaction)
+            
+            # Save to DB
+            transaction_id = insert_transaction(transaction)
+            transaction.id = transaction_id
+            
+            # Keep local JSON snapshot in sync
+            try:
+                from services.backup_service import export_database_to_json
+                export_database_to_json()
+            except Exception as bkp_err:
+                logger.warning(f"Could not update local JSON backup: {bkp_err}")
+            
+            logger.info(f"Transaction committed successfully. ID: {transaction_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error committing transaction: {e}")
+            raise e

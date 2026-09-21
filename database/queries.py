@@ -1,37 +1,63 @@
 import uuid
 from database.models import Transaction
-from database.db import get_db_connection
+from database.db import get_db_connection, LEDGER_LOCK
+from utils.validation import (
+    parse_decimal_amount,
+    validate_transaction_type,
+    validate_uid,
+    validate_string_length,
+)
 from datetime import datetime
 from config import logger
 
 def insert_transaction(t: Transaction) -> int:
-    """Inserts a new transaction into the database."""
-    category = getattr(t, 'category', 'General') or 'General'
-    tx_uid = getattr(t, 'uid', None) or uuid.uuid4().hex
-    t.uid = tx_uid
-    query = '''
-        INSERT INTO transactions (
-            transaction_type, amount, person_name, sender_name, recipient_name,
-            upi_id, phone_number, transaction_date, transaction_time, reference_number,
-            transaction_id, payment_app, bank_name, bank_account, payment_status,
-            category, balance_before, balance_after, ocr_text, original_image_path,
-            telegram_message_id, telegram_chat_id, uid, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    '''
-    
-    values = (
-        t.transaction_type, t.amount, t.person_name, t.sender_name, t.recipient_name,
-        t.upi_id, t.phone_number, t.transaction_date, t.transaction_time, t.reference_number,
-        t.transaction_id, t.payment_app, t.bank_name, t.bank_account, t.payment_status,
-        category, t.balance_before, t.balance_after, t.ocr_text, t.original_image_path,
-        t.telegram_message_id, t.telegram_chat_id, tx_uid, getattr(t, 'deleted_at', None)
-    )
-    
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(query, values)
-        conn.commit()
-        return cursor.lastrowid
+    """Inserts a new transaction into the database with decimal validation and thread locking."""
+    with LEDGER_LOCK:
+        dec_amount = parse_decimal_amount(t.amount, allow_zero=False)
+        t.amount = float(dec_amount)
+        t.transaction_type = validate_transaction_type(t.transaction_type)
+        
+        category = validate_string_length(getattr(t, 'category', 'General') or 'General', max_length=100, field_name="Category")
+        t.category = category
+        
+        raw_uid = getattr(t, 'uid', None)
+        if raw_uid:
+            tx_uid = validate_uid(raw_uid)
+        else:
+            tx_uid = uuid.uuid4().hex
+        t.uid = tx_uid
+        
+        t.person_name = validate_string_length(t.person_name, max_length=120, field_name="Person name")
+        t.sender_name = validate_string_length(t.sender_name, max_length=120, field_name="Sender name")
+        t.recipient_name = validate_string_length(t.recipient_name, max_length=120, field_name="Recipient name")
+        t.reference_number = validate_string_length(t.reference_number, max_length=100, field_name="Reference number")
+        
+        t.balance_before = round(float(t.balance_before), 2)
+        t.balance_after = round(float(t.balance_after), 2)
+
+        query = '''
+            INSERT INTO transactions (
+                transaction_type, amount, person_name, sender_name, recipient_name,
+                upi_id, phone_number, transaction_date, transaction_time, reference_number,
+                transaction_id, payment_app, bank_name, bank_account, payment_status,
+                category, balance_before, balance_after, ocr_text, original_image_path,
+                telegram_message_id, telegram_chat_id, uid, deleted_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        '''
+        
+        values = (
+            t.transaction_type, t.amount, t.person_name, t.sender_name, t.recipient_name,
+            t.upi_id, t.phone_number, t.transaction_date, t.transaction_time, t.reference_number,
+            t.transaction_id, t.payment_app, t.bank_name, t.bank_account, t.payment_status,
+            category, t.balance_before, t.balance_after, t.ocr_text, t.original_image_path,
+            t.telegram_message_id, t.telegram_chat_id, tx_uid, getattr(t, 'deleted_at', None)
+        )
+        
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, values)
+            conn.commit()
+            return cursor.lastrowid
 
 def get_transaction_by_reference(reference_number: str):
     """Fetches a transaction by its reference number."""
@@ -204,77 +230,102 @@ def get_transaction_by_uid(uid: str):
         return dict(row) if row else None
 
 def update_transaction(tx_id: int, updates: dict) -> bool:
-    """Updates specific fields of a transaction."""
+    """Updates specific fields of a transaction with validation and thread locking."""
     if not updates:
         return False
-    set_clause = ", ".join([f"{k} = ?" for k in updates.keys()]) + ", updated_at = CURRENT_TIMESTAMP"
-    values = list(updates.values()) + [tx_id]
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(f"UPDATE transactions SET {set_clause} WHERE id = ?", values)
-        conn.commit()
-        return cursor.rowcount > 0
+    with LEDGER_LOCK:
+        validated_updates = dict(updates)
+        if 'amount' in validated_updates:
+            validated_updates['amount'] = float(parse_decimal_amount(validated_updates['amount'], allow_zero=False))
+        if 'transaction_type' in validated_updates:
+            validated_updates['transaction_type'] = validate_transaction_type(validated_updates['transaction_type'])
+        if 'uid' in validated_updates and validated_updates['uid']:
+            validated_updates['uid'] = validate_uid(validated_updates['uid'])
+        if 'person_name' in validated_updates:
+            validated_updates['person_name'] = validate_string_length(validated_updates['person_name'], max_length=120, field_name="Person name")
+        if 'sender_name' in validated_updates:
+            validated_updates['sender_name'] = validate_string_length(validated_updates['sender_name'], max_length=120, field_name="Sender name")
+        if 'recipient_name' in validated_updates:
+            validated_updates['recipient_name'] = validate_string_length(validated_updates['recipient_name'], max_length=120, field_name="Recipient name")
+        if 'reference_number' in validated_updates:
+            validated_updates['reference_number'] = validate_string_length(validated_updates['reference_number'], max_length=100, field_name="Reference number")
+        if 'category' in validated_updates:
+            validated_updates['category'] = validate_string_length(validated_updates['category'], max_length=100, field_name="Category")
+            
+        set_clause = ", ".join([f"{k} = ?" for k in validated_updates.keys()]) + ", updated_at = CURRENT_TIMESTAMP"
+        values = list(validated_updates.values()) + [tx_id]
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"UPDATE transactions SET {set_clause} WHERE id = ?", values)
+            conn.commit()
+            return cursor.rowcount > 0
 
 def delete_transaction(tx_id: int) -> bool:
     """
     Soft-deletes a transaction by setting deleted_at = CURRENT_TIMESTAMP.
-    Recalculates balances over remaining live rows.
+    Recalculates balances over remaining live rows under LEDGER_LOCK.
     Does NOT resequence transaction IDs (preserves stable IDs and accepts gaps).
     Purges any tombstones older than 90 days.
     """
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE transactions SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL", (tx_id,))
-        deleted = cursor.rowcount > 0
-        
-        # Purge ancient tombstones older than 90 days
-        try:
-            cursor.execute("DELETE FROM transactions WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', '-90 days')")
-        except Exception as purge_err:
-            logger.debug(f"Ancient tombstone purge notice: {purge_err}")
+    with LEDGER_LOCK:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE transactions SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL", (tx_id,))
+            deleted = cursor.rowcount > 0
             
-        conn.commit()
+            # Purge ancient tombstones older than 90 days
+            try:
+                cursor.execute("DELETE FROM transactions WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', '-90 days')")
+            except Exception as purge_err:
+                logger.debug(f"Ancient tombstone purge notice: {purge_err}")
+                
+            conn.commit()
 
-    if deleted:
-        try:
-            from services.balance_service import recalculate_all_balances
-            recalculate_all_balances()
-        except Exception as e:
-            logger.error(f"Error during post-delete balance recalculation: {e}")
+        if deleted:
+            try:
+                from services.balance_service import recalculate_all_balances
+                recalculate_all_balances()
+            except Exception as e:
+                logger.error(f"Error during post-delete balance recalculation: {e}")
 
-    return deleted
+        return deleted
 
 def restore_soft_deleted_transaction(tx_id: int = None, uid: str = None) -> bool:
     """
-    Restores a soft-deleted transaction by clearing its deleted_at timestamp.
+    Restores a soft-deleted transaction by clearing its deleted_at timestamp under LEDGER_LOCK.
     Recalculates running balances over live rows.
     """
     if not tx_id and not uid:
         return False
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        if uid:
-            cursor.execute("UPDATE transactions SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE uid = ?", (uid,))
-        else:
-            cursor.execute("UPDATE transactions SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (tx_id,))
-        conn.commit()
-        restored = cursor.rowcount > 0
+    with LEDGER_LOCK:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            if uid:
+                valid_uid = validate_uid(uid)
+                cursor.execute("UPDATE transactions SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE uid = ?", (valid_uid,))
+            else:
+                cursor.execute("UPDATE transactions SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (tx_id,))
+            conn.commit()
+            restored = cursor.rowcount > 0
 
-    if restored:
-        try:
-            from services.balance_service import recalculate_all_balances
-            recalculate_all_balances()
-        except Exception as e:
-            logger.error(f"Error during post-restore balance recalculation: {e}")
+        if restored:
+            try:
+                from services.balance_service import recalculate_all_balances
+                recalculate_all_balances()
+            except Exception as e:
+                logger.error(f"Error during post-restore balance recalculation: {e}")
 
-    return restored
+        return restored
 
 def update_balance_setting(new_balance: float):
-    """Updates the current balance in the settings table."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('current_balance', ?, CURRENT_TIMESTAMP)", (str(new_balance),))
-        conn.commit()
+    """Updates the current balance in the settings table under LEDGER_LOCK."""
+    with LEDGER_LOCK:
+        dec_bal = parse_decimal_amount(new_balance, allow_zero=True) if new_balance >= 0 else round(float(new_balance), 2)
+        bal_str = str(float(dec_bal)) if hasattr(dec_bal, '__float__') else str(round(float(new_balance), 2))
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('current_balance', ?, CURRENT_TIMESTAMP)", (bal_str,))
+            conn.commit()
 
 def get_balance_setting() -> float:
     """Gets the current balance from the settings table."""
@@ -293,11 +344,13 @@ def get_budget_setting() -> float:
         return float(row['value']) if row else 0.0
 
 def set_budget_setting(amount: float):
-    """Sets the monthly budget limit in the settings table."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('monthly_budget', ?, CURRENT_TIMESTAMP)", (str(amount),))
-        conn.commit()
+    """Sets the monthly budget limit in the settings table under LEDGER_LOCK."""
+    with LEDGER_LOCK:
+        dec_amount = parse_decimal_amount(amount, allow_zero=True)
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('monthly_budget', ?, CURRENT_TIMESTAMP)", (str(float(dec_amount)),))
+            conn.commit()
 
 def get_monthly_spending(year: int, month: int) -> float:
     """Gets the total SENT amount for a given month."""

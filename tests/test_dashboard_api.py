@@ -121,5 +121,35 @@ class TestDashboardData(unittest.TestCase):
                 handler.do_GET()
                 handler.send_response.assert_called_with(200)
 
+    def test_handler_api_invalid_year(self):
+        for bad_year in ["abc", "1899", "2101"]:
+            handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
+            handler.path = f'/api/data?token=test_secret_123&year={bad_year}'
+            handler.headers = {}
+            handler.send_response = MagicMock()
+            handler.send_header = MagicMock()
+            handler.end_headers = MagicMock()
+            handler.wfile = io.BytesIO()
+
+            with patch.dict(os.environ, {"DASHBOARD_TOKEN": "test_secret_123"}):
+                with patch("app.DASHBOARD_TOKEN", "test_secret_123"):
+                    handler.do_GET()
+                    handler.send_response.assert_called_with(400)
+
+    def test_handler_api_invalid_month(self):
+        for bad_month in ["abc", "0", "13", "-1"]:
+            handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
+            handler.path = f'/api/data?token=test_secret_123&month={bad_month}'
+            handler.headers = {}
+            handler.send_response = MagicMock()
+            handler.send_header = MagicMock()
+            handler.end_headers = MagicMock()
+            handler.wfile = io.BytesIO()
+
+            with patch.dict(os.environ, {"DASHBOARD_TOKEN": "test_secret_123"}):
+                with patch("app.DASHBOARD_TOKEN", "test_secret_123"):
+                    handler.do_GET()
+                    handler.send_response.assert_called_with(400)
+
 if __name__ == '__main__':
     unittest.main()

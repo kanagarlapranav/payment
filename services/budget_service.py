@@ -5,15 +5,22 @@ and triggers threshold warnings at 50%, 80%, and 100%.
 """
 from datetime import datetime
 from database.queries import get_budget_setting, set_budget_setting, get_monthly_spending
+from database.db import LEDGER_LOCK
+from utils.validation import parse_decimal_amount
 
 def set_budget(amount: float) -> str:
-    """Sets the monthly spending budget target."""
-    if amount < 0:
-        return "❌ Budget cannot be negative."
-    set_budget_setting(amount)
-    if amount == 0:
-        return "✅ Monthly budget has been disabled (set to ₹0.00)."
-    return f"✅ Monthly spending budget set to <b>₹{amount:,.2f}</b>."
+    """Sets the monthly spending budget target using Decimal validation and locking."""
+    with LEDGER_LOCK:
+        try:
+            dec_amount = parse_decimal_amount(amount, allow_zero=True)
+        except ValueError as err:
+            return f"❌ Invalid budget: {err}"
+        
+        float_amt = float(dec_amount)
+        set_budget_setting(float_amt)
+        if float_amt == 0.0:
+            return "✅ Monthly budget has been disabled (set to ₹0.00)."
+        return f"✅ Monthly spending budget set to <b>₹{float_amt:,.2f}</b>."
 
 def get_budget_info(year: int = None, month: int = None) -> dict:
     """Calculates current budget status metrics."""

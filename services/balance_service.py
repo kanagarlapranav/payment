@@ -1,28 +1,35 @@
+from decimal import Decimal
 from database.queries import get_balance_setting, update_balance_setting
 from database.models import Transaction, TransactionSummary
-from database.db import get_db_connection
+from database.db import get_db_connection, LEDGER_LOCK
 from utils.dates import get_current_time_in_tz
+from utils.validation import parse_decimal_amount, CENT
 from config import logger
 
 def update_balance_for_transaction(transaction: Transaction) -> Transaction:
     """
-    Calculates the new balance based on the transaction type and amount.
+    Calculates the new balance based on the transaction type and amount using Decimal arithmetic.
     Updates the settings table and populates balance_before and balance_after.
     """
-    current_balance = get_balance_setting()
-    transaction.balance_before = current_balance
-    
-    if transaction.transaction_type == 'SENT':
-        new_balance = current_balance - transaction.amount
-    elif transaction.transaction_type == 'RECEIVED':
-        new_balance = current_balance + transaction.amount
-    else:
-        # If unknown, do not alter balance
-        new_balance = current_balance
+    with LEDGER_LOCK:
+        curr_float = get_balance_setting()
+        current_balance = Decimal(str(round(curr_float, 2))).quantize(CENT)
+        amount = parse_decimal_amount(transaction.amount, allow_zero=False)
         
-    transaction.balance_after = new_balance
-    update_balance_setting(new_balance)
-    return transaction
+        transaction.balance_before = float(current_balance)
+        
+        if transaction.transaction_type == 'SENT':
+            new_balance = current_balance - amount
+        elif transaction.transaction_type == 'RECEIVED':
+            new_balance = current_balance + amount
+        else:
+            # If unknown, do not alter balance
+            new_balance = current_balance
+            
+        final_bal = float(new_balance.quantize(CENT))
+        transaction.balance_after = final_bal
+        update_balance_setting(final_bal)
+        return transaction
 
 def get_today_summary() -> TransactionSummary:
     """Calculates summary of today's transactions (live rows only)."""
@@ -77,66 +84,86 @@ def resequence_transaction_ids() -> None:
 def recalculate_all_balances() -> float:
     """
     Recalculates balance_before and balance_after for all live transactions in chronological order.
+    Uses Decimal arithmetic rounded to 2 decimals.
     Updates the settings table with the final derived current balance and returns it.
     """
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        
-        # Get initial balance anchor
-        cursor.execute("SELECT value FROM settings WHERE key = 'initial_balance'")
-        row = cursor.fetchone()
-        running_balance = float(row['value']) if row else 0.0
-        
-        # Fetch all live transactions in chronological order
-        cursor.execute("SELECT id, transaction_type, amount FROM transactions WHERE deleted_at IS NULL ORDER BY transaction_date ASC, created_at ASC, id ASC")
-        txs = cursor.fetchall()
-        
-        for tx in txs:
-            bal_before = running_balance
-            if tx['transaction_type'] == 'SENT':
-                running_balance -= tx['amount']
-            elif tx['transaction_type'] == 'RECEIVED':
-                running_balance += tx['amount']
-            bal_after = running_balance
+    with LEDGER_LOCK:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
             
+            # Get initial balance anchor
+            cursor.execute("SELECT value FROM settings WHERE key = 'initial_balance'")
+            row = cursor.fetchone()
+            init_val = row['value'] if row and row['value'] is not None else '0.0'
+            try:
+                running_balance = Decimal(str(init_val)).quantize(CENT)
+            except Exception:
+                running_balance = Decimal('0.00')
+            
+            # Fetch all live transactions in chronological order
+            cursor.execute("SELECT id, transaction_type, amount FROM transactions WHERE deleted_at IS NULL ORDER BY transaction_date ASC, created_at ASC, id ASC")
+            txs = cursor.fetchall()
+            
+            for tx in txs:
+                bal_before = running_balance
+                try:
+                    tx_amt = Decimal(str(tx['amount'])).quantize(CENT)
+                except Exception:
+                    tx_amt = Decimal('0.00')
+                    
+                if tx['transaction_type'] == 'SENT':
+                    running_balance = running_balance - tx_amt
+                elif tx['transaction_type'] == 'RECEIVED':
+                    running_balance = running_balance + tx_amt
+                bal_after = running_balance
+                
+                cursor.execute(
+                    "UPDATE transactions SET balance_before = ?, balance_after = ? WHERE id = ?",
+                    (float(bal_before), float(bal_after), tx['id'])
+                )
+                
+            # Update current balance in settings
+            final_float = float(running_balance.quantize(CENT))
             cursor.execute(
-                "UPDATE transactions SET balance_before = ?, balance_after = ? WHERE id = ?",
-                (bal_before, bal_after, tx['id'])
+                "UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = 'current_balance'",
+                (str(final_float),)
             )
+            conn.commit()
             
-        # Update current balance in settings
-        cursor.execute(
-            "UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = 'current_balance'",
-            (str(running_balance),)
-        )
-        conn.commit()
-        
-    try:
-        from services.backup_service import export_database_to_json
-        export_database_to_json()
-    except Exception as e:
-        logger.debug(f"JSON export notice during balance recalculation: {e}")
-        
-    return running_balance
+        try:
+            from services.backup_service import export_database_to_json
+            export_database_to_json()
+        except Exception as e:
+            logger.debug(f"JSON export notice during balance recalculation: {e}")
+            
+        return final_float
 
 def set_explicit_balance(new_balance: float) -> float:
     """
     Sets the current balance to new_balance, updates initial_balance anchor accordingly,
     and recalculates all transaction balance records so everything remains completely consistent.
+    Runs under LEDGER_LOCK with Decimal precision.
     """
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT transaction_type, amount FROM transactions WHERE deleted_at IS NULL ORDER BY transaction_date ASC, created_at ASC, id ASC")
-        txs = cursor.fetchall()
-        net_delta = 0.0
-        for tx in txs:
-            if tx['transaction_type'] == 'SENT':
-                net_delta -= tx['amount']
-            elif tx['transaction_type'] == 'RECEIVED':
-                net_delta += tx['amount']
+    with LEDGER_LOCK:
+        dec_new = parse_decimal_amount(new_balance, allow_zero=True)
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT transaction_type, amount FROM transactions WHERE deleted_at IS NULL ORDER BY transaction_date ASC, created_at ASC, id ASC")
+            txs = cursor.fetchall()
+            net_delta = Decimal('0.00')
+            for tx in txs:
+                try:
+                    amt = Decimal(str(tx['amount'])).quantize(CENT)
+                except Exception:
+                    amt = Decimal('0.00')
+                if tx['transaction_type'] == 'SENT':
+                    net_delta -= amt
+                elif tx['transaction_type'] == 'RECEIVED':
+                    net_delta += amt
+            
+            calc_initial = dec_new - net_delta
+            initial_float = float(calc_initial.quantize(CENT))
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('initial_balance', ?, CURRENT_TIMESTAMP)", (str(initial_float),))
+            conn.commit()
         
-        calc_initial = new_balance - net_delta
-        cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('initial_balance', ?, CURRENT_TIMESTAMP)", (str(calc_initial),))
-        conn.commit()
-    
-    return recalculate_all_balances()
+        return recalculate_all_balances()

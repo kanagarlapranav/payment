@@ -15,6 +15,7 @@ data/*.sqlite3
 data/*.json
 data/*.xlsx
 data/*.pdf
+data/*.pre-remediation
 data/archive/
 data/archive
 *.db
