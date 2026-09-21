@@ -101,12 +101,14 @@ class TestValidationMatrix(unittest.TestCase):
     def test_validate_transaction_type(self):
         self.assertEqual(validate_transaction_type("SENT"), "SENT")
         self.assertEqual(validate_transaction_type("RECEIVED"), "RECEIVED")
+        self.assertEqual(validate_transaction_type("TRANSFER"), "TRANSFER")
         self.assertEqual(validate_transaction_type("sent"), "SENT")
         self.assertEqual(validate_transaction_type("received"), "RECEIVED")
+        self.assertEqual(validate_transaction_type("transfer"), "TRANSFER")
         self.assertEqual(validate_transaction_type("  SENT  "), "SENT")
 
         # Invalid types must be rejected
-        for invalid in ["TRANSFER", "SPENT", "PAID", "CREDIT", "DEBIT", "", None, 123]:
+        for invalid in ["INVALID_TYPE", "SPENT", "PAID", "CREDIT", "DEBIT", "", None, 123]:
             with self.subTest(val=invalid), self.assertRaises(ValueError):
                 validate_transaction_type(invalid)
 

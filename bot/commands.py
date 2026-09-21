@@ -235,6 +235,46 @@ def render_all_recurring_text() -> str:
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
+def render_monthly_closing_summary_text(year: int, month: int) -> str:
+    """Renders the comprehensive Month-End Financial Closing & Retrospective Review."""
+    from services.monthly_review_service import calculate_monthly_closing_metrics
+    m = calculate_monthly_closing_metrics(year, month)
+    
+    month_names = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+    m_name = f"{month_names[month]} {year}"
+    
+    status_badge = f"✅ <b>Reviewed</b> (<code>{m['reviewed_at'][:10]}</code>)" if m['is_closed'] else "⚠️ <b>Pending Review</b>"
+    
+    # Savings badge
+    savings_badge = "🟢 Net Surplus" if m['net_savings'] >= 0 else "🔴 Deficit"
+    
+    # Budget line
+    if m['budget_allocated'] > 0:
+        budget_line = f"• <b>Budget Used:</b> {m['budget_spent_pct']:.1f}% of {format_currency(m['budget_allocated'])}"
+    else:
+        budget_line = "• <b>Budget:</b> No limit set"
+
+    max_tx_str = f"#{m['max_transaction_id']} {html.escape(m['max_transaction_payee'])} ({format_currency(m['max_transaction_amount'])})" if m['max_transaction_id'] else "None"
+
+    text = (
+        f"📊 <b>Monthly Financial Closing & Review</b>\n"
+        f"🗓️ <b>{m_name}</b> | {status_badge}\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"• 🟢 <b>Total Income:</b> <b>+{format_currency(m['total_income'])}</b>\n"
+        f"• 🔴 <b>Total Expenses:</b> <b>-{format_currency(m['total_expense'])}</b>\n"
+        f"• 💼 <b>Net Savings:</b> <b>{format_currency(m['net_savings'])}</b> ({savings_badge})\n"
+        f"• 📈 <b>Savings Rate:</b> <b>{m['savings_rate_pct']:.1f}%</b>\n"
+        "────────────────────\n"
+        f"• 🏷️ <b>Top Category:</b> <b>{html.escape(m['top_category'])}</b> ({format_currency(m['top_category_amount'])})\n"
+        f"• 👤 <b>Top Payee:</b> <b>{html.escape(m['top_payee'])}</b> ({format_currency(m['top_payee_amount'])})\n"
+        f"• ⚡ <b>Largest Expense:</b> {max_tx_str}\n"
+        f"{budget_line}\n"
+        f"• 🧾 <b>Total Transactions:</b> {m['transaction_count']}\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "<i>💡 Tap 'Mark Month Reviewed' to store the review snapshot, or export to Excel:</i>"
+    )
+    return text
+
 def render_contacts_ledger_text() -> str:
     """Generates the Contact Ledger overview."""
     from database.queries import get_contact_ledger

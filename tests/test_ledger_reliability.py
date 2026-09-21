@@ -95,7 +95,7 @@ class TestLedgerReliability(unittest.TestCase):
 
         # Invalid transaction type
         t_bad_type = Transaction(
-            transaction_type="TRANSFER",
+            transaction_type="INVALID_TYPE",
             amount=50.00,
             transaction_date="2026-09-21",
             transaction_time="11:00 AM",

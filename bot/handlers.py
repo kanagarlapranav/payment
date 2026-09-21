@@ -553,12 +553,33 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     "━━━━━━━━━━━━━━━━━━━━"
                 )
                 await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+            elif nav_target == "month_close":
+                now_dt = get_current_time_in_tz()
+                y = int(parts[2]) if len(parts) > 2 else now_dt.year
+                m = int(parts[3]) if len(parts) > 3 else now_dt.month
+                from bot.commands import render_monthly_closing_summary_text
+                from bot.keyboards import get_monthly_closing_keyboard
+                from services.monthly_review_service import get_monthly_review
+                rev = await asyncio.to_thread(get_monthly_review, y, m)
+                text = await asyncio.to_thread(render_monthly_closing_summary_text, y, m)
+                await query.edit_message_text(text, reply_markup=get_monthly_closing_keyboard(y, m, is_closed=bool(rev)), parse_mode='HTML')
         except Exception as nav_err:
             if "Message is not modified" not in str(nav_err):
                 logger.warning(f"Nav error ({nav_target}): {nav_err}")
         return
 
     # --- 1. Transaction Detail, Duplicate & Backup Actions ---
+    elif action == "close_month":
+        y = int(parts[1])
+        m = int(parts[2])
+        from services.monthly_review_service import close_and_record_monthly_review
+        from bot.commands import render_monthly_closing_summary_text
+        from bot.keyboards import get_monthly_closing_keyboard
+        await asyncio.to_thread(close_and_record_monthly_review, y, m)
+        text = await asyncio.to_thread(render_monthly_closing_summary_text, y, m)
+        await query.edit_message_text(text, reply_markup=get_monthly_closing_keyboard(y, m, is_closed=True), parse_mode='HTML')
+        return
+
     elif action == "rec_paid":
         rec_id = int(parts[1])
         from services.recurring_service import mark_recurring_paid, get_recurring_by_id

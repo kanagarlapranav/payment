@@ -106,6 +106,35 @@ def get_recurring_detail_keyboard(rec_id: int, status: str = "ACTIVE"):
     ]
     return InlineKeyboardMarkup(keyboard)
 
+def get_monthly_closing_keyboard(year: int, month: int, is_closed: bool = False):
+    """Returns the Monthly Closing Review keyboard with Mark Reviewed and Export actions."""
+    # Previous month
+    if month == 1:
+        prev_y, prev_m = year - 1, 12
+    else:
+        prev_y, prev_m = year, month - 1
+    # Next month
+    if month == 12:
+        next_y, next_m = year + 1, 1
+    else:
+        next_y, next_m = year, month + 1
+        
+    review_label = "🔄 Re-Review Month" if is_closed else "✅ Mark Month Reviewed"
+    keyboard = [
+        [
+            InlineKeyboardButton(review_label, callback_data=f"close_month:{year}:{month}"),
+            InlineKeyboardButton("📥 Export Statement", callback_data="export_file:excel")
+        ],
+        [
+            InlineKeyboardButton("◀ Prev", callback_data=f"nav:month_close:{prev_y}:{prev_m}"),
+            InlineKeyboardButton("Next ▶", callback_data=f"nav:month_close:{next_y}:{next_m}")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:more")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 def get_transaction_detail_keyboard(tx_id: int):
     """Returns the Transaction Detail keyboard with Edit, Delete, Duplicate, and Back."""
     keyboard = [

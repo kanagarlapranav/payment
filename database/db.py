@@ -182,6 +182,32 @@ def setup_database():
                 ''')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_undo_chat_user ON undo_log(chat_id, user_id, used_at, created_at)')
 
+                # Monthly Reviews & Closing Table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS monthly_reviews (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        year INTEGER NOT NULL,
+                        month INTEGER NOT NULL,
+                        total_income REAL NOT NULL,
+                        total_expense REAL NOT NULL,
+                        net_savings REAL NOT NULL,
+                        savings_rate_pct REAL NOT NULL,
+                        top_category TEXT,
+                        top_category_amount REAL,
+                        top_payee TEXT,
+                        top_payee_amount REAL,
+                        max_transaction_id INTEGER,
+                        max_transaction_amount REAL,
+                        budget_allocated REAL,
+                        budget_spent_pct REAL,
+                        is_closed INTEGER DEFAULT 1,
+                        reviewed_at TEXT NOT NULL,
+                        notes TEXT,
+                        created_at TEXT NOT NULL,
+                        UNIQUE(year, month)
+                    )
+                ''')
+
                 # Create indexes
                 cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_uid ON transactions(uid)')
                 cursor.execute('''
