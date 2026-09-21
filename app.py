@@ -187,61 +187,107 @@ def build_application():
     return app
 
 class WebAppAndHealthHandler(BaseHTTPRequestHandler):
-    """Serves keep-alive health checks, live web dashboard, and protected API endpoints."""
+    """Serves keep-alive health checks, one-time auth code exchange, web dashboard, and protected API endpoints."""
     
+    def _send_security_headers(self, status_code: int, content_type: str = "text/plain; charset=utf-8", is_api: bool = False, extra_headers: dict = None):
+        from services.dashboard_auth import get_security_headers
+        self.send_response(status_code)
+        self.send_header('Content-type', content_type)
+        for k, v in get_security_headers(is_api=is_api).items():
+            self.send_header(k, v)
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
+        self.end_headers()
+
     def do_HEAD(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         if path in ('/healthz', '/health', '/', '/dashboard'):
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain; charset=utf-8')
-            self.end_headers()
+            self._send_security_headers(200, 'text/plain; charset=utf-8')
         else:
-            self.send_response(404)
-            self.end_headers()
+            self._send_security_headers(404, 'text/plain; charset=utf-8')
 
     def do_GET(self):
+        from services.dashboard_auth import exchange_code_for_session, validate_session, is_rate_limited
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         query_params = urllib.parse.parse_qs(parsed.query)
 
         # 1. Lightweight health check endpoint for uptime monitors
         if path in ('/healthz', '/health'):
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain; charset=utf-8')
-            self.end_headers()
+            self._send_security_headers(200, 'text/plain; charset=utf-8')
             self.wfile.write(b"OK")
             return
 
-        # 2. Web dashboard frontend UI
-        elif path in ('/dashboard', '/'):
+        # Extract client IP and protocol
+        client_ip = self.headers.get('X-Forwarded-For', '').split(',')[0].strip() or self.client_address[0]
+        is_https = self.headers.get('X-Forwarded-Proto', '').lower() == 'https'
+
+        # 2. One-Time Code Auth Exchange: /auth?code=...
+        if path == '/auth':
+            code = query_params.get("code", [""])[0].strip()
+            success, result_msg, cookie_header = exchange_code_for_session(code, client_ip=client_ip, is_https=is_https)
+
+            if success:
+                # Redirect to /dashboard with code removed from URL and HttpOnly session cookie set
+                extra = {
+                    'Location': '/dashboard',
+                    'Set-Cookie': cookie_header
+                }
+                self._send_security_headers(303, 'text/html; charset=utf-8', extra_headers=extra)
+                self.wfile.write(b"Redirecting to dashboard...")
+                return
+            else:
+                # Auth failed or rate-limited
+                status_code = 429 if "Too many failed" in result_msg else 401
+                self._send_security_headers(status_code, 'text/html; charset=utf-8')
+                error_html = (
+                    f"<!DOCTYPE html><html><head><title>Access Denied</title>"
+                    f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
+                    f"<style>body{{font-family:sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:20px;text-align:center;}}"
+                    f".card{{background:#1e293b;padding:30px;border-radius:12px;max-width:400px;border:1px solid #334155;}}"
+                    f"h2{{color:#ef4444;margin-top:0;}}p{{color:#94a3b8;line-height:1.5;}}code{{background:#0f172a;padding:4px 8px;border-radius:4px;color:#38bdf8;}}</style></head>"
+                    f"<body><div class='card'><h2>🔒 Access Denied</h2><p>{result_msg}</p><p>Please run <code>/dashboard</code> in Telegram to generate a fresh 60-second login link.</p></div></body></html>"
+                )
+                self.wfile.write(error_html.encode('utf-8'))
+                return
+
+        # Check session cookie for protected dashboard and API routes
+        cookie_header = self.headers.get("Cookie", "")
+        has_session = validate_session(cookie_header)
+
+        # 3. Web dashboard frontend UI
+        if path in ('/dashboard', '/'):
+            if not has_session:
+                self._send_security_headers(401, 'text/html; charset=utf-8')
+                unauth_html = (
+                    f"<!DOCTYPE html><html><head><title>Authentication Required</title>"
+                    f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
+                    f"<style>body{{font-family:sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:20px;text-align:center;}}"
+                    f".card{{background:#1e293b;padding:30px;border-radius:12px;max-width:400px;border:1px solid #334155;}}"
+                    f"h2{{color:#f59e0b;margin-top:0;}}p{{color:#94a3b8;line-height:1.5;}}code{{background:#0f172a;padding:4px 8px;border-radius:4px;color:#38bdf8;}}</style></head>"
+                    f"<body><div class='card'><h2>🔒 Authentication Required</h2><p>Your session has expired or you are not logged in.</p><p>Please send <code>/dashboard</code> in Telegram to receive a secure single-use login link.</p></div></body></html>"
+                )
+                self.wfile.write(unauth_html.encode('utf-8'))
+                return
+
             template_path = BASE_DIR / 'web' / 'templates' / 'dashboard.html'
             if os.path.exists(template_path):
                 with open(template_path, 'r', encoding='utf-8') as f:
                     content = f.read()
-                self.send_response(200)
-                self.send_header('Content-type', 'text/html; charset=utf-8')
-                self.end_headers()
+                self._send_security_headers(200, 'text/html; charset=utf-8')
                 self.wfile.write(content.encode('utf-8'))
             else:
-                self.send_response(200)
-                self.send_header('Content-type', 'text/plain')
-                self.end_headers()
+                self._send_security_headers(200, 'text/plain')
                 self.wfile.write(b"Payment Tracker Bot is Running 24/7 OK")
+            return
 
-        # 3. Protected Dashboard Data API
+        # 4. Protected Dashboard Data API
         elif path == '/api/data':
-            dash_token = DASHBOARD_TOKEN or os.getenv("DASHBOARD_TOKEN", "")
-
-            supplied_header = self.headers.get("X-Dash-Token", "")
-            supplied_query = query_params.get("token", [""])[0]
-            supplied = supplied_header or supplied_query
-
-            if not dash_token or not hmac.compare_digest(supplied, dash_token):
-                self.send_response(401)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "Unauthorized. Provide valid X-Dash-Token or ?token="}).encode('utf-8'))
+            if not has_session:
+                self._send_security_headers(401, 'application/json', is_api=True)
+                self.wfile.write(json.dumps({"error": "Unauthorized. Valid session required. Run /dashboard in Telegram."}).encode('utf-8'))
                 return
 
             from database.queries import (
@@ -258,9 +304,7 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                     if not (1900 <= year <= 2100):
                         raise ValueError("Year out of range")
                 except (ValueError, TypeError):
-                    self.send_response(400)
-                    self.send_header('Content-type', 'application/json')
-                    self.end_headers()
+                    self._send_security_headers(400, 'application/json', is_api=True)
                     self.wfile.write(json.dumps({"error": "Invalid year parameter. Must be an integer between 1900 and 2100."}).encode('utf-8'))
                     return
             else:
@@ -272,9 +316,7 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                     if not (1 <= month <= 12):
                         raise ValueError("Month out of range")
                 except (ValueError, TypeError):
-                    self.send_response(400)
-                    self.send_header('Content-type', 'application/json')
-                    self.end_headers()
+                    self._send_security_headers(400, 'application/json', is_api=True)
                     self.wfile.write(json.dumps({"error": "Invalid month parameter. Must be an integer between 1 and 12."}).encode('utf-8'))
                     return
             else:
@@ -325,21 +367,59 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                 'recent_transactions': txs_data['transactions']
             }
 
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
+            self._send_security_headers(200, 'application/json', is_api=True)
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
+            return
 
-        # 4. CSV Export API
+        # 5. Protected Transactions List API
+        elif path == '/api/transactions':
+            if not has_session:
+                self._send_security_headers(401, 'application/json', is_api=True)
+                self.wfile.write(json.dumps({"error": "Unauthorized. Valid session required. Run /dashboard in Telegram."}).encode('utf-8'))
+                return
+
+            from database.queries import get_transactions_paginated
+
+            try:
+                page = int(query_params.get("page", ["1"])[0])
+                page_size = min(int(query_params.get("page_size", ["50"])[0]), 200)
+            except (ValueError, TypeError):
+                page, page_size = 1, 50
+
+            year, month = None, None
+            if "year" in query_params:
+                try:
+                    year = int(query_params.get("year", [""])[0])
+                    if not (1900 <= year <= 2100):
+                        raise ValueError("Year out of range")
+                except (ValueError, TypeError):
+                    self._send_security_headers(400, 'application/json', is_api=True)
+                    self.wfile.write(json.dumps({"error": "Invalid year parameter. Must be an integer between 1900 and 2100."}).encode('utf-8'))
+                    return
+
+            if "month" in query_params:
+                try:
+                    month = int(query_params.get("month", [""])[0])
+                    if not (1 <= month <= 12):
+                        raise ValueError("Month out of range")
+                except (ValueError, TypeError):
+                    self._send_security_headers(400, 'application/json', is_api=True)
+                    self.wfile.write(json.dumps({"error": "Invalid month parameter. Must be an integer between 1 and 12."}).encode('utf-8'))
+                    return
+
+            search = query_params.get("search", [""])[0].strip() or None
+            tx_type = query_params.get("type", [""])[0].strip() or None
+
+            data = get_transactions_paginated(page=page, page_size=page_size, search=search, transaction_type=tx_type, year=year, month=month)
+            self._send_security_headers(200, 'application/json', is_api=True)
+            self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+            return
+
+        # 6. Protected CSV Export API
         elif path == '/api/export.csv':
-            dash_token = DASHBOARD_TOKEN or os.getenv("DASHBOARD_TOKEN", "")
-            supplied_header = self.headers.get("X-Dash-Token", "")
-            supplied_query = query_params.get("token", [""])[0]
-            supplied = supplied_header or supplied_query
-
-            if not dash_token or not hmac.compare_digest(supplied, dash_token):
-                self.send_response(401)
-                self.end_headers()
+            if not has_session:
+                self._send_security_headers(401, 'text/plain; charset=utf-8', is_api=True)
+                self.wfile.write(b"Unauthorized. Valid session required.")
                 return
 
             from database.queries import get_all_transactions_asc
@@ -365,15 +445,13 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                 ])
 
             csv_content = output.getvalue().encode('utf-8')
-            self.send_response(200)
-            self.send_header('Content-type', 'text/csv; charset=utf-8')
-            self.send_header('Content-Disposition', 'attachment; filename="payment_tracker_ledger.csv"')
-            self.end_headers()
+            extra = {'Content-Disposition': 'attachment; filename="payment_tracker_ledger.csv"'}
+            self._send_security_headers(200, 'text/csv; charset=utf-8', is_api=True, extra_headers=extra)
             self.wfile.write(csv_content)
+            return
 
         else:
-            self.send_response(404)
-            self.end_headers()
+            self._send_security_headers(404, 'text/plain; charset=utf-8')
 
     def log_message(self, format, *args):
         pass # Suppress HTTP access logs

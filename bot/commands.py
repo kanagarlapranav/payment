@@ -951,25 +951,26 @@ async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(digest_text, parse_mode='HTML')
 
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Provides a live link to the interactive web dashboard & visual charts via WebApp."""
+    """Provides a live link to the interactive web dashboard & visual charts with a 60-second one-time login code."""
     if not await require_admin(update): return
     import os
-    from config import DASHBOARD_TOKEN
+    from services.dashboard_auth import create_one_time_code
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
     
     render_url = os.getenv("RENDER_EXTERNAL_URL", "https://payment-tracker-3r8w.onrender.com").rstrip('/')
-    token_param = f"?token={DASHBOARD_TOKEN}" if DASHBOARD_TOKEN else ""
-    dash_url = f"{render_url}/dashboard{token_param}"
+    code = create_one_time_code()
+    auth_url = f"{render_url}/auth?code={code}"
     
     msg = (
         f"📊 <b>LIVE FINANCIAL DASHBOARD</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"Tap <b>Open Dashboard</b> below to view interactive charts, month switcher, category donut breakdowns, top payees, and spending heatmaps right inside Telegram!\n\n"
-        f"🔗 <code>{dash_url}</code>"
+        f"🔒 <i>Single-use secure link valid for 60 seconds. Sets a 30-minute session cookie. Note: Server restarts require generating a fresh link with /dashboard.</i>\n\n"
+        f"🔗 <code>{auth_url}</code>"
     )
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Open Dashboard", web_app=WebAppInfo(url=dash_url))],
-        [InlineKeyboardButton("🌐 Open in Browser", url=dash_url)]
+        [InlineKeyboardButton("📊 Open Dashboard", web_app=WebAppInfo(url=auth_url))],
+        [InlineKeyboardButton("🌐 Open in Browser", url=auth_url)]
     ])
     await update.message.reply_text(msg, reply_markup=markup, parse_mode='HTML')
 
