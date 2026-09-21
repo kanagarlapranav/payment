@@ -835,7 +835,7 @@ def get_transactions_paginated(page: int = 1, page_size: int = 25, search: str =
         conditions.append("category = ?")
         params.append(category.strip())
         
-    if tx_type and tx_type.strip() and tx_type.upper() in ('SENT', 'RECEIVED'):
+    if tx_type and tx_type.strip() and tx_type.upper() in ('SENT', 'RECEIVED', 'TRANSFER'):
         conditions.append("transaction_type = ?")
         params.append(tx_type.upper())
         

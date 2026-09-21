@@ -74,15 +74,15 @@ def parse_decimal_amount(value: Any, *, allow_zero: bool = False) -> Decimal:
 
 def validate_transaction_type(value: Any) -> str:
     """
-    Validates that transaction type is strictly 'SENT' or 'RECEIVED'.
+    Validates that transaction type is strictly 'SENT', 'RECEIVED', or 'TRANSFER'.
     Never silently falls back to 'SENT'.
     """
     if not value or not isinstance(value, str):
         raise ValueError("Transaction type must be a non-empty string")
     
     norm = value.strip().upper()
-    if norm not in {"SENT", "RECEIVED"}:
-        raise ValueError(f"Invalid transaction type: {value!r}. Must be 'SENT' or 'RECEIVED'")
+    if norm not in {"SENT", "RECEIVED", "TRANSFER"}:
+        raise ValueError(f"Invalid transaction type: {value!r}. Must be 'SENT', 'RECEIVED', or 'TRANSFER'")
     
     return norm
 

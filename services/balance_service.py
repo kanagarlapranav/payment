@@ -264,7 +264,7 @@ def validate_ledger_invariants(db_path=None) -> List[str]:
             ref = row['reference_number']
 
             # Invalid transaction types
-            if tt not in ('SENT', 'RECEIVED'):
+            if tt not in ('SENT', 'RECEIVED', 'TRANSFER'):
                 errors.append(f"Row {row_id}: invalid transaction_type {tt!r}")
 
             # Non-positive amounts / NaN / Inf
@@ -343,6 +343,10 @@ def validate_ledger_invariants(db_path=None) -> List[str]:
                 calc_after = (bal_before + dec_amt) if bal_before is not None else None
                 if dec_amt.is_finite() and dec_amt < Decimal('0.00'):
                     errors.append(f"Row {row_id}: wrong sign for RECEIVED amount ({dec_amt})")
+            elif tt == 'TRANSFER':
+                calc_after = bal_before
+                if dec_amt.is_finite() and dec_amt < Decimal('0.00'):
+                    errors.append(f"Row {row_id}: wrong sign for TRANSFER amount ({dec_amt})")
             else:
                 calc_after = None
 
