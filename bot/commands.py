@@ -185,6 +185,56 @@ def render_backup_status_text() -> str:
     )
     return text
 
+def render_recurring_overview_text() -> str:
+    """Renders the Recurring Payments overview and upcoming dues card."""
+    from services.recurring_service import get_upcoming_recurring, get_recurring_monthly_total
+    upcoming = get_upcoming_recurring(days_ahead=30)
+    monthly_total = get_recurring_monthly_total()
+    
+    lines = [
+        "🔄 <b>Recurring Payments & Subscriptions</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"• <b>Projected Monthly:</b> <b>{format_currency(monthly_total)}</b>",
+        f"• <b>Upcoming (Next 30 Days):</b> {len(upcoming)} due\n"
+    ]
+    
+    if not upcoming:
+        lines.append("🎉 <i>No recurring payments due in the next 30 days.</i>\n")
+    else:
+        lines.append("<b>📅 Upcoming Schedule:</b>")
+        for it in upcoming[:6]:
+            amt = format_currency(it['amount'])
+            payee = html.escape(it.get('payee_name') or 'Due')
+            due_date = it.get('next_due_date') or 'Soon'
+            freq = it.get('frequency', 'MONTHLY').capitalize()
+            lines.append(f"• <b>#{it['id']}</b> {due_date} — <b>{payee}</b>: <b>{amt}</b> ({freq})")
+        lines.append("")
+        
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append("<i>💡 Tap a Pay or Skip button below, or add a new recurring payment:</i>")
+    return "\n".join(lines)
+
+def render_all_recurring_text() -> str:
+    """Renders full list of active and inactive recurring payments."""
+    from services.recurring_service import get_all_recurring
+    all_recs = get_all_recurring(include_inactive=True)
+    if not all_recs:
+        return "🔄 <b>Recurring Payments</b>\n━━━━━━━━━━━━━━━━━━━━\n<i>No recurring payments created yet.</i>"
+        
+    lines = [
+        "📋 <b>All Recurring Payments</b>",
+        "━━━━━━━━━━━━━━━━━━━━"
+    ]
+    for it in all_recs:
+        status_badge = "🟢" if it.get('status') == 'ACTIVE' else "⏸️"
+        amt = format_currency(it['amount'])
+        payee = html.escape(it.get('payee_name') or 'Due')
+        freq = it.get('frequency', 'MONTHLY').capitalize()
+        due = it.get('next_due_date') or 'N/A'
+        lines.append(f"{status_badge} <b>#{it['id']} {payee}</b> — <b>{amt}</b> ({freq})\n   Next due: <code>{due}</code> | Status: {it.get('status')}")
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    return "\n".join(lines)
+
 def render_contacts_ledger_text() -> str:
     """Generates the Contact Ledger overview."""
     from database.queries import get_contact_ledger

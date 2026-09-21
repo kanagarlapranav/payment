@@ -124,13 +124,49 @@ def setup_database():
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         payee_name TEXT NOT NULL,
                         amount REAL NOT NULL,
-                        day_of_month INTEGER NOT NULL,
                         category TEXT DEFAULT 'Bills & Utilities',
-                        is_active INTEGER DEFAULT 1,
-                        last_notified DATE,
-                        created_at TEXT
+                        transaction_type TEXT DEFAULT 'SENT',
+                        frequency TEXT NOT NULL DEFAULT 'MONTHLY',
+                        interval_value INTEGER DEFAULT 1,
+                        start_date DATE,
+                        next_due_date DATE,
+                        last_paid_date DATE DEFAULT NULL,
+                        reminder_days_before INTEGER DEFAULT 1,
+                        auto_log INTEGER DEFAULT 0,
+                        status TEXT DEFAULT 'ACTIVE',
+                        notes TEXT,
+                        created_at TEXT,
+                        updated_at TEXT
                     )
                 ''')
+                
+                # Migration checks for recurring_payments
+                cursor.execute("PRAGMA table_info(recurring_payments)")
+                r_cols = [row[1] for row in cursor.fetchall()]
+                if "frequency" not in r_cols:
+                    cursor.execute("ALTER TABLE recurring_payments ADD COLUMN frequency TEXT DEFAULT 'MONTHLY'")
+                if "start_date" not in r_cols:
+                    cursor.execute("ALTER TABLE recurring_payments ADD COLUMN start_date DATE")
+                if "next_due_date" not in r_cols:
+                    cursor.execute("ALTER TABLE recurring_payments ADD COLUMN next_due_date DATE")
+                if "last_paid_date" not in r_cols:
+                    cursor.execute("ALTER TABLE recurring_payments ADD COLUMN last_paid_date DATE DEFAULT NULL")
+                if "status" not in r_cols:
+                    cursor.execute("ALTER TABLE recurring_payments ADD COLUMN status TEXT DEFAULT 'ACTIVE'")
+                if "notes" not in r_cols:
+                    cursor.execute("ALTER TABLE recurring_payments ADD COLUMN notes TEXT")
+                if "updated_at" not in r_cols:
+                    cursor.execute("ALTER TABLE recurring_payments ADD COLUMN updated_at TEXT")
+                if "interval_value" not in r_cols:
+                    cursor.execute("ALTER TABLE recurring_payments ADD COLUMN interval_value INTEGER DEFAULT 1")
+                if "reminder_days_before" not in r_cols:
+                    cursor.execute("ALTER TABLE recurring_payments ADD COLUMN reminder_days_before INTEGER DEFAULT 1")
+                if "transaction_type" not in r_cols:
+                    cursor.execute("ALTER TABLE recurring_payments ADD COLUMN transaction_type TEXT DEFAULT 'SENT'")
+                if "auto_log" not in r_cols:
+                    cursor.execute("ALTER TABLE recurring_payments ADD COLUMN auto_log INTEGER DEFAULT 0")
+
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_recurring_due ON recurring_payments (status, next_due_date)')
                 
                 # Undo log table (stores scoped undo actions in SQLite)
                 cursor.execute('''
