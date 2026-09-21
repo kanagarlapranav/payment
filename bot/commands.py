@@ -122,61 +122,46 @@ def render_contacts_ledger_text() -> str:
     lines.append("━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
+from bot.auth import require_authorized, require_admin, is_owner, is_authorized_user
+
 def is_admin_user(update: Update) -> bool:
     """Checks if the user is the primary bot owner (TELEGRAM_USER_ID)."""
-    if not update or not update.effective_user:
-        return False
-    return update.effective_user.id == TELEGRAM_USER_ID
+    return is_owner(update)
 
 async def is_authorized(update: Update) -> bool:
     """Checks if the user or group is authorized to use the bot."""
-    if not update:
-        return False
-    user_id = update.effective_user.id if update.effective_user else None
-    chat_id = update.effective_chat.id if update.effective_chat else None
-    
-    if user_id == TELEGRAM_USER_ID or (TELEGRAM_GROUP_ID is not None and chat_id == TELEGRAM_GROUP_ID):
-        return True
-        
-    if update.effective_message and update.effective_chat and update.effective_chat.type == 'private':
-        await update.effective_message.reply_text("❌ Unauthorized user.")
-    return False
+    return await require_authorized(update)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sends the interactive Home Menu card and button grid."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     menu_text = render_home_menu_text()
     await update.message.reply_text(menu_text, reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
 
 async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Returns the chat ID for group configuration."""
+    if not await require_authorized(update): return
     chat_id = update.message.chat_id
     await update.message.reply_text(f"This chat's ID is: `{chat_id}`", parse_mode='Markdown')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the complete, comprehensive guide of everything the bot can do."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     
     help_text = (
         "👑 <b>Payment Tracker Bot — Complete Guide</b>\n\n"
         "Automatically log expenses, scan receipts from any UPI app, track balances, manage budgets, and view live visual dashboards.\n\n"
-        "📸 <b>1. Receipt Upload & Scanning (AI Engine)</b>\n"
+        "📸 <b>1. Receipt Upload & Scanning (AI Engine)</b> <i>[Admin Only]</i>\n"
         "• Send a <b>screenshot</b> or <b>shared receipt</b> (image + text caption) from any app:\n"
         "  <code>BHIM</code>, <code>Paytm</code>, <code>PhonePe</code>, <code>Google Pay</code>, <code>CRED</code>, <code>Super.money</code>, <code>NaviPay</code>, <code>YONO SBI</code>, <code>Vyom</code>.\n"
         "• Instantly extracts Amount, Person, Date, Bank, & UTR Ref No.\n"
         "• <i>Ephemeral Image Privacy:</i> Receipt images are deleted right after scanning.\n\n"
-        "💬 <b>2. Natural Text Tracking</b>\n"
+        "💬 <b>2. Natural Text Tracking</b> <i>[Admin Only]</i>\n"
         "• Simply type what you spent or received:\n"
         "  <code>Paid 500 to Ramesh</code>\n"
         "  <code>Received 6200 from Johnson</code>\n"
         "  <code>Paid 5000 to Balaji yesterday</code>\n\n"
-        "🎯 <b>3. Budget & Financial Health</b>\n"
-        "• /budget — View monthly budget progress, remaining funds & status bar\n"
-        "• /setbudget &lt;amt&gt; — Set monthly spending target (e.g. <code>/setbudget 20000</code>)\n"
-        "• /insights — AI-powered category breakdown, spending percentages & advice\n"
-        "• /digest — Generate today's closing financial digest (or <code>/digest YYYY-MM-DD</code>)\n"
-        "• /dashboard — View interactive dark-mode charts & live web analytics\n\n"
-        "📊 <b>4. Balance & History</b>\n"
+        "📊 <b>3. Balance & History</b> <i>[Group & Admin]</i>\n"
         "• /balance — Current balance, total sent/received today & net flow\n"
         "• /history — Clean sequential transaction list with pagination & filters\n"
         "• /last5 (or /recent) — View the latest 5 transactions immediately\n"
@@ -184,30 +169,36 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /date &lt;date&gt; — View transactions on a specific date\n"
         "• /search &lt;query&gt; — Search by person name, bank, or UTR\n"
         "• /amount &lt;number&gt; — Search by exact amount\n\n"
-        "📈 <b>5. Analytics & Organization</b>\n"
+        "📈 <b>4. Analytics & Budgets</b> <i>[Group & Admin]</i>\n"
+        "• /budget — View monthly budget progress & status bar\n"
+        "• /insights — AI-powered category breakdown, spending percentages & advice\n"
         "• /monthly (or /stats) — Monthly total spent, income, net savings & top recipient\n"
         "• /filter — Interactive filter buttons (Today, Yesterday, Month, Sent, Received)\n"
-        "• /sort — Interactive sorting menu (Amount High ➔ Low, Low ➔ High, Date)\n\n"
-        "🍽️ <b>6. Cafeteria Vegetarian System</b>\n"
+        "• /sort — Interactive sorting menu (Amount High ➔ Low, Low ➔ High, Date)\n"
+        "• /digest — Generate today's closing financial digest (or <code>/digest YYYY-MM-DD</code>)\n\n"
+        "🍽️ <b>5. Cafeteria Vegetarian System</b> <i>[Group Read-Only / Admin Edit]</i>\n"
         "• /menu — Full vegetarian cafeteria menu with prices & add-ons\n"
         "• /cafestats — Cafeteria monthly spend totals & most ordered items\n"
-        "• /cafeedit — Re-tag or edit items for recent cafeteria payments\n"
-        "• <i>Features:</i> 1-item mode, 2-items combos, Plate Builder cart, custom ice cream amounts & +₹5 packing\n\n"
-        "⚙️ <b>7. Management & Edits</b>\n"
+        "• /cafeedit — Re-tag or edit items for recent cafeteria payments <i>[Admin Only]</i>\n"
+        "• /addmenu &lt;item, price, cat&gt; — Add custom menu item <i>[Admin Only]</i>\n"
+        "• /delmenu &lt;item&gt; — Remove custom menu item <i>[Admin Only]</i>\n\n"
+        "⚙️ <b>6. Management & Mutations</b> <i>[Admin Only]</i>\n"
         "• /edit — Interactive 1-tap menu to edit amount, name, date, type, or UTR\n"
         "• /delete — Interactive 1-tap menu to delete record & auto-recalculate\n"
         "• /undo — Instantly revert the last delete, edit, or add action\n"
         "• /setbalance &lt;amt&gt; — Set starting balance (e.g. <code>/setbalance 50000</code>)\n"
-        "• /restore — Restore from cloud/JSON backup whenever needed on demand\n\n"
-        "📄 <b>8. Reports & Export</b>\n"
-        "• /export (or /report, /statement) — Download official <b>PDF Statement</b> or <b>Excel Sheet (.xlsx)</b>\n\n"
-        "☁️ <b>Cloud Reliability:</b>\n"
+        "• /setbudget &lt;amt&gt; — Set monthly spending target (e.g. <code>/setbudget 20000</code>)\n"
+        "• /restore — Restore from cloud/JSON backup whenever needed on demand\n"
+        "• /export (or /report, /statement) — Download official PDF Statement or Excel Sheet\n"
+        "• /dashboard — View interactive dark-mode charts & live web analytics\n\n"
+        "☁️ <b>Access Policy & Reliability:</b>\n"
+        "• Owner has full administrative control; configured group has read-only access.\n"
         "• Every transaction, edit, and deletion is automatically backed up and synced 24/7."
     )
     await update.message.reply_text(help_text, parse_mode='HTML')
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
 
     recalculate_all_balances()
     balance = get_balance_setting()
@@ -230,12 +221,12 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode='Markdown')
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     await balance_command(update, context)
 
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
 
     # If user asks for IDs or full list explicitly e.g. /history ids, /history full
     if context.args and context.args[0].lower() in ('ids', 'id', 'details'):
@@ -298,14 +289,14 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def last5_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the latest 5 transactions immediately without pagination confusion."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     recalculate_all_balances()
     text, markup = render_history_page(page=1, filter_type="ALL", page_size=5)
     await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
 
 async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays transactions WITH IDs and full technical details on demand."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     
     transactions = get_all_transactions_asc()
     if not transactions:
@@ -350,7 +341,7 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows transactions for a specific date e.g. /date 05/09/2026 or /date yesterday."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     
     if not context.args:
         await update.message.reply_text(
@@ -399,7 +390,7 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Searches transactions by person name, reference, or keyword."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     
     if not context.args:
         await update.message.reply_text(
@@ -438,7 +429,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Searches all transactions with the specified amount."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     
     if not context.args:
         await update.message.reply_text(
@@ -484,7 +475,7 @@ async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows analytics and spending summary for the current or specified month."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     
     now = get_current_time_in_tz()
     year = now.year
@@ -518,13 +509,13 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def filter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Opens the interactive filter menu."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     from bot.keyboards import get_filter_keyboard
     await update.message.reply_text("🎛️ *Filter & Sort Transactions:*\n\nChoose an option below:", reply_markup=get_filter_keyboard(), parse_mode='Markdown')
 
 async def sort_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Opens sorting options or performs sorting directly by money / date args."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     from bot.keyboards import get_sort_keyboard
     
     # If user provided argument e.g. /sort high, /sort low, /sort amount, /sort money
@@ -568,7 +559,7 @@ async def sort_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Initiates interactive editing or applies direct edit command."""
-    if not await is_authorized(update): return
+    if not await require_admin(update): return
     from bot.keyboards import get_edit_fields_keyboard, get_transaction_selection_keyboard
 
     # 1. No arguments: show list of recent transactions to tap on
@@ -714,10 +705,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Initiates interactive deletion or prompts for ID."""
-    if not await is_authorized(update): return
-    if not is_admin_user(update):
-        await update.message.reply_text("❌ Only the bot owner can delete transactions.")
-        return
+    if not await require_admin(update): return
     from bot.keyboards import get_delete_confirm_keyboard, get_transaction_selection_keyboard
 
     # 1. No arguments: show list of recent transactions to tap on
@@ -771,10 +759,7 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=get_delete_confirm_keyboard(tx_id), parse_mode='Markdown')
 
 async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_authorized(update): return
-    if not is_admin_user(update):
-        await update.message.reply_text("❌ Only the bot owner can set the balance.")
-        return
+    if not await require_admin(update): return
     import asyncio
     from services.balance_service import set_explicit_balance
     from services.backup_service import backup_to_telegram
@@ -850,7 +835,7 @@ async def send_excel_report(chat, bot):
 
 async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Exports transactions as a PDF Statement or Excel spreadsheet."""
-    if not await is_authorized(update): return
+    if not await require_admin(update): return
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     arg = (context.args[0].lower() if context.args else "")
@@ -879,7 +864,7 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates AI spending insights and category analytics."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     from services.category_service import format_spending_insights
     from datetime import datetime
     
@@ -899,7 +884,7 @@ async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the monthly budget status and progress bar."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     from services.budget_service import format_budget_status
     from datetime import datetime
     
@@ -919,7 +904,7 @@ async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sets the monthly spending budget target."""
-    if not await is_authorized(update): return
+    if not await require_admin(update): return
     from services.budget_service import set_budget
     from services.backup_service import backup_to_telegram
     import asyncio
@@ -949,7 +934,7 @@ async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates the daily financial closing digest on demand."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     from services.scheduler_service import format_daily_digest
     
     target_date = None
@@ -965,7 +950,7 @@ async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Provides a live link to the interactive web dashboard & visual charts via WebApp."""
-    if not await is_authorized(update): return
+    if not await require_admin(update): return
     import os
     from config import DASHBOARD_TOKEN
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
@@ -988,7 +973,7 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the full vegetarian cafeteria menu with prices & add-ons."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     from services.cafeteria_service import format_full_menu
     from bot.keyboards import get_menu_view_keyboard
     menu_text = format_full_menu()
@@ -996,14 +981,14 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cafestats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays monthly spending insights and top ordered veg items at the cafeteria."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     from services.cafeteria_service import format_cafeteria_stats
     stats_text = format_cafeteria_stats()
     await update.message.reply_text(stats_text, parse_mode='HTML')
 
 async def cafeedit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Opens the interactive cafeteria item selector for the most recent or specified cafeteria payment."""
-    if not await is_authorized(update): return
+    if not await require_admin(update): return
     from database.queries import get_cafeteria_transactions, get_transaction_by_id
     from bot.keyboards import get_cafeteria_selection_keyboard
     import html
@@ -1035,7 +1020,7 @@ async def cafeedit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def addmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Adds a custom item to the cafeteria menu."""
-    if not await is_authorized(update): return
+    if not await require_admin(update): return
     from services.cafeteria_service import add_custom_menu_item
     import html
 
@@ -1116,7 +1101,7 @@ async def addmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def delmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Removes a custom item from the cafeteria menu."""
-    if not await is_authorized(update): return
+    if not await require_admin(update): return
     from services.cafeteria_service import delete_custom_menu_item
     from database.db import get_custom_menu_items
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -1150,10 +1135,7 @@ async def delmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Restores database transactions from clean text JSON backup file via idempotent upsert with admin confirmation."""
-    if not await is_authorized(update): return
-    if not is_admin_user(update):
-        await update.message.reply_text("⛔ <b>Admin Only:</b> Only the bot owner can restore backups.", parse_mode='HTML')
-        return
+    if not await require_admin(update): return
 
     from services.backup_service import import_database_from_json, preview_database_import, BACKUP_JSON_PATH, backup_to_telegram
     from database.queries import get_all_transactions
@@ -1238,7 +1220,7 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Reverts the last delete, edit, or add action performed."""
-    if not await is_authorized(update): return
+    if not await require_admin(update): return
     from services.undo_service import perform_undo
     from services.backup_service import backup_to_telegram
     import asyncio
@@ -1253,6 +1235,7 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"{msg}\n{status_line}", parse_mode='HTML')
     else:
         await update.message.reply_text(f"❌ Nothing was saved: {msg}", parse_mode='HTML')
+
 
 
 

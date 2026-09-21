@@ -7,6 +7,10 @@ import asyncio
 import html
 import re
 from config import TELEGRAM_USER_ID, IMAGE_DIR, logger
+from bot.auth import (
+    require_authorized, require_admin, is_owner, is_authorized_user,
+    get_callback_policy, ADMIN_CALLBACK_ACTIONS, READ_ONLY_CALLBACK_ACTIONS
+)
 from bot.commands import is_authorized, is_admin_user, render_home_menu_text, render_history_page, render_contacts_ledger_text
 from bot.keyboards import (
     get_confirmation_keyboard, get_edit_fields_keyboard, get_delete_confirm_keyboard,
@@ -116,7 +120,7 @@ async def deliver_response(status_msg, message, text: str, reply_markup=None, pa
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles incoming images (screenshots) with Gemini Vision AI + RapidOCR fallback."""
-    if not await is_authorized(update): return
+    if not await require_admin(update): return
     
     message = update.message
     chat_id = str(message.chat_id)
@@ -212,7 +216,6 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Could not delete temp image {image_path}: {cleanup_err}")
         
         # Basic validation
-        # Basic validation
         if not transaction or not transaction.amount or transaction.amount <= 0:
             await deliver_response(status_msg, message, "⚠️ Could not detect a valid amount from the receipt.\n\n💡 <b>Tip:</b> You can log it instantly by typing:\n<code>120 dosa</code> or <code>Paid 500 to Ramesh</code>", parse_mode='HTML')
             return
@@ -255,13 +258,36 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles button presses from inline keyboards."""
+    """Handles button presses from inline keyboards with central authorization policy."""
     query = update.callback_query
-    if not await is_authorized(update):
-        await query.answer("❌ Unauthorized action.", show_alert=True)
+    if not query or not query.data:
         return
 
-    await query.answer()
+    data = query.data
+    parts = data.split(":") if ":" in data else [data]
+    action = parts[0]
+    
+    # Check policy before any database access or data exposure
+    policy = get_callback_policy(action)
+    if policy is None:
+        # Unknown or stale callback data gets a friendly refusal, not a crash
+        try:
+            await query.answer("ℹ️ This button or menu is no longer active.", show_alert=True)
+        except Exception:
+            pass
+        return
+
+    if policy == 'admin':
+        if not await require_admin(update):
+            return
+    elif policy == 'read_only':
+        if not await require_authorized(update):
+            return
+
+    try:
+        await query.answer()
+    except Exception:
+        pass
     
     data = query.data
     parts = data.split(":") if ":" in data else [data]
@@ -1311,7 +1337,7 @@ def format_success_message(t) -> str:
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles incoming text messages, interactive steps, and payment parsing."""
-    if not await is_authorized(update): return
+    if not await require_authorized(update): return
     if not update.message or not update.message.text: return
     
     text = update.message.text.strip()
@@ -1394,8 +1420,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await amount_command(update, context)
                 return
 
-    # Check if user is in an interactive state
+    # Check if user is in an interactive state (all pending actions are admin mutations)
     pending_action = context.user_data.get('action')
+    if pending_action:
+        if not await require_admin(update):
+            return
     
     if pending_action == 'waiting_edit_id':
         clean_id_str = text.replace('#', '').strip()
@@ -1742,6 +1771,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check short text entry: e.g. "120 dosa", "+500 salary", "-45 tea", "coffee 15"
     short_parsed = parse_short_entry(text)
     if short_parsed:
+        if not await require_admin(update):
+            return
         amt, tx_type, name = short_parsed
         from database.models import Transaction
         now_dt = get_current_time_in_tz()
@@ -1795,6 +1826,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         transaction, confidence = process_transaction(text, "", message_id, chat_id)
         if transaction.amount and transaction.amount > 0 and transaction.transaction_type:
+            if not await require_admin(update):
+                return
             if confidence >= 80:
                 from services.cafeteria_service import is_cafeteria_payment
                 from bot.keyboards import get_cafeteria_selection_keyboard
