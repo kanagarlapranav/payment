@@ -18,7 +18,7 @@ from ocr.extractor import perform_ocr
 from ocr.gemini_vision import is_gemini_available, extract_transaction_with_gemini
 from services.gdrive_service import is_gdrive_available, upload_receipt_to_drive, upload_backup_to_drive
 from services.transaction_service import process_transaction, commit_transaction
-from services.balance_service import recalculate_all_balances, resequence_transaction_ids, get_today_summary, get_overall_summary
+from services.balance_service import recalculate_all_balances, get_today_summary, get_overall_summary
 from services.backup_service import backup_to_telegram
 from database.queries import (
     get_transaction_by_id, get_transaction_by_reference, update_transaction, delete_transaction,
@@ -765,7 +765,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         person = tx['person_name'] or "Unknown"
 
         from services.undo_service import record_delete_action
-        record_delete_action(tx)
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        user_id = update.effective_user.id if update.effective_user else None
+        record_delete_action(tx, chat_id=chat_id, user_id=user_id)
 
         success = delete_transaction(tx_id)
         if success:
@@ -813,7 +815,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.answer("❌ Only the bot owner can undo changes.", show_alert=True)
             return
         from services.undo_service import perform_undo
-        success, msg = perform_undo()
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        user_id = update.effective_user.id if update.effective_user else None
+        success, msg = perform_undo(chat_id=chat_id, user_id=user_id)
         if success:
             try:
                 asyncio.create_task(backup_to_telegram(context.bot))

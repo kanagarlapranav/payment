@@ -131,6 +131,20 @@ def setup_database():
                     )
                 ''')
                 
+                # Undo log table (stores scoped undo actions in SQLite)
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS undo_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        chat_id INTEGER NOT NULL,
+                        user_id INTEGER NOT NULL,
+                        action TEXT NOT NULL,
+                        uid TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        used_at TEXT DEFAULT NULL
+                    )
+                ''')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_undo_chat_user ON undo_log(chat_id, user_id, used_at, created_at)')
+
                 # Create indexes
                 cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_uid ON transactions(uid)')
                 cursor.execute('''

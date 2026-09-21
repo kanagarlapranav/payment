@@ -323,10 +323,26 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None) -
             logger.error(f"Error importing database from JSON: {e}", exc_info=True)
             return {'success': False, 'error': str(e)}
 
+def record_confirmed_backup(timestamp_iso: str = None) -> str:
+    """Records the timestamp of a confirmed backup upload in the settings table."""
+    from utils.dates import utc_now_iso
+    ts = timestamp_iso or utc_now_iso()
+    with LEDGER_LOCK:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_confirmed_backup_at', ?, ?)",
+                (ts, ts)
+            )
+            conn.commit()
+    logger.info(f"Recorded confirmed backup upload timestamp: {ts}")
+    return ts
+
 async def backup_to_telegram(bot, chat_id: str = None) -> bool:
     """
     Exports the current database to JSON (Format v2) and uploads it to Telegram as a pinned backup document.
     Never uploads if database contains 0 transactions.
+    Records confirmed backup timestamp upon success.
     """
     target_chat = chat_id or TELEGRAM_GROUP_ID or TELEGRAM_USER_ID
     if not target_chat or not bot:
@@ -366,6 +382,8 @@ async def backup_to_telegram(bot, chat_id: str = None) -> bool:
         except Exception as pin_err:
             logger.info(f"Could not pin backup message (maybe not admin or already pinned): {pin_err}")
             
+        # Record confirmed backup upload timestamp in settings
+        record_confirmed_backup()
         logger.info(f"Successfully backed up database (v2, rev {rev}) to Telegram cloud.")
         return True
     except Exception as e:
