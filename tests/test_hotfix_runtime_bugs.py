@@ -18,12 +18,19 @@ from services.task_manager import create_tracked_task, task_manager
 class TestHotfixRuntimeBugs(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.test_dir = tempfile.mkdtemp()
+        from pathlib import Path
         self.db_path = os.path.join(self.test_dir, "test_hotfix.db")
         self.db_patch = patch("database.db.DB_PATH", self.db_path)
+        self.db_patch2 = patch("config.DB_PATH", self.db_path)
+        self.backup_patch = patch("services.backup_service.BACKUP_JSON_PATH", Path(self.test_dir) / "backup_transactions.json")
         self.db_patch.start()
+        self.db_patch2.start()
+        self.backup_patch.start()
         setup_database()
 
     def tearDown(self):
+        self.backup_patch.stop()
+        self.db_patch2.stop()
         self.db_patch.stop()
         shutil.rmtree(self.test_dir, ignore_errors=True)
 

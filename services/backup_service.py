@@ -215,7 +215,23 @@ def verify_backup_payload(data_dict: dict) -> tuple[bool, str]:
             return False, "Missing or empty checksum in Format v2 backup"
         expected_checksum = compute_canonical_checksum(data_dict)
         if checksum != expected_checksum:
-            return False, f"Checksum mismatch: expected {expected_checksum} but got {checksum}"
+            # Check legacy v2 format (prior to budgets or compact separators)
+            legacy_payload = {
+                "version": data_dict.get("version", 2),
+                "revision": data_dict.get("revision", 1),
+                "settings": data_dict.get("settings", {}),
+                "custom_menu_items": data_dict.get("custom_menu_items", []),
+                "transactions": data_dict.get("transactions", []),
+            }
+            legacy_str = json.dumps(
+                legacy_payload,
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(', ', ': ')
+            )
+            legacy_checksum = hashlib.sha256(legacy_str.encode('utf-8')).hexdigest()
+            if checksum != legacy_checksum:
+                return False, f"Checksum mismatch: expected {expected_checksum} but got {checksum}"
 
     # Validate every transaction entity with utils/validation
     for idx, tx in enumerate(transactions, 1):

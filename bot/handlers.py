@@ -637,7 +637,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "restore_confirm":
         from services.backup_service import import_database_from_json, backup_to_telegram
         from database.queries import get_all_transactions, get_balance_setting
-        from utils.formatting import format_currency
         await query.edit_message_text("⏳ <b>Restoring ledger from backup...</b>", parse_mode='HTML')
         result = await asyncio.to_thread(import_database_from_json)
         if not result.get('success'):
