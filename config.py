@@ -36,7 +36,7 @@ TELEGRAM_GROUP_ID = int(raw_group_id.strip()) if raw_group_id and raw_group_id.s
 # OCR Configuration: avoid Windows path default on Linux/Render
 default_tesseract = r'C:\Program Files\Tesseract-OCR\tesseract.exe' if sys.platform == 'win32' else 'tesseract'
 TESSERACT_CMD = os.getenv('TESSERACT_CMD', default_tesseract)
-DEFAULT_TIMEZONE = 'Asia/Kolkata'
+DEFAULT_TIMEZONE = os.getenv('DEFAULT_TIMEZONE', 'Asia/Kolkata')
 
 # Dashboard Security Token for /api/data
 DASHBOARD_TOKEN = os.getenv('DASHBOARD_TOKEN', '')
@@ -52,6 +52,46 @@ GDRIVE_REFRESH_TOKEN = os.getenv('GDRIVE_REFRESH_TOKEN')
 GDRIVE_CLIENT_ID = os.getenv('GDRIVE_CLIENT_ID')
 GDRIVE_CLIENT_SECRET = os.getenv('GDRIVE_CLIENT_SECRET')
 
+import re
+
+class SensitiveDataFilter(logging.Filter):
+    """
+    Masks sensitive credentials (Telegram bot tokens, Google AIza keys)
+    in log messages and formatting arguments across all handlers and loggers.
+    """
+    _TELEGRAM_TOKEN_RE = re.compile(r'\b\d{8,11}:AA[A-Za-z0-9_-]{33}\b')
+    _AIZA_KEY_RE = re.compile(r'\bAIza[0-9A-Za-z_-]{35}\b')
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = self.mask_secrets(record.msg)
+        if record.args:
+            if isinstance(record.args, dict):
+                record.args = {
+                    k: (self.mask_secrets(v) if isinstance(v, str) else v)
+                    for k, v in record.args.items()
+                }
+            elif isinstance(record.args, tuple):
+                record.args = tuple(
+                    self.mask_secrets(v) if isinstance(v, str) else v
+                    for v in record.args
+                )
+            elif isinstance(record.args, list):
+                record.args = [
+                    self.mask_secrets(v) if isinstance(v, str) else v
+                    for v in record.args
+                ]
+        return True
+
+    @classmethod
+    def mask_secrets(cls, text: str) -> str:
+        if not text or not isinstance(text, str):
+            return text
+        text = cls._TELEGRAM_TOKEN_RE.sub('[REDACTED_TELEGRAM_TOKEN]', text)
+        text = cls._AIZA_KEY_RE.sub('[REDACTED_API_KEY]', text)
+        return text
+
+sensitive_filter = SensitiveDataFilter()
 handlers = [logging.StreamHandler()]
 try:
     handlers.append(RotatingFileHandler(
@@ -63,9 +103,18 @@ try:
 except Exception:
     pass
 
+for h in handlers:
+    h.addFilter(sensitive_filter)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=handlers
 )
+
+# Suppress verbose HTTP loggers that can leak Telegram bot tokens in request URLs
+for noisy_logger_name in ('httpx', 'httpcore', 'urllib3', 'telegram'):
+    logging.getLogger(noisy_logger_name).setLevel(logging.WARNING)
+
+logging.getLogger().addFilter(sensitive_filter)
 logger = logging.getLogger(__name__)

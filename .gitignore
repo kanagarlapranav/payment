@@ -7,23 +7,32 @@ env/
 .env
 .env.*
 .env.local
+credentials.json
 
 # Database & Sensitive Financial Data
 data/*.db
 data/*.sqlite3
 data/*.json
-!data/backup_transactions.json
 data/*.xlsx
 data/*.pdf
 data/archive/
+data/archive
 *.db
 *.sqlite3
 data/images/*
 !data/images/.gitkeep
 
-# Logs
+# Logs & Coverage
 logs/*.log
 *.log
+.coverage
+.coverage.*
+htmlcov/
+
+# Audit & Security Reports
+audit_report.txt
+gitleaks_report.txt
+Codebase_Audit_Report.pdf
 
 # Large Binaries / Installers
 *.exe
@@ -37,3 +46,4 @@ __pycache__/
 
 # Legacy Deployments
 .vercel/
+
