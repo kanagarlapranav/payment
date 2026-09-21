@@ -11,12 +11,17 @@ from bot.auth import (
     require_authorized, require_admin, is_owner, is_authorized_user,
     get_callback_policy, ADMIN_CALLBACK_ACTIONS, READ_ONLY_CALLBACK_ACTIONS
 )
-from bot.commands import is_authorized, is_admin_user, render_home_menu_text, render_history_page, render_contacts_ledger_text
+from bot.commands import (
+    is_authorized, is_admin_user, render_home_menu_text, render_history_page,
+    render_contacts_ledger_text, render_transaction_detail, render_backup_status_text
+)
 from bot.keyboards import (
     get_confirmation_keyboard, get_edit_fields_keyboard, get_delete_confirm_keyboard,
     get_filter_keyboard, get_sort_keyboard, get_home_menu_keyboard, get_back_to_menu_keyboard,
     get_confirmation_card_keyboard, get_edit_pending_fields_keyboard, get_category_picker_keyboard,
-    get_quick_undo_keyboard, get_quick_add_keyboard, get_history_paginated_keyboard, get_settings_menu_keyboard
+    get_quick_undo_keyboard, get_quick_add_keyboard, get_history_paginated_keyboard,
+    get_add_menu_keyboard, get_more_menu_keyboard, get_transaction_detail_keyboard,
+    get_backup_status_keyboard
 )
 from ocr.extractor import perform_ocr
 from ocr.gemini_vision import is_gemini_available, extract_transaction_with_gemini
@@ -377,106 +382,125 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.edit_message_text(text, reply_markup=markup, parse_mode='HTML')
             elif nav_target == "history_noop":
                 pass
-            elif nav_target == "quickadd":
+            elif nav_target == "add":
                 text = (
-                    "➕ <b>One-Tap Quick Entry</b>\n"
-                    "━━━━━━━━━━━━━━\n"
+                    "➕ <b>Add New Transaction</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "Choose an input method to record your payment:\n\n"
+                    "• 📸 <b>Scan Receipt:</b> Send a screenshot or photo\n"
+                    "• ⌨️ <b>Manual Entry:</b> Log with guided prompts\n"
+                    "• 💬 <b>Natural Text:</b> Type quick natural messages\n"
+                    "• ⚡ <b>Quick Add:</b> Tap frequent payees & menu items\n"
+                    "━━━━━━━━━━━━━━━━━━━━"
+                )
+                await query.edit_message_text(text, reply_markup=get_add_menu_keyboard(), parse_mode='HTML')
+            elif nav_target == "more":
+                text = (
+                    "⚙️ <b>More Features & Tools</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "Select an option to manage your account:\n\n"
+                    "• 🎯 <b>Budgets:</b> Set and track monthly targets\n"
+                    "• 🍽️ <b>Cafeteria:</b> Canteen dishes & order plates\n"
+                    "• ☁️ <b>Backup Status:</b> Cloud DR & recovery health\n"
+                    "• 🌐 <b>Web Dashboard:</b> Visual analytics & charts\n"
+                    "• 👥 <b>Contacts:</b> Counterparty ledger & balances\n"
+                    "• ℹ️ <b>Help & Commands:</b> Bot commands index\n"
+                    "━━━━━━━━━━━━━━━━━━━━"
+                )
+                await query.edit_message_text(text, reply_markup=get_more_menu_keyboard(), parse_mode='HTML')
+            elif nav_target == "add_scan":
+                text = (
+                    "📸 <b>Scan Payment Receipt</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "Upload a receipt screenshot or photo directly into this chat.\n\n"
+                    "Supported apps: Google Pay, PhonePe, Paytm, CRED, BHIM, Amazon Pay, Super.money, and bank alerts.\n"
+                    "━━━━━━━━━━━━━━━━━━━━"
+                )
+                await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+            elif nav_target == "add_manual":
+                context.user_data['action'] = 'waiting_quick_text'
+                text = (
+                    "⌨️ <b>Manual Transaction Entry</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "Enter transaction details in format:\n"
+                    "<code>[Amount] [Payee]</code> (e.g. <code>250 Grocery</code>)\n"
+                    "or <code>+5000 Salary</code> for income.\n"
+                    "━━━━━━━━━━━━━━━━━━━━"
+                )
+                await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+            elif nav_target == "add_text":
+                text = (
+                    "💬 <b>Natural Text Examples</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "Type any of the following directly into chat:\n\n"
+                    "• <code>120 dosa</code> (logs ₹120 to Dosa)\n"
+                    "• <code>+500 from Amit</code> (logs ₹500 received)\n"
+                    "• <code>-45 tea</code> (logs ₹45 sent)\n"
+                    "• <code>Paid 1500 to Electricity Bill yesterday</code>\n"
+                    "• <code>Spent 350 on Uber</code>\n"
+                    "━━━━━━━━━━━━━━━━━━━━"
+                )
+                await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+            elif nav_target == "quickadd":
+                top_p = get_top_payees(limit=3)
+                text = (
+                    "⚡ <b>One-Tap Quick Entry</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
                     "Tap a shortcut button below or type a short text message directly:\n\n"
                     "• <code>120 dosa</code> (logs ₹120 to Dosa)\n"
                     "• <code>+500 salary</code> (logs ₹500 income)\n"
                     "• <code>-45 tea</code> (logs ₹45 expense)\n"
                     "• <code>Paid 200 to Ramesh</code>\n"
-                    "━━━━━━━━━━━━━━"
+                    "━━━━━━━━━━━━━━━━━━━━"
                 )
-                await query.edit_message_text(text, reply_markup=get_quick_add_keyboard(), parse_mode='HTML')
-            elif nav_target == "stats":
-                now = datetime.now()
-                cmp_stats = get_month_comparison_stats(now.year, now.month)
-                curr = cmp_stats['current']
-                delta = cmp_stats['spent_delta']
-                d_sign = "▲" if delta['direction'] == 'up' else ("▼" if delta['direction'] == 'down' else "—")
-                
-                cats = get_category_summary(now.year, now.month)
-                sent_cats = [c for c in cats if c['transaction_type'] == 'SENT'][:5]
-                top_payees = get_top_payees(limit=3, year=now.year, month=now.month)
-                
-                month_names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-                m_name = month_names[now.month]
-                
-                lines = [
-                    f"📊 <b>Financial Analytics ({m_name} {now.year})</b>",
-                    "━━━━━━━━━━━━━━",
-                    f"💸 <b>Spent:</b> {format_currency(curr['total_sent'])} ({d_sign}{delta['pct']}% vs last month)",
-                    f"💰 <b>Received:</b> {format_currency(curr['total_received'])}",
-                    f"📈 <b>Net Savings:</b> {format_currency(curr['net_savings'])}\n",
-                    "🏷 <b>Top Categories:</b>"
-                ]
-                if sent_cats:
-                    for c in sent_cats:
-                        pct = (float(c['total_amount']) / curr['total_sent'] * 100) if curr['total_sent'] > 0 else 0
-                        lines.append(f"• {html.escape(c['category'] or 'General')}: {format_currency(c['total_amount'])} ({pct:.0f}%)")
-                else:
-                    lines.append("• <i>No expenses recorded this month</i>")
-                    
-                if top_payees:
-                    lines.append("\n👤 <b>Top Payees:</b>")
-                    for p in top_payees:
-                        lines.append(f"• {html.escape(p['person_name'])}: {format_currency(p['total_amount'])} ({p['count']} txs)")
-                        
-                lines.append("━━━━━━━━━━━━━━")
-                from telegram import InlineKeyboardButton
-                extra_btn = [InlineKeyboardButton("🌐 Web Dashboard", callback_data="nav:dash_info")]
-                await query.edit_message_text("\n".join(lines), reply_markup=get_back_to_menu_keyboard(extra_btn), parse_mode='HTML')
-            elif nav_target == "cafe":
-                from database.queries import get_cafeteria_transactions
-                cafe_txs = get_cafeteria_transactions(limit=5)
-                total_cafe = sum(t['amount'] for t in cafe_txs)
-                lines = [
-                    "🍽️ <b>Cafeteria Portal</b>",
-                    "━━━━━━━━━━━━━━",
-                    f"☕ <b>Recent Cafeteria Total:</b> {format_currency(total_cafe)}",
-                    "\n<b>Popular Menu Items:</b>\n"
-                    "• Plain Dosa — ₹10\n"
-                    "• Masala Dosa — ₹35\n"
-                    "• Veg Meals — ₹45\n"
-                    "• Coffee / Tea — ₹10 / ₹8\n"
-                    "• Lime Juice — ₹15\n"
-                    "━━━━━━━━━━━━━━"
-                ]
-                from telegram import InlineKeyboardButton
-                extra_row = [
-                    InlineKeyboardButton("🥞 Dosa ₹10", callback_data="quick_add:10:Plain Dosa:Food & Dining"),
-                    InlineKeyboardButton("☕ Coffee ₹10", callback_data="quick_add:10:Coffee:Food & Dining")
-                ]
-                await query.edit_message_text("\n".join(lines), reply_markup=get_back_to_menu_keyboard(extra_row), parse_mode='HTML')
-            elif nav_target == "budget":
-                from services.budget_service import format_budget_status
-                now = datetime.now()
-                card = format_budget_status(now.year, now.month)
-                await query.edit_message_text(card, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+                await query.edit_message_text(text, reply_markup=get_quick_add_keyboard(top_payees=top_p), parse_mode='HTML')
+            elif nav_target == "backup_status":
+                text = render_backup_status_text()
+                await query.edit_message_text(text, reply_markup=get_backup_status_keyboard(), parse_mode='HTML')
+            elif nav_target == "restore_info":
+                text = (
+                    "📥 <b>Database Restore & Recovery</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "To restore from a backup file:\n\n"
+                    "1. Send or forward your <code>payment_tracker_backup.json</code> file directly to this chat.\n"
+                    "2. The bot will automatically validate the SHA-256 checksum and preview incoming changes.\n"
+                    "3. Confirm the import to restore the ledger.\n\n"
+                    "Or use command:\n"
+                    "<code>/restore</code> (downloads latest cloud backup)\n"
+                    "━━━━━━━━━━━━━━━━━━━━"
+                )
+                await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+            elif nav_target == "help_info":
+                text = (
+                    "ℹ️ <b>Payment Tracker Commands</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "• /start — Interactive App Menu\n"
+                    "• /balance — Live Balance & Today Summary\n"
+                    "• /today — Today's Transaction Breakdown\n"
+                    "• /history — Interactive Paginated Ledger\n"
+                    "• /stats — Monthly Spending Analytics\n"
+                    "• /budget — Set & View Monthly Budget\n"
+                    "• /cafeteria — Cafeteria Menu & Order Tagging\n"
+                    "• /dashboard — Secure Web Dashboard Link\n"
+                    "• /setbalance — Set Starting Balance\n"
+                    "• /undo — Revert Last Transaction Action\n"
+                    "• /export — Download Statement (CSV/PDF/Excel)\n"
+                    "• /help — Full Reference Guide\n"
+                    "━━━━━━━━━━━━━━━━━━━━"
+                )
+                await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
             elif nav_target == "settings":
                 text = (
-                    "⚙️ <b>Settings & System Controls</b>\n"
-                    "━━━━━━━━━━━━━━\n"
+                    "⚙️ <b>More Features & Tools</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
                     "• <b>Currency:</b> INR (₹, Indian number formatting)\n"
                     "• <b>Timezone:</b> Asia/Kolkata (IST)\n"
                     "• <b>Daily Closing Digest:</b> 10:00 PM IST\n"
                     "• <b>Cloud Backup:</b> Dual Telegram & Drive\n"
                     "• <b>Privacy:</b> Images deleted upon scanning\n"
-                    "━━━━━━━━━━━━━━\n"
-                    "<b>BotFather Slash Commands:</b>\n"
-                    "/start — Interactive App Menu\n"
-                    "/balance — Current Balance & Today\n"
-                    "/history — Interactive Ledger\n"
-                    "/budget — Spending Target & Progress\n"
-                    "/stats — Monthly Analytics\n"
-                    "/cafeteria — Cafeteria Menu & Order\n"
-                    "/dashboard — Live Web Dashboard\n"
-                    "/undo — Revert Last Action\n"
-                    "/help — Detailed Feature Guide\n"
-                    "━━━━━━━━━━━━━━"
+                    "━━━━━━━━━━━━━━━━━━━━"
                 )
-                await query.edit_message_text(text, reply_markup=get_settings_menu_keyboard(), parse_mode='HTML')
+                await query.edit_message_text(text, reply_markup=get_more_menu_keyboard(), parse_mode='HTML')
             elif nav_target == "contacts":
                 text = render_contacts_ledger_text()
                 await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
@@ -506,6 +530,80 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception as nav_err:
             if "Message is not modified" not in str(nav_err):
                 logger.warning(f"Nav error ({nav_target}): {nav_err}")
+        return
+
+    # --- 1. Transaction Detail, Duplicate & Backup Actions ---
+    elif action == "tx_view":
+        tx_id = int(parts[1])
+        text, markup = render_transaction_detail(tx_id)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "dup_tx":
+        tx_id = int(parts[1])
+        orig_tx = get_transaction_by_id(tx_id)
+        if not orig_tx:
+            await query.edit_message_text("❌ Transaction not found.", reply_markup=get_back_to_menu_keyboard())
+            return
+        
+        from database.models import Transaction
+        dup_pending_id = uuid.uuid4().hex[:10]
+        dup_tx = Transaction(
+            amount=orig_tx['amount'],
+            transaction_type=orig_tx['transaction_type'],
+            person_name=orig_tx.get('person_name'),
+            category=orig_tx.get('category') or 'General',
+            payment_app=orig_tx.get('payment_app'),
+            bank_name=orig_tx.get('bank_name'),
+            confidence=95
+        )
+        pending_transactions[dup_pending_id] = dup_tx
+        card_text = format_receipt_card(dup_tx, dup_warning=f"📋 Duplicating Transaction #{tx_id}")
+        await query.edit_message_text(card_text, reply_markup=get_confirmation_card_keyboard(dup_pending_id), parse_mode='HTML')
+        return
+
+    elif action == "edit_tx":
+        tx_id = int(parts[1])
+        await query.edit_message_text(
+            f"✏️ <b>Edit Transaction #{tx_id}:</b>\nChoose which field you want to modify:",
+            reply_markup=get_edit_fields_keyboard(tx_id),
+            parse_mode='HTML'
+        )
+        return
+
+    elif action == "delete_tx":
+        tx_id = int(parts[1])
+        await query.edit_message_text(
+            f"🗑️ <b>Delete Transaction #{tx_id}?</b>\nAre you sure you want to delete this transaction?",
+            reply_markup=get_delete_confirm_keyboard(tx_id),
+            parse_mode='HTML'
+        )
+        return
+
+    elif action == "backup_now":
+        await query.edit_message_text("⏳ <i>Exporting database and uploading cloud backup...</i>", parse_mode='HTML')
+        from services.backup_service import export_database_to_json, backup_to_telegram
+        export_database_to_json()
+        success = await backup_to_telegram(context.bot, force=True)
+        if success:
+            text = "✅ <b>Cloud Backup Completed Successfully!</b>\n\n" + render_backup_status_text()
+            await query.edit_message_text(text, reply_markup=get_backup_status_keyboard(), parse_mode='HTML')
+        else:
+            await query.edit_message_text("⚠️ Cloud backup failed or no active records to backup.", reply_markup=get_back_to_menu_keyboard())
+        return
+
+    elif action == "qa_payee":
+        payee = parts[1]
+        tt = parts[2] if len(parts) > 2 else "SENT"
+        context.user_data['action'] = 'waiting_payee_amount'
+        context.user_data['quick_payee'] = payee
+        context.user_data['quick_type'] = tt
+        arrow = "to" if tt == "SENT" else "from"
+        await query.edit_message_text(
+            f"💵 <b>Quick Add:</b> Enter amount {arrow} <b>{html.escape(payee)}</b> (e.g. <code>250</code>):",
+            reply_markup=get_back_to_menu_keyboard(),
+            parse_mode='HTML'
+        )
         return
 
     # --- 1. Redesigned Receipt Card Actions ---
@@ -1786,6 +1884,51 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
         return
+
+    elif pending_action == 'waiting_payee_amount':
+        payee = context.user_data.pop('quick_payee', 'Payee')
+        tt = context.user_data.pop('quick_type', 'SENT')
+        context.user_data.pop('action', None)
+        try:
+            from utils.validation import parse_decimal_amount
+            val = float(parse_decimal_amount(text.strip(), allow_zero=False))
+        except Exception as err:
+            await update.message.reply_text(f"❌ Invalid amount: {err}. Please try again:")
+            return
+
+        cat = get_payee_category(payee) or "General"
+        from database.models import Transaction
+        t = Transaction(
+            amount=val,
+            transaction_type=tt,
+            person_name=payee,
+            category=cat,
+            confidence=100
+        )
+        pid = uuid.uuid4().hex[:10]
+        pending_transactions[pid] = t
+        card_text = format_receipt_card(t)
+        await update.message.reply_text(
+            card_text,
+            reply_markup=get_confirmation_card_keyboard(pid),
+            parse_mode='HTML'
+        )
+        return
+
+    elif pending_action == 'waiting_quick_text':
+        context.user_data.pop('action', None)
+        # Process natural text through process_transaction
+        transaction, conf = process_transaction(text, "", "", "")
+        if transaction and transaction.amount and transaction.amount > 0:
+            pid = uuid.uuid4().hex[:10]
+            pending_transactions[pid] = transaction
+            card_text = format_receipt_card(transaction)
+            await update.message.reply_text(
+                card_text,
+                reply_markup=get_confirmation_card_keyboard(pid),
+                parse_mode='HTML'
+            )
+            return
 
     # Check quick menu trigger
     if text.strip().lower() in ('menu', 'home', 'start'):

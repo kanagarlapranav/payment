@@ -1,7 +1,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 def get_home_menu_keyboard():
-    """Returns the main interactive Home Menu button grid."""
+    """Returns the 6-button Home Menu grid: Balance, Today, History, Add, Stats, More."""
     keyboard = [
         [
             InlineKeyboardButton("💰 Balance", callback_data="nav:balance"),
@@ -9,15 +9,79 @@ def get_home_menu_keyboard():
         ],
         [
             InlineKeyboardButton("🧾 History", callback_data="nav:history:1:ALL"),
-            InlineKeyboardButton("➕ Quick Add", callback_data="nav:quickadd")
+            InlineKeyboardButton("➕ Add", callback_data="nav:add")
         ],
         [
             InlineKeyboardButton("📊 Stats", callback_data="nav:stats"),
+            InlineKeyboardButton("⚙️ More", callback_data="nav:more")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_add_menu_keyboard():
+    """Returns the Add Transaction menu: Scan Receipt, Manual Entry, Natural Text, Quick Add."""
+    keyboard = [
+        [
+            InlineKeyboardButton("📸 Scan Receipt", callback_data="nav:add_scan"),
+            InlineKeyboardButton("⌨️ Manual Entry", callback_data="nav:add_manual")
+        ],
+        [
+            InlineKeyboardButton("💬 Natural Text", callback_data="nav:add_text"),
+            InlineKeyboardButton("⚡ Quick Add", callback_data="nav:quickadd")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:home")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_more_menu_keyboard():
+    """Returns the More submenu grouping advanced features."""
+    keyboard = [
+        [
+            InlineKeyboardButton("🎯 Budgets", callback_data="nav:budget"),
             InlineKeyboardButton("🍽️ Cafeteria", callback_data="nav:cafe")
         ],
         [
-            InlineKeyboardButton("🎯 Budgets", callback_data="nav:budget"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="nav:settings")
+            InlineKeyboardButton("☁️ Backup Status", callback_data="nav:backup_status"),
+            InlineKeyboardButton("🌐 Web Dashboard", callback_data="nav:dash_info")
+        ],
+        [
+            InlineKeyboardButton("👥 Contacts", callback_data="nav:contacts"),
+            InlineKeyboardButton("ℹ️ Help & Commands", callback_data="nav:help_info")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:home")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+# Backward-compatibility alias
+get_settings_menu_keyboard = get_more_menu_keyboard
+
+def get_transaction_detail_keyboard(tx_id: int):
+    """Returns the Transaction Detail keyboard with Edit, Delete, Duplicate, and Back."""
+    keyboard = [
+        [
+            InlineKeyboardButton("✏️ Edit", callback_data=f"edit_tx:{tx_id}"),
+            InlineKeyboardButton("🗑️ Delete", callback_data=f"delete_tx:{tx_id}")
+        ],
+        [
+            InlineKeyboardButton("📋 Duplicate", callback_data=f"dup_tx:{tx_id}"),
+            InlineKeyboardButton("⬅️ Back", callback_data="nav:history:1:ALL")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_backup_status_keyboard():
+    """Returns Backup Status action buttons."""
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Backup Now", callback_data="backup_now"),
+            InlineKeyboardButton("📥 Restore Backup", callback_data="nav:restore_info")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:home")
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -87,6 +151,10 @@ def get_category_picker_keyboard(pending_id: str):
     keyboard.append([InlineKeyboardButton("🔙 Back to Receipt", callback_data=f"ep_back:{pending_id}")])
     return InlineKeyboardMarkup(keyboard)
 
+# Aliases
+get_receipt_confirm_keyboard = get_confirmation_card_keyboard
+get_receipt_edit_fields_keyboard = get_edit_pending_fields_keyboard
+
 def get_quick_undo_keyboard(tx_id: int):
     """Returns an inline Undo button for a newly saved transaction."""
     keyboard = [
@@ -97,69 +165,80 @@ def get_quick_undo_keyboard(tx_id: int):
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_quick_add_keyboard():
+def get_quick_add_keyboard(top_payees: list = None):
     """Returns one-tap entry shortcuts for common payees/items."""
-    keyboard = [
-        [
-            InlineKeyboardButton("☕ Coffee ₹10", callback_data="quick_add:10:Coffee:Food & Dining"),
-            InlineKeyboardButton("🥞 Plain Dosa ₹10", callback_data="quick_add:10:Plain Dosa:Food & Dining")
-        ],
-        [
-            InlineKeyboardButton("🍛 Veg Meals ₹45", callback_data="quick_add:45:Veg Meals:Food & Dining"),
-            InlineKeyboardButton("🧃 Lime Juice ₹15", callback_data="quick_add:15:Lime Juice:Food & Dining")
-        ],
-        [
-            InlineKeyboardButton("🍽️ Masala Dosa ₹35", callback_data="quick_add:35:Masala Dosa:Food & Dining"),
-            InlineKeyboardButton("🍨 Ice Cream ₹20", callback_data="quick_add:20:Ice Cream:Food & Dining")
-        ],
-        [
-            InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:home")
-        ]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-def get_history_paginated_keyboard(page: int, total_pages: int, filter_type: str = "ALL"):
-    """Returns interactive pagination buttons and filter chips for /history."""
     keyboard = []
     
-    # Filter chips row
+    # 1. If top payees available, display top 3 payees
+    if top_payees:
+        for p in top_payees[:3]:
+            name = p.get('person_name') or 'Payee'
+            short_name = name[:14]
+            keyboard.append([
+                InlineKeyboardButton(f"💸 Sent to {short_name}", callback_data=f"qa_payee:{short_name[:12]}:SENT"),
+                InlineKeyboardButton(f"💰 Recv from {short_name}", callback_data=f"qa_payee:{short_name[:12]}:RECEIVED")
+            ])
+            
+    # 2. Common quick cafeteria items
+    keyboard.append([
+        InlineKeyboardButton("☕ Coffee ₹10", callback_data="quick_add:10:Coffee:Food & Dining"),
+        InlineKeyboardButton("🥞 Plain Dosa ₹10", callback_data="quick_add:10:Plain Dosa:Food & Dining")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("🍛 Veg Meals ₹45", callback_data="quick_add:45:Veg Meals:Food & Dining"),
+        InlineKeyboardButton("🧃 Lime Juice ₹15", callback_data="quick_add:15:Lime Juice:Food & Dining")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("🍽️ Masala Dosa ₹35", callback_data="quick_add:35:Masala Dosa:Food & Dining"),
+        InlineKeyboardButton("🍨 Ice Cream ₹20", callback_data="quick_add:20:Ice Cream:Food & Dining")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:home")
+    ])
+    return InlineKeyboardMarkup(keyboard)
+
+def get_history_paginated_keyboard(page: int, total_pages: int, filter_type: str = "ALL", tx_rows: list = None):
+    """Returns interactive pagination buttons, filter chips, and row tap shortcuts for /history."""
+    keyboard = []
+    
+    # 1. Row buttons to open detail screen for items on this page
+    if tx_rows:
+        row_buttons = []
+        for r in tx_rows[:6]:
+            badge = "🟢" if r.get('transaction_type') == 'RECEIVED' else "🔴"
+            try:
+                amt = int(float(r.get('amount', 0)))
+            except Exception:
+                amt = 0
+            label = f"#{r['id']} {badge} ₹{amt}"
+            row_buttons.append(InlineKeyboardButton(label, callback_data=f"tx_view:{r['id']}"))
+            if len(row_buttons) == 2:
+                keyboard.append(row_buttons)
+                row_buttons = []
+        if row_buttons:
+            keyboard.append(row_buttons)
+            
+    # 2. Filter chips row
     all_label = "● All" if filter_type == "ALL" else "All"
     sent_label = "● 🔴 Sent" if filter_type == "SENT" else "🔴 Sent"
     recv_label = "● 🟢 Recv" if filter_type == "RECEIVED" else "🟢 Recv"
     keyboard.append([
-        InlineKeyboardButton(all_label, callback_data=f"nav:history:1:ALL"),
-        InlineKeyboardButton(sent_label, callback_data=f"nav:history:1:SENT"),
-        InlineKeyboardButton(recv_label, callback_data=f"nav:history:1:RECEIVED")
+        InlineKeyboardButton(all_label, callback_data="nav:history:1:ALL"),
+        InlineKeyboardButton(sent_label, callback_data="nav:history:1:SENT"),
+        InlineKeyboardButton(recv_label, callback_data="nav:history:1:RECEIVED")
     ])
     
-    # Navigation row
+    # 3. Navigation row
     nav_row = []
     if page > 1:
         nav_row.append(InlineKeyboardButton("◀ Prev", callback_data=f"nav:history:{page-1}:{filter_type}"))
-    nav_row.append(InlineKeyboardButton(f"{page} / {total_pages}", callback_data=f"nav:history_noop"))
+    nav_row.append(InlineKeyboardButton(f"{page} / {max(1, total_pages)}", callback_data="nav:history_noop"))
     if page < total_pages:
         nav_row.append(InlineKeyboardButton("Next ▶", callback_data=f"nav:history:{page+1}:{filter_type}"))
     keyboard.append(nav_row)
     
-    # Back to Menu
+    # 4. Back to Menu
     keyboard.append([InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:home")])
-    return InlineKeyboardMarkup(keyboard)
-
-def get_settings_menu_keyboard():
-    """Returns the settings navigation keyboard."""
-    keyboard = [
-        [
-            InlineKeyboardButton("🎯 Monthly Budget", callback_data="nav:budget"),
-            InlineKeyboardButton("📊 Daily Digest", callback_data="nav:digest_info")
-        ],
-        [
-            InlineKeyboardButton("👥 Contact Ledger", callback_data="nav:contacts"),
-            InlineKeyboardButton("🌐 Web Dashboard", callback_data="nav:dash_info")
-        ],
-        [
-            InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:home")
-        ]
-    ]
     return InlineKeyboardMarkup(keyboard)
 
 def get_confirmation_keyboard(tx_id: str = ""):

@@ -60,20 +60,25 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
     total_count = data['total_count']
     
     if not items:
-        text = "🧾 <b>Transaction History</b>\n━━━━━━━━━━━━━━\n<i>No transactions found for this filter.</i>"
-        return text, get_back_to_menu_keyboard()
+        text = (
+            "🧾 <b>Transaction History</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📭 <i>No transactions found for this filter.</i>\n\n"
+            "💡 <i>Tap a filter below to switch view, or tap Back to return to Home.</i>\n"
+            "━━━━━━━━━━━━━━━━━━━━"
+        )
+        return text, get_history_paginated_keyboard(1, 1, filter_type, tx_rows=[])
         
     if page == 1 and filter_type == "ALL":
-        header = "🧾 <b>Latest 5 Transactions</b>"
+        header = f"🧾 <b>Latest {len(items)} Transactions</b>"
     else:
         header = f"🧾 <b>Transaction History ({filter_type})</b>"
 
     lines = [
         header,
-        f"<i>Page {page} of {total_pages} ({total_count} records)</i>",
-        "━━━━━━━━━━━━━━"
+        f"<i>Page {page} of {max(1, total_pages)} ({total_count} records)</i>",
+        "━━━━━━━━━━━━━━━━━━━━"
     ]
-
     
     for t in items:
         is_recv = t['transaction_type'] == 'RECEIVED'
@@ -91,8 +96,79 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
             f"   💼 Bal: <code>{bal}</code>\n"
         )
     
-    lines.append("━━━━━━━━━━━━━━")
-    return "\n".join(lines), get_history_paginated_keyboard(page, total_pages, filter_type)
+    lines.append("━━━━━━━━━━━━━━━━━━━━\n<i>💡 Tap a transaction # button below to view details, edit, or delete:</i>")
+    return "\n".join(lines), get_history_paginated_keyboard(page, total_pages, filter_type, tx_rows=items)
+
+def render_transaction_detail(tx_id: int):
+    """Renders the detailed view of a single transaction."""
+    from database.queries import get_transaction_by_id
+    from bot.keyboards import get_transaction_detail_keyboard, get_back_to_menu_keyboard
+    tx = get_transaction_by_id(tx_id)
+    if not tx:
+        return "❌ <b>Transaction not found or deleted.</b>", get_back_to_menu_keyboard()
+        
+    is_recv = tx['transaction_type'] == 'RECEIVED'
+    badge = "🟢" if is_recv else "🔴"
+    type_str = "Received (Income)" if is_recv else "Sent (Expense)"
+    amt = format_currency(tx['amount'])
+    person = tx.get('person_name') or 'Unknown'
+    cat = tx.get('category') or 'General'
+    date_val = str(tx.get('transaction_date') or 'N/A')
+    time_val = str(tx.get('transaction_time') or 'N/A')
+    app_val = str(tx.get('payment_app') or 'N/A')
+    bank_val = str(tx.get('bank_name') or 'N/A')
+    ref_val = str(tx.get('reference_number') or 'N/A')
+    bb = format_currency(tx.get('balance_before', 0))
+    ba = format_currency(tx.get('balance_after', 0))
+    uid_val = str(tx.get('uid') or 'N/A')
+    
+    text = (
+        f"📄 <b>Transaction Details #{tx['id']}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"• <b>Type:</b> {badge} {type_str}\n"
+        f"• <b>Amount:</b> <b>{amt}</b>\n"
+        f"• <b>Party:</b> <b>{html.escape(person)}</b>\n"
+        f"• <b>Category:</b> {html.escape(cat)}\n"
+        f"• <b>Date & Time:</b> {html.escape(date_val)} at {html.escape(time_val)}\n"
+        f"• <b>Payment App:</b> {html.escape(app_val)}\n"
+        f"• <b>Bank / Account:</b> {html.escape(bank_val)}\n"
+        f"• <b>Reference / UTR:</b> <code>{html.escape(ref_val)}</code>\n"
+        "────────────────────\n"
+        f"• <b>Balance Before:</b> {bb}\n"
+        f"• <b>Balance After:</b> <b>{ba}</b>\n"
+        f"• <b>UID:</b> <code>{html.escape(uid_val[:16])}...</code>\n"
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+    return text, get_transaction_detail_keyboard(tx_id)
+
+def render_backup_status_text() -> str:
+    """Renders the cloud & local backup status overview."""
+    from database.db import get_db_connection
+    with get_db_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT key, value FROM settings WHERE key IN ('backup_revision', 'last_local_backup_at', 'last_telegram_backup_at', 'last_gdrive_backup_at', 'is_dirty', 'current_balance')")
+        s = {r['key']: r['value'] for r in cur.fetchall()}
+        
+    rev = s.get('backup_revision', '1')
+    local_at = s.get('last_local_backup_at') or 'Never'
+    tg_at = s.get('last_telegram_backup_at') or 'Never'
+    drive_at = s.get('last_gdrive_backup_at') or 'Never (Optional)'
+    is_dirty = s.get('is_dirty', '0') == '1'
+    dirty_badge = "⚠️ Unsaved changes pending backup" if is_dirty else "✅ Up-to-date (Clean)"
+    
+    text = (
+        "☁️ <b>Backup & Disaster Recovery Status</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"• <b>Schema Version:</b> Format v2 (SHA-256 Verified)\n"
+        f"• <b>Database Revision:</b> <code>Rev {rev}</code>\n"
+        f"• <b>Status:</b> {dirty_badge}\n\n"
+        f"💾 <b>Last Local Backup:</b>\n   <code>{local_at}</code>\n"
+        f"✈️ <b>Last Telegram Backup:</b>\n   <code>{tg_at}</code>\n"
+        f"📁 <b>Last Google Drive Backup:</b>\n   <code>{drive_at}</code>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "<i>Automatic backups run on every transaction and before server shutdown.</i>"
+    )
+    return text
 
 def render_contacts_ledger_text() -> str:
     """Generates the Contact Ledger overview."""

@@ -24,19 +24,20 @@ ADMIN_COMMANDS = {
 
 # Callback Action Prefix Policies
 READ_ONLY_CALLBACK_ACTIONS = {
-    "nav", "filter", "sort", "cafe_stats", "cafe_view_menu"
+    "nav", "filter", "sort", "cafe_stats", "cafe_view_menu", "tx_view"
 }
 
 ADMIN_CALLBACK_ACTIONS = {
     # Receipt Card Actions & Pending Edits
     "save_p", "edit_p", "ep_field", "ep_back", "cat_p", "set_pcat", "cancel_p",
-    # Undo & Quick Add
-    "undo_tx", "quick_add", "undo_action",
+    # Undo & Quick Add & Duplicate
+    "undo_tx", "quick_add", "undo_action", "dup_tx", "qa_payee",
     # Legacy Confirm / Cancel
     "confirm_tx", "cancel_tx",
     # Edit / Delete Selection & Prompts
     "select_edit", "select_edit_cancel", "select_delete", "select_delete_cancel",
     "edit_field", "edit_cancel", "delete_confirm", "delete_cancel", "correct_amount",
+    "edit_tx", "delete_tx",
     # Export File Formats
     "export_file",
     # Cafeteria Mutations & Tagging
@@ -45,7 +46,7 @@ ADMIN_CALLBACK_ACTIONS = {
     "cafe_addon", "cafe_edit", "cafe_menu_add_prompt", "cafe_menu_del_prompt",
     "cafe_del_item", "cafe_del_cancel", "cafe_edit_last", "cafe_skip",
     # Backup & Restore Confirmation
-    "restore_confirm", "restore_cancel"
+    "restore_confirm", "restore_cancel", "backup_now"
 }
 
 def get_effective_user_id(update: Update) -> Optional[int]:

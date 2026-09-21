@@ -176,7 +176,39 @@ def parse_amount(amount_str: str) -> float:
     return normalize_amount_string(raw_str)
 
 
+def format_indian_number(num: int) -> str:
+    s = str(abs(num))
+    if len(s) <= 3:
+        res = s
+    else:
+        last_three = s[-3:]
+        remaining = s[:-3]
+        chunks = []
+        while len(remaining) > 2:
+            chunks.insert(0, remaining[-2:])
+            remaining = remaining[:-2]
+        if remaining:
+            chunks.insert(0, remaining)
+        res = ",".join(chunks) + "," + last_three
+    return ("-" if num < 0 else "") + res
+
+
 def format_currency(amount: float) -> str:
     if amount is None:
         return '₹0'
-    return f'₹{amount:,.0f}' if float(amount).is_integer() else f'₹{amount:,.2f}'
+    try:
+        amt = float(amount)
+    except (ValueError, TypeError):
+        return '₹0'
+        
+    is_neg = amt < 0
+    abs_amt = abs(amt)
+    
+    if abs_amt.is_integer():
+        formatted = format_indian_number(int(abs_amt))
+    else:
+        int_part = int(abs_amt)
+        dec_part = f"{abs_amt:.2f}".split('.')[1]
+        formatted = f"{format_indian_number(int_part)}.{dec_part}"
+        
+    return f"-₹{formatted}" if is_neg else f"₹{formatted}"
