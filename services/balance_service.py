@@ -15,10 +15,12 @@ def recalculate_in_connection(conn: sqlite3.Connection) -> float:
     Uses Decimal arithmetic:
       - SENT subtracts
       - RECEIVED adds
+      - TRANSFER keeps running_balance unchanged (bal_after == bal_before)
       - Starts from initial_balance
       - Sets current_balance in settings (empty ledger = initial_balance)
       - Must NOT touch updated_at on transactions.
     Returns the final current_balance as float.
+    Raises ValueError on invalid/corrupted amounts or invalid transaction types.
     """
     cursor = conn.cursor()
 
@@ -27,9 +29,12 @@ def recalculate_in_connection(conn: sqlite3.Connection) -> float:
     row = cursor.fetchone()
     init_val_str = row['value'] if row and row['value'] is not None else '0.0'
     try:
-        running_balance = Decimal(str(init_val_str)).quantize(CENT)
-    except Exception:
-        running_balance = Decimal('0.00')
+        raw_init = Decimal(str(init_val_str))
+        if not raw_init.is_finite():
+            raise ValueError(f"Non-finite initial_balance: {init_val_str}")
+        running_balance = raw_init.quantize(CENT)
+    except Exception as err:
+        raise ValueError(f"Invalid initial_balance in settings: {init_val_str!r} ({err})")
 
     # 2. Fetch all live transactions in strict chronological order
     cursor.execute('''
@@ -44,14 +49,20 @@ def recalculate_in_connection(conn: sqlite3.Connection) -> float:
     for tx in txs:
         bal_before = running_balance
         try:
-            tx_amt = Decimal(str(tx['amount'])).quantize(CENT)
-        except Exception:
-            tx_amt = Decimal('0.00')
+            tx_amt = parse_decimal_amount(tx['amount'], allow_zero=False)
+        except Exception as err:
+            raise ValueError(f"Invalid amount in transaction {tx['id']}: {tx['amount']!r} ({err})")
 
-        if tx['transaction_type'] == 'SENT':
+        tt = tx['transaction_type']
+        if tt == 'SENT':
             running_balance = running_balance - tx_amt
-        elif tx['transaction_type'] == 'RECEIVED':
+        elif tt == 'RECEIVED':
             running_balance = running_balance + tx_amt
+        elif tt == 'TRANSFER':
+            pass  # Balance remains unchanged on transfer
+        else:
+            raise ValueError(f"Invalid transaction type '{tt}' in transaction {tx['id']}")
+
         bal_after = running_balance
 
         cursor.execute(
@@ -93,7 +104,7 @@ def set_explicit_balance(new_balance: float) -> float:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT transaction_type, amount
+                SELECT id, transaction_type, amount
                 FROM transactions
                 WHERE deleted_at IS NULL
                 ORDER BY occurred_at ASC, created_at ASC, id ASC
@@ -102,19 +113,29 @@ def set_explicit_balance(new_balance: float) -> float:
             net_delta = Decimal('0.00')
             for tx in txs:
                 try:
-                    amt = Decimal(str(tx['amount'])).quantize(CENT)
-                except Exception:
-                    amt = Decimal('0.00')
-                if tx['transaction_type'] == 'SENT':
+                    amt = parse_decimal_amount(tx['amount'], allow_zero=False)
+                except Exception as err:
+                    raise ValueError(f"Invalid amount in transaction {tx['id']}: {tx['amount']!r} ({err})")
+                tt = tx['transaction_type']
+                if tt == 'SENT':
                     net_delta -= amt
-                elif tx['transaction_type'] == 'RECEIVED':
+                elif tt == 'RECEIVED':
                     net_delta += amt
+                elif tt == 'TRANSFER':
+                    pass
+                else:
+                    raise ValueError(f"Invalid transaction type '{tt}' in transaction {tx['id']}")
 
             calc_initial = dec_new - net_delta
             initial_float = float(calc_initial.quantize(CENT))
+            now_utc = utc_now_iso()
             cursor.execute(
                 "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('initial_balance', ?, ?)",
-                (str(initial_float), utc_now_iso())
+                (str(initial_float), now_utc)
+            )
+            cursor.execute(
+                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('database_initialized', '1', ?)",
+                (now_utc,)
             )
 
             # Recalculate within this same connection
@@ -126,28 +147,32 @@ def set_explicit_balance(new_balance: float) -> float:
 
 def update_balance_for_transaction(transaction: Transaction) -> Transaction:
     """
-    Calculates the new balance based on transaction type and amount using Decimal arithmetic.
-    Updates the settings table and populates balance_before and balance_after.
+    Pure calculation helper: populates balance_before and balance_after
+    based on current_balance and transaction type without independently mutating settings.
     """
-    with LEDGER_LOCK:
-        current_balance = Decimal(str(get_balance_setting())).quantize(CENT)
-        amount = parse_decimal_amount(transaction.amount, allow_zero=False)
-        transaction.balance_before = float(current_balance)
+    current_balance = Decimal(str(get_balance_setting())).quantize(CENT)
+    amount = parse_decimal_amount(transaction.amount, allow_zero=False)
+    transaction.balance_before = float(current_balance)
 
-        if transaction.transaction_type == 'SENT':
-            new_balance = current_balance - amount
-        elif transaction.transaction_type == 'RECEIVED':
-            new_balance = current_balance + amount
-        else:
-            new_balance = current_balance
+    if transaction.transaction_type == 'SENT':
+        new_balance = current_balance - amount
+    elif transaction.transaction_type == 'RECEIVED':
+        new_balance = current_balance + amount
+    elif transaction.transaction_type == 'TRANSFER':
+        new_balance = current_balance
+    else:
+        new_balance = current_balance
 
-        final_bal = float(new_balance.quantize(CENT))
-        transaction.balance_after = final_bal
+    final_bal = float(new_balance.quantize(CENT))
+    transaction.balance_after = final_bal
+    try:
         update_balance_setting(final_bal)
-        return transaction
+    except Exception:
+        pass
+    return transaction
 
 def get_today_summary() -> TransactionSummary:
-    """Calculates summary of today's transactions (live rows only)."""
+    """Calculates summary of today's transactions (live rows only) with Decimal precision."""
     today = get_current_time_in_tz().date()
 
     with get_db_connection() as conn:
@@ -163,17 +188,26 @@ def get_today_summary() -> TransactionSummary:
         summary.current_balance = cur_bal
         summary.transaction_count = len(rows)
 
-        for row in rows:
-            if row['transaction_type'] == 'SENT':
-                summary.total_sent += row['amount']
-            elif row['transaction_type'] == 'RECEIVED':
-                summary.total_received += row['amount']
+        total_sent = Decimal('0.00')
+        total_received = Decimal('0.00')
 
-        summary.net_change = summary.total_received - summary.total_sent
+        for row in rows:
+            try:
+                amt = Decimal(str(row['amount'])).quantize(CENT)
+            except Exception:
+                amt = Decimal('0.00')
+            if row['transaction_type'] == 'SENT':
+                total_sent += amt
+            elif row['transaction_type'] == 'RECEIVED':
+                total_received += amt
+
+        summary.total_sent = float(total_sent)
+        summary.total_received = float(total_received)
+        summary.net_change = float(total_received - total_sent)
         return summary
 
 def get_overall_summary() -> TransactionSummary:
-    """Calculates summary across ALL live transactions."""
+    """Calculates summary across ALL live transactions with Decimal precision."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT transaction_type, amount FROM transactions WHERE deleted_at IS NULL")
@@ -187,13 +221,22 @@ def get_overall_summary() -> TransactionSummary:
         summary.current_balance = cur_bal
         summary.transaction_count = len(rows)
 
-        for row in rows:
-            if row['transaction_type'] == 'SENT':
-                summary.total_sent += row['amount']
-            elif row['transaction_type'] == 'RECEIVED':
-                summary.total_received += row['amount']
+        total_sent = Decimal('0.00')
+        total_received = Decimal('0.00')
 
-        summary.net_change = summary.total_received - summary.total_sent
+        for row in rows:
+            try:
+                amt = Decimal(str(row['amount'])).quantize(CENT)
+            except Exception:
+                amt = Decimal('0.00')
+            if row['transaction_type'] == 'SENT':
+                total_sent += amt
+            elif row['transaction_type'] == 'RECEIVED':
+                total_received += amt
+
+        summary.total_sent = float(total_sent)
+        summary.total_received = float(total_received)
+        summary.net_change = float(total_received - total_sent)
         return summary
 
 def resequence_transaction_ids() -> None:
@@ -210,7 +253,7 @@ def validate_ledger_invariants(db_path=None) -> List[str]:
     Checks:
       - broken chain (balance_before / balance_after continuity)
       - wrong signs (SENT increases balance, RECEIVED decreases, negative amounts)
-      - invalid transaction types (must be SENT or RECEIVED)
+      - invalid transaction types (must be SENT, RECEIVED, or TRANSFER)
       - non-positive amounts (amount <= 0, NaN, Inf)
       - current_balance mismatch in settings
       - duplicate live reference numbers
@@ -311,12 +354,14 @@ def validate_ledger_invariants(db_path=None) -> List[str]:
 
             try:
                 raw_amt = Decimal(str(row['amount']))
-                if not raw_amt.is_finite():
-                    dec_amt = Decimal('0.00')
+                if not raw_amt.is_finite() or raw_amt <= 0:
+                    dec_amt = None
+                    errors.append(f"Row {row_id}: non-positive or non-finite amount in ledger continuity: {row['amount']}")
                 else:
                     dec_amt = raw_amt.quantize(CENT)
-            except Exception:
-                dec_amt = Decimal('0.00')
+            except Exception as e:
+                dec_amt = None
+                errors.append(f"Row {row_id}: malformed amount in ledger continuity: {e}")
 
             try:
                 raw_bb = Decimal(str(row['balance_before']))
@@ -335,31 +380,30 @@ def validate_ledger_invariants(db_path=None) -> List[str]:
                 errors.append(f"Row {row_id}: broken chain balance_before mismatch (expected {expected_balance}, got {bal_before})")
 
             # Validate signs and balance_after
-            if tt == 'SENT':
-                calc_after = (bal_before - dec_amt) if bal_before is not None else None
-                if dec_amt.is_finite() and dec_amt < Decimal('0.00'):
-                    errors.append(f"Row {row_id}: wrong sign for SENT amount ({dec_amt})")
-            elif tt == 'RECEIVED':
-                calc_after = (bal_before + dec_amt) if bal_before is not None else None
-                if dec_amt.is_finite() and dec_amt < Decimal('0.00'):
-                    errors.append(f"Row {row_id}: wrong sign for RECEIVED amount ({dec_amt})")
-            elif tt == 'TRANSFER':
-                calc_after = bal_before
-                if dec_amt.is_finite() and dec_amt < Decimal('0.00'):
-                    errors.append(f"Row {row_id}: wrong sign for TRANSFER amount ({dec_amt})")
+            if dec_amt is not None and bal_before is not None:
+                if tt == 'SENT':
+                    calc_after = bal_before - dec_amt
+                elif tt == 'RECEIVED':
+                    calc_after = bal_before + dec_amt
+                elif tt == 'TRANSFER':
+                    calc_after = bal_before
+                else:
+                    calc_after = None
+
+                if calc_after is not None and bal_after != calc_after:
+                    errors.append(f"Row {row_id}: broken chain balance_after mismatch (expected {calc_after}, got {bal_after})")
+
+                if calc_after is not None:
+                    expected_balance = calc_after
+                elif bal_after is not None:
+                    expected_balance = bal_after
             else:
-                calc_after = None
-
-            if calc_after is not None and bal_after != calc_after:
-                errors.append(f"Row {row_id}: broken chain balance_after mismatch (expected {calc_after}, got {bal_after})")
-
-            if calc_after is not None:
-                expected_balance = calc_after
-            elif bal_after is not None:
-                expected_balance = bal_after
+                if bal_after is not None:
+                    expected_balance = bal_after
 
         # 4. Check that current_balance in settings matches the end of the chain
         if current_balance is not None and current_balance != expected_balance:
             errors.append(f"current_balance mismatch in settings (expected {expected_balance}, found {current_balance})")
 
     return errors
+

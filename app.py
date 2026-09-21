@@ -5,6 +5,7 @@ import asyncio
 import json
 import urllib.parse
 import hmac
+import html
 import threading
 from datetime import datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -94,7 +95,18 @@ async def on_startup(app):
             logger.debug(f"Image cleanup notice: {e}")
 
     except Exception as e:
-        logger.warning(f"Startup initialization notice: {e}")
+        logger.error(f"Critical error during startup restore and initialization: {e}", exc_info=True)
+        # Block backup if startup failed critically so we don't upload a corrupted/uninitialized database
+        try:
+            from database.db import get_db_connection, LEDGER_LOCK
+            from utils.dates import utc_now_iso
+            with LEDGER_LOCK:
+                with get_db_connection() as conn:
+                    now_utc = utc_now_iso()
+                    conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('backup_blocked', '1', ?)", (now_utc,))
+                    conn.commit()
+        except Exception as set_err:
+            logger.error(f"Failed to set backup_blocked flag during startup failure: {set_err}")
 
 async def on_stop(app):
     """Executes graceful final backup before HTTP client closes, only if dirty, with 10s timeout."""
@@ -248,7 +260,7 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                     f"<style>body{{font-family:sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:20px;text-align:center;}}"
                     f".card{{background:#1e293b;padding:30px;border-radius:12px;max-width:400px;border:1px solid #334155;}}"
                     f"h2{{color:#ef4444;margin-top:0;}}p{{color:#94a3b8;line-height:1.5;}}code{{background:#0f172a;padding:4px 8px;border-radius:4px;color:#38bdf8;}}</style></head>"
-                    f"<body><div class='card'><h2>🔒 Access Denied</h2><p>{result_msg}</p><p>Please run <code>/dashboard</code> in Telegram to generate a fresh 60-second login link.</p></div></body></html>"
+                    f"<body><div class='card'><h2>🔒 Access Denied</h2><p>{html.escape(str(result_msg))}</p><p>Please run <code>/dashboard</code> in Telegram to generate a fresh 60-second login link.</p></div></body></html>"
                 )
                 self.wfile.write(error_html.encode('utf-8'))
                 return
@@ -395,10 +407,24 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
             from database.queries import get_transactions_paginated
 
             try:
-                page = int(query_params.get("page", ["1"])[0])
-                page_size = min(int(query_params.get("page_size", ["50"])[0]), 200)
+                page_raw = query_params.get("page", ["1"])[0]
+                page = int(page_raw)
+                if page < 1:
+                    raise ValueError("Page must be >= 1")
             except (ValueError, TypeError):
-                page, page_size = 1, 50
+                self._send_security_headers(400, 'application/json', is_api=True)
+                self.wfile.write(json.dumps({"error": "Invalid page parameter. Must be an integer >= 1."}).encode('utf-8'))
+                return
+
+            try:
+                page_size_raw = query_params.get("page_size", ["50"])[0]
+                page_size = int(page_size_raw)
+                if not (1 <= page_size <= 200):
+                    raise ValueError("Page size must be between 1 and 200")
+            except (ValueError, TypeError):
+                self._send_security_headers(400, 'application/json', is_api=True)
+                self.wfile.write(json.dumps({"error": "Invalid page_size parameter. Must be an integer between 1 and 200."}).encode('utf-8'))
+                return
 
             year, month = None, None
             if "year" in query_params:
@@ -423,10 +449,19 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
 
             search = query_params.get("search", [""])[0].strip() or None
             tx_type = query_params.get("type", [""])[0].strip() or None
+            if tx_type and tx_type.upper() not in ('SENT', 'RECEIVED', 'TRANSFER', 'ALL'):
+                self._send_security_headers(400, 'application/json', is_api=True)
+                self.wfile.write(json.dumps({"error": "Invalid type parameter. Must be SENT, RECEIVED, TRANSFER, or ALL."}).encode('utf-8'))
+                return
 
-            data = get_transactions_paginated(page=page, page_size=page_size, search=search, transaction_type=tx_type, year=year, month=month)
-            self._send_security_headers(200, 'application/json', is_api=True)
-            self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+            try:
+                data = get_transactions_paginated(page=page, page_size=page_size, search=search, tx_type=tx_type, year=year, month=month)
+                self._send_security_headers(200, 'application/json', is_api=True)
+                self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+            except Exception as query_err:
+                logger.error(f"Error querying paginated transactions: {query_err}", exc_info=True)
+                self._send_security_headers(500, 'application/json', is_api=True)
+                self.wfile.write(json.dumps({"error": "Internal server error fetching transactions."}).encode('utf-8'))
             return
 
         # 6. Protected CSV Export API
