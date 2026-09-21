@@ -349,6 +349,19 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                         'count': int(c['count'])
                     })
 
+            from database.db import get_db_connection
+            with get_db_connection() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT key, value FROM settings WHERE key IN ('backup_revision', 'last_local_backup_at', 'last_telegram_backup_at', 'is_dirty')")
+                b_settings = {r['key']: r['value'] for r in cur.fetchall()}
+
+            backup_status = {
+                'revision': int(b_settings.get('backup_revision', '1')),
+                'last_local_backup_at': b_settings.get('last_local_backup_at') or 'Never',
+                'last_telegram_backup_at': b_settings.get('last_telegram_backup_at') or 'Never',
+                'is_dirty': b_settings.get('is_dirty', '0') == '1'
+            }
+
             payload = {
                 'year': year,
                 'month': month,
@@ -364,7 +377,8 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                 'categories': sent_categories,
                 'daily_series': daily_series,
                 'top_payees': top_payees,
-                'recent_transactions': txs_data['transactions']
+                'recent_transactions': txs_data['transactions'],
+                'backup_status': backup_status
             }
 
             self._send_security_headers(200, 'application/json', is_api=True)
