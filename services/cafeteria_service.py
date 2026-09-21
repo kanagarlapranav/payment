@@ -115,61 +115,72 @@ def get_all_menu_items() -> List[MenuItem]:
     return items
 
 def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea", is_veg: bool = True) -> Tuple[bool, str]:
-    """Adds a new custom vegetarian item to the cafeteria menu database."""
-    name_clean = name.strip().title()
-    if not name_clean:
-        return False, "Item name cannot be empty."
-    if price <= 0:
-        return False, "Price must be greater than 0."
+    """Adds a new custom vegetarian item to the cafeteria menu database with validation and locking."""
+    from database.db import LEDGER_LOCK, get_db_connection
+    from utils.validation import parse_decimal_amount, validate_string_length
 
-    # Strict Pure Vegetarian Policy Check
-    non_veg_keywords = ["chicken", "egg", "omelette", "omlet", "fish", "meat", "mutton", "beef", "pork", "prawn", "crab"]
-    if any(nvk in name_clean.lower() for nvk in non_veg_keywords) or not is_veg:
-        return False, "⚠️ Only vegetarian items are permitted in this cafeteria tracker."
-
-    # Prevent duplicates
-    all_items = get_all_menu_items()
-    if any(it.name.lower() == name_clean.lower() for it in all_items):
-        return False, f"Item '<b>{name_clean}</b>' already exists in the menu."
-
-    try:
-        from database.db import get_db_connection
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT OR REPLACE INTO custom_menu_items (name, price, category, is_veg) VALUES (?, ?, ?, 1)",
-                (name_clean, float(price), category)
-            )
-            conn.commit()
+    with LEDGER_LOCK:
         try:
-            from services.backup_service import export_database_to_json
-            export_database_to_json()
-        except Exception:
-            pass
-        return True, f"✅ Added '<b>{name_clean}</b>' (₹{price:.0f}) to {category}!"
-    except Exception as e:
-        return False, f"Database error: {e}"
+            name_clean = validate_string_length(name, max_length=100, field_name="Item name", required=True).title()
+        except ValueError as val_err:
+            return False, str(val_err)
+
+        try:
+            dec_price = parse_decimal_amount(price, allow_zero=False)
+            price_val = float(dec_price)
+        except ValueError as err:
+            return False, f"Invalid price: {err}"
+
+        category_clean = validate_string_length(category, max_length=50, field_name="Category") or "Snacks & Tea"
+
+        # Strict Pure Vegetarian Policy Check
+        non_veg_keywords = ["chicken", "egg", "omelette", "omlet", "fish", "meat", "mutton", "beef", "pork", "prawn", "crab"]
+        if any(nvk in name_clean.lower() for nvk in non_veg_keywords) or not is_veg:
+            return False, "⚠️ Only vegetarian items are permitted in this cafeteria tracker."
+
+        # Prevent duplicates
+        all_items = get_all_menu_items()
+        if any(it.name.lower() == name_clean.lower() for it in all_items):
+            return False, f"Item '<b>{name_clean}</b>' already exists in the menu."
+
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT OR REPLACE INTO custom_menu_items (name, price, category, is_veg) VALUES (?, ?, ?, 1)",
+                    (name_clean, price_val, category_clean)
+                )
+                conn.commit()
+            try:
+                from services.backup_service import export_database_to_json
+                export_database_to_json()
+            except Exception:
+                pass
+            return True, f"✅ Added '<b>{name_clean}</b>' (₹{price_val:.0f}) to {category_clean}!"
+        except Exception as e:
+            return False, f"Database error: {e}"
 
 
 def delete_custom_menu_item(name: str) -> Tuple[bool, str]:
-    """Deletes a custom item from the menu."""
-    try:
-        from database.db import get_db_connection
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM custom_menu_items WHERE lower(name) = lower(?)", (name.strip(),))
-            if cursor.rowcount > 0:
-                conn.commit()
-                try:
-                    from services.backup_service import export_database_to_json
-                    export_database_to_json()
-                except Exception:
-                    pass
-                return True, f"🗑️ Removed '<b>{name}</b>' from menu."
-            else:
-                return False, f"Item '<b>{name}</b>' not found in custom items."
-    except Exception as e:
-        return False, f"Error deleting item: {e}"
+    """Deletes a custom item from the menu under LEDGER_LOCK."""
+    from database.db import LEDGER_LOCK, get_db_connection
+    with LEDGER_LOCK:
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM custom_menu_items WHERE lower(name) = lower(?)", (name.strip(),))
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    try:
+                        from services.backup_service import export_database_to_json
+                        export_database_to_json()
+                    except Exception:
+                        pass
+                    return True, f"🗑️ Removed '<b>{name}</b>' from menu."
+                else:
+                    return False, f"Item '<b>{name}</b>' not found in custom items."
+        except Exception as e:
+            return False, f"Error deleting item: {e}"
 
 from database.db import get_custom_menu_items, delete_custom_menu_item_by_id
 

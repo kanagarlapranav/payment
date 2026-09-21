@@ -63,6 +63,7 @@ def format_receipt_card(transaction, dup_warning: str = None) -> str:
 
 def parse_short_entry(text: str):
     """Parses short quick entries like '120 dosa', '+500 salary', '-25 snacks', 'coffee 15'."""
+    from utils.validation import parse_decimal_amount
     text = text.strip()
     # Patterns like "+500 salary", "500 salary", "120 dosa", "-20 tea"
     m = re.match(r'^([+-]?)\s*(?:₹|rs\.?)?\s*(\d+(?:\.\d+)?)\s+(?:for\s+|to\s+|from\s+)?(.+)$', text, re.IGNORECASE)
@@ -72,12 +73,18 @@ def parse_short_entry(text: str):
         if m_rev:
             name = m_rev.group(1).strip()
             sign = m_rev.group(2)
-            amt = float(m_rev.group(3))
+            try:
+                amt = float(parse_decimal_amount(m_rev.group(3), allow_zero=False))
+            except ValueError:
+                return None
             tx_type = "RECEIVED" if sign == '+' else "SENT"
             return amt, tx_type, name
         return None
     sign = m.group(1)
-    amt = float(m.group(2))
+    try:
+        amt = float(parse_decimal_amount(m.group(2), allow_zero=False))
+    except ValueError:
+        return None
     name = m.group(3).strip()
     tx_type = "RECEIVED" if sign == '+' else "SENT"
     return amt, tx_type, name
@@ -610,8 +617,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     elif action == "quick_add":
-        amt = float(parts[1])
-        payee = parts[2]
+        from utils.validation import parse_decimal_amount, validate_name
+        try:
+            amt = float(parse_decimal_amount(parts[1], allow_zero=False))
+            payee = validate_name(parts[2], max_length=120)
+        except ValueError as err:
+            await query.edit_message_text(f"❌ Invalid quick entry: {err}")
+            return
         cat = parts[3] if len(parts) > 3 else "Food & Dining"
         from database.models import Transaction
         now_dt = get_current_time_in_tz()
@@ -1473,23 +1485,33 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         needs_recalc = False
 
         if field == 'amount':
-            new_amt = parse_amount(text)
-            if new_amt <= 0:
-                await update.message.reply_text("❌ Invalid amount. Please enter a valid positive number:")
+            try:
+                from utils.validation import parse_decimal_amount
+                new_amt = float(parse_decimal_amount(text, allow_zero=False))
+            except ValueError as err:
+                await update.message.reply_text(f"❌ Invalid amount: {err}. Please enter a valid positive number:")
                 return
             updates['amount'] = new_amt
             needs_recalc = True
         elif field == 'person':
-            updates['person_name'] = text.title()
+            from utils.validation import validate_name
+            try:
+                clean_name = validate_name(text.title(), max_length=120, field_name="Person name", required=True)
+            except ValueError as err:
+                await update.message.reply_text(f"❌ Invalid name: {err}")
+                return
+            updates['person_name'] = clean_name
             tx = get_transaction_by_id(tx_id)
             if tx and tx['transaction_type'] == 'SENT':
-                updates['recipient_name'] = text.title()
+                updates['recipient_name'] = clean_name
             else:
-                updates['sender_name'] = text.title()
+                updates['sender_name'] = clean_name
         elif field == 'type':
-            new_type = text.upper()
-            if new_type not in ('SENT', 'RECEIVED'):
-                await update.message.reply_text("❌ Please enter <code>SENT</code> or <code>RECEIVED</code>:", parse_mode='HTML')
+            try:
+                from utils.validation import validate_transaction_type
+                new_type = validate_transaction_type(text)
+            except ValueError as err:
+                await update.message.reply_text(f"❌ Invalid type: {err}. Please enter <code>SENT</code> or <code>RECEIVED</code>:", parse_mode='HTML')
                 return
             updates['transaction_type'] = new_type
             needs_recalc = True
@@ -1501,7 +1523,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             updates['transaction_date'] = parsed_d
             needs_recalc = True
         elif field == 'ref':
-            updates['reference_number'] = text
+            from utils.validation import validate_reference
+            try:
+                updates['reference_number'] = validate_reference(text, max_length=100)
+            except ValueError as err:
+                await update.message.reply_text(f"❌ Invalid reference: {err}")
+                return
 
         tx = get_transaction_by_id(tx_id)
         if tx:
@@ -1558,7 +1585,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         item_type = context.user_data.pop('cafe_item', 'Custom')
         context.user_data.pop('action', None)
         
-        parsed_amt = parse_amount(text)
+        try:
+            from utils.validation import parse_decimal_amount
+            parsed_amt = float(parse_decimal_amount(text, allow_zero=False))
+        except ValueError:
+            parsed_amt = 0.0
         custom_note = text.strip()
         
         if tx_id:
@@ -1597,6 +1628,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif pending_action == 'waiting_add_menu_item':
         context.user_data.pop('action', None)
         from services.cafeteria_service import add_custom_menu_item
+        from utils.validation import parse_decimal_amount
         full_arg = text.strip()
         name, price, category = None, None, "Custom"
         if "," in full_arg:
@@ -1604,7 +1636,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             name = parts[0]
             if len(parts) > 1:
                 try:
-                    price = float(parts[1])
+                    price = float(parse_decimal_amount(parts[1], allow_zero=False))
                 except ValueError:
                     price = None
             if len(parts) > 2:
@@ -1614,7 +1646,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             price_idx = -1
             for idx, tok in enumerate(tokens):
                 try:
-                    p_val = float(tok)
+                    p_val = float(parse_decimal_amount(tok, allow_zero=False))
                     if p_val > 0:
                         price = p_val
                         price_idx = idx
@@ -1673,19 +1705,41 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if field == 'amount':
-            val = parse_amount(text)
-            if val > 0:
+            try:
+                from utils.validation import parse_decimal_amount
+                val = float(parse_decimal_amount(text, allow_zero=False))
                 transaction.amount = val
+            except ValueError as err:
+                await update.message.reply_text(f"❌ Invalid amount: {err}. Please send a positive number:")
+                context.user_data['pending_id'] = pending_id
+                context.user_data['pending_field'] = field
+                context.user_data['action'] = 'waiting_edit_pending_value'
+                return
         elif field == 'person':
-            transaction.person_name = text.strip()
-            if transaction.transaction_type == 'SENT':
-                transaction.recipient_name = text.strip()
-            else:
-                transaction.sender_name = text.strip()
+            from utils.validation import validate_name
+            try:
+                p_name = validate_name(text.strip(), max_length=120, field_name="Person name", required=True)
+                transaction.person_name = p_name
+                if transaction.transaction_type == 'SENT':
+                    transaction.recipient_name = p_name
+                else:
+                    transaction.sender_name = p_name
+            except ValueError as err:
+                await update.message.reply_text(f"❌ Invalid name: {err}. Please enter a valid name:")
+                context.user_data['pending_id'] = pending_id
+                context.user_data['pending_field'] = field
+                context.user_data['action'] = 'waiting_edit_pending_value'
+                return
         elif field == 'type':
-            t_val = text.strip().upper()
-            if t_val in ('SENT', 'RECEIVED'):
-                transaction.transaction_type = t_val
+            try:
+                from utils.validation import validate_transaction_type
+                transaction.transaction_type = validate_transaction_type(text)
+            except ValueError as err:
+                await update.message.reply_text(f"❌ Invalid type: {err}. Must be SENT or RECEIVED:")
+                context.user_data['pending_id'] = pending_id
+                context.user_data['pending_field'] = field
+                context.user_data['action'] = 'waiting_edit_pending_value'
+                return
         elif field == 'date':
             d_val = parse_date(text)
             if d_val:

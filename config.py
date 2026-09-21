@@ -8,10 +8,24 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / 'data'
+
+# DATA_DIR can be overridden via environment variable (e.g. DATA_DIR=/var/data or C:\data).
+# Note on SQLite WAL Reliability: SQLite Write-Ahead Logging (-wal) mode uses companion shared-memory
+# (-shm) and write-ahead log (-wal) files. When databases are placed inside cloud-synced folders
+# (such as Microsoft OneDrive, Dropbox, or Google Drive for Desktop), the background file synchronization
+# engines periodically lock or asynchronously copy these ephemeral files, causing spurious
+# 'database is locked' errors, disk I/O latency, or potential database corruption. Setting DATA_DIR
+# to a local, non-cloud-synced directory avoids these locking hazards.
+raw_data_dir = os.getenv('DATA_DIR')
+if raw_data_dir and raw_data_dir.strip():
+    DATA_DIR = Path(raw_data_dir.strip()).resolve()
+else:
+    DATA_DIR = BASE_DIR / 'data'
+
 IMAGE_DIR = DATA_DIR / 'images'
-LOG_DIR = BASE_DIR / 'logs'
-DB_PATH = DATA_DIR / 'database.sqlite3'
+LOG_DIR = Path(os.getenv('LOG_DIR', str(BASE_DIR / 'logs'))).resolve()
+DB_PATH = Path(os.getenv('DATABASE_PATH', str(DATA_DIR / 'database.sqlite3'))).resolve()
+BACKUP_JSON_PATH = DATA_DIR / 'backup_transactions.json'
 
 # Ensure directories exist safely
 DATA_DIR.mkdir(parents=True, exist_ok=True)
