@@ -11,6 +11,7 @@ from services.export_service import generate_excel_report
 from utils.currency import format_currency, parse_amount
 from utils.dates import parse_date, get_current_time_in_tz, format_display_date
 from datetime import datetime
+import asyncio
 import html
 import os
 from bot.keyboards import (
@@ -110,7 +111,7 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
 def render_transaction_detail(tx_id: int):
     """Renders the detailed view of a single transaction."""
     from database.queries import get_transaction_by_id
-    from bot.keyboards import get_transaction_detail_keyboard, get_back_to_menu_keyboard
+    from bot.keyboards import get_transaction_detail_keyboard
     tx = get_transaction_by_id(tx_id)
     if not tx:
         return "❌ <b>Transaction not found or deleted.</b>", get_back_to_menu_keyboard()
@@ -961,17 +962,17 @@ async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def send_pdf_report(chat, bot):
-    import asyncio
     from services.export_service import generate_pdf_statement
     from services.gdrive_service import is_gdrive_available, upload_statement_to_drive
+    from services.task_manager import create_tracked_task
     export_path = DATA_DIR / "Payment_Tracker_Statement.pdf"
     try:
         await asyncio.to_thread(generate_pdf_statement, str(export_path))
         if is_gdrive_available():
-            try:
-                asyncio.create_task(asyncio.to_thread(upload_statement_to_drive, str(export_path)))
-            except Exception:
-                pass
+            create_tracked_task(
+                asyncio.to_thread(upload_statement_to_drive, str(export_path)),
+                name="gdrive_pdf_statement_upload"
+            )
         with open(export_path, 'rb') as f:
             await bot.send_document(
                 chat_id=chat.id,
@@ -989,17 +990,16 @@ async def send_pdf_report(chat, bot):
             except OSError: pass
 
 async def send_excel_report(chat, bot):
-    import asyncio
-    from services.export_service import generate_excel_report
     from services.gdrive_service import is_gdrive_available, upload_statement_to_drive
+    from services.task_manager import create_tracked_task
     export_path = DATA_DIR / "transactions_export.xlsx"
     try:
         await asyncio.to_thread(generate_excel_report, str(export_path))
         if is_gdrive_available():
-            try:
-                asyncio.create_task(asyncio.to_thread(upload_statement_to_drive, str(export_path)))
-            except Exception:
-                pass
+            create_tracked_task(
+                asyncio.to_thread(upload_statement_to_drive, str(export_path)),
+                name="gdrive_excel_report_upload"
+            )
         with open(export_path, 'rb') as f:
             await bot.send_document(
                 chat_id=chat.id,
