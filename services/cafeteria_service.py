@@ -150,6 +150,8 @@ def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea"
                     "INSERT OR REPLACE INTO custom_menu_items (name, price, category, is_veg) VALUES (?, ?, ?, 1)",
                     (name_clean, price_val, category_clean)
                 )
+                from database.queries import increment_revision_and_mark_dirty
+                increment_revision_and_mark_dirty(conn)
                 conn.commit()
             try:
                 from services.backup_service import export_database_to_json
@@ -170,6 +172,8 @@ def delete_custom_menu_item(name: str) -> Tuple[bool, str]:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM custom_menu_items WHERE lower(name) = lower(?)", (name.strip(),))
                 if cursor.rowcount > 0:
+                    from database.queries import increment_revision_and_mark_dirty
+                    increment_revision_and_mark_dirty(conn)
                     conn.commit()
                     try:
                         from services.backup_service import export_database_to_json

@@ -500,12 +500,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 f"{budget_alert}"
             )
             await query.edit_message_text(saved_text, reply_markup=get_quick_undo_keyboard(transaction.id), parse_mode='HTML')
-            try:
-                from services.backup_service import backup_to_telegram, export_database_to_json
-                export_database_to_json()
-                asyncio.create_task(backup_to_telegram(context.bot))
-            except Exception:
-                pass
+            from services.task_manager import schedule_debounced_backup
+            schedule_debounced_backup(context.bot)
         else:
             await query.edit_message_text("⚠️ Transaction could not be saved (possibly duplicate).", reply_markup=get_back_to_menu_keyboard())
         return
@@ -598,22 +594,23 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if not tx:
             await query.edit_message_text("❌ Transaction not found or already removed.", reply_markup=get_back_to_menu_keyboard())
             return
-        delete_transaction(tx_id)
-        new_bal = recalculate_all_balances()
-        try:
-            from services.backup_service import backup_to_telegram, export_database_to_json
-            export_database_to_json()
-            await backup_to_telegram(context.bot)
-        except Exception as bkp_err:
-            logger.debug(f"Undo backup notice: {bkp_err}")
-        await query.edit_message_text(
-            f"↩️ <b>Transaction #{tx_id} Undone!</b>\n"
-            "━━━━━━━━━━━━━━\n"
-            f"Payment reverted from your ledger.\n"
-            f"💼 <b>Current Balance:</b> <b>{format_currency(new_bal)}</b>",
-            reply_markup=get_back_to_menu_keyboard(),
-            parse_mode='HTML'
-        )
+        deleted = delete_transaction(tx_id)
+        if deleted:
+            new_bal = recalculate_all_balances()
+            from services.backup_service import backup_to_telegram
+            backed_up = await backup_to_telegram(context.bot)
+            status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
+            await query.edit_message_text(
+                f"↩️ <b>Transaction #{tx_id} Undone!</b>\n"
+                "━━━━━━━━━━━━━━\n"
+                f"Payment reverted from your ledger.\n"
+                f"💼 <b>Current Balance:</b> <b>{format_currency(new_bal)}</b>\n\n"
+                f"<b>Status:</b> {status_line}",
+                reply_markup=get_back_to_menu_keyboard(),
+                parse_mode='HTML'
+            )
+        else:
+            await query.edit_message_text("❌ Nothing was saved: Transaction not found.", reply_markup=get_back_to_menu_keyboard())
         return
 
     elif action == "quick_add":
@@ -648,12 +645,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 reply_markup=get_quick_undo_keyboard(tx.id),
                 parse_mode='HTML'
             )
-            try:
-                from services.backup_service import backup_to_telegram, export_database_to_json
-                export_database_to_json()
-                asyncio.create_task(backup_to_telegram(context.bot))
-            except Exception:
-                pass
+            from services.task_manager import schedule_debounced_backup
+            schedule_debounced_backup(context.bot)
         return
 
     # 1. OCR Confirmation / Cancellation (Legacy fallback)
@@ -670,10 +663,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             if success:
                 response = format_success_message(transaction)
                 await query.edit_message_text(response, parse_mode='HTML')
-                try:
-                    asyncio.create_task(backup_to_telegram(context.bot))
-                except Exception:
-                    pass
+                from services.task_manager import schedule_debounced_backup
+                schedule_debounced_backup(context.bot)
             else:
                 await query.edit_message_text("⚠️ Transaction already recorded.")
             del pending_transactions[tx_id]
@@ -772,16 +763,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         success = delete_transaction(tx_id)
         if success:
             new_bal = recalculate_all_balances()
-            backup_status = "✅"
-            try:
-                from services.backup_service import backup_to_telegram, export_database_to_json
-                export_database_to_json()
-                backed_up = await backup_to_telegram(context.bot)
-                if not backed_up:
-                    backup_status = "⚠️ (cloud backup pending)"
-            except Exception as bkp_err:
-                logger.warning(f"Delete cloud backup notice: {bkp_err}")
-                backup_status = "⚠️ (cloud backup pending)"
+            from services.backup_service import backup_to_telegram
+            backed_up = await backup_to_telegram(context.bot)
+            status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
 
             if is_gdrive_available():
                 try:
@@ -793,15 +777,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     pass
             from bot.keyboards import get_undo_keyboard
             await query.edit_message_text(
-                f"🗑️ <b>Transaction #{tx_id} Deleted {backup_status}</b>\n\n"
+                f"🗑️ <b>Transaction #{tx_id} Deleted</b>\n\n"
                 f"• <b>Amount:</b> {html.escape(amt_str)}\n"
                 f"• <b>Person:</b> {html.escape(str(person))}\n\n"
-                f"💰 <b>Updated Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>",
+                f"💰 <b>Updated Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>\n\n"
+                f"<b>Status:</b> {status_line}",
                 reply_markup=get_undo_keyboard(),
                 parse_mode='HTML'
             )
         else:
-            await query.edit_message_text("❌ Failed to delete transaction.")
+            await query.edit_message_text("❌ Nothing was saved: Failed to delete transaction.")
 
     elif action == "delete_cancel":
         if not is_admin_user(update):
@@ -819,13 +804,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         user_id = update.effective_user.id if update.effective_user else None
         success, msg = perform_undo(chat_id=chat_id, user_id=user_id)
         if success:
-            try:
-                asyncio.create_task(backup_to_telegram(context.bot))
-            except Exception:
-                pass
-            await query.edit_message_text(msg, parse_mode='HTML')
+            from services.backup_service import backup_to_telegram
+            backed_up = await backup_to_telegram(context.bot)
+            status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
+            await query.edit_message_text(f"{msg}\n\n<b>Status:</b> {status_line}", parse_mode='HTML')
         else:
-            await query.edit_message_text(f"ℹ️ {msg}", parse_mode='HTML')
+            await query.edit_message_text(f"❌ Nothing was saved: {msg}", parse_mode='HTML')
 
 
     # 4b. Correct Amount for Existing Transaction
@@ -839,10 +823,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         success = update_transaction(tx_id, {'amount': new_amt})
         if success:
             new_bal = recalculate_all_balances()
-            try:
-                asyncio.create_task(backup_to_telegram(context.bot))
-            except Exception:
-                pass
+            from services.task_manager import schedule_debounced_backup
+            schedule_debounced_backup(context.bot)
             if is_gdrive_available():
                 try:
                     from config import DATA_DIR
@@ -981,11 +963,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if tx:
             new_name = f"VIKRAMAN NAIR K (Cafeteria: {item_name})"
             update_transaction(tx_id, {'person_name': new_name, 'category': 'Food & Dining'})
-            try:
-                from services.backup_service import backup_to_telegram
-                asyncio.create_task(backup_to_telegram(context.bot))
-            except Exception:
-                pass
+            from services.task_manager import schedule_debounced_backup
+            schedule_debounced_backup(context.bot)
             amt_s = format_currency(tx['amount'])
             bal_s = format_currency(tx['balance_after'])
             from bot.keyboards import get_cafeteria_tagged_keyboard
@@ -1110,11 +1089,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             item_names = " + ".join([it['name'] for it in cart])
             new_name = f"VIKRAMAN NAIR K (Cafeteria: {item_names})"
             update_transaction(tx_id, {'person_name': new_name, 'category': 'Food & Dining'})
-            try:
-                from services.backup_service import backup_to_telegram
-                asyncio.create_task(backup_to_telegram(context.bot))
-            except Exception:
-                pass
+            from services.task_manager import schedule_debounced_backup
+            schedule_debounced_backup(context.bot)
             amt_s = format_currency(tx['amount'])
             bal_s = format_currency(tx['balance_after'])
             from bot.keyboards import get_cafeteria_tagged_keyboard
@@ -1558,11 +1534,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 bal_flow = f"\n💰 <b>Balance Flow:</b> {html.escape(format_currency(updated_tx['balance_before']))} ➔ <b>{html.escape(format_currency(updated_tx['balance_after']))}</b>"
 
             from bot.keyboards import get_undo_keyboard
-            try:
-                from services.backup_service import backup_to_telegram
-                asyncio.create_task(backup_to_telegram(context.bot))
-            except Exception:
-                pass
+            from services.task_manager import schedule_debounced_backup
+            schedule_debounced_backup(context.bot)
             if is_gdrive_available():
                 try:
                     from config import DATA_DIR
@@ -1606,11 +1579,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                 new_name = f"VIKRAMAN NAIR K (Cafeteria: {tag_desc})"
                 update_transaction(tx_id, {'person_name': new_name, 'category': 'Food & Dining'})
-                try:
-                    from services.backup_service import backup_to_telegram
-                    asyncio.create_task(backup_to_telegram(context.bot))
-                except Exception:
-                    pass
+                from services.task_manager import schedule_debounced_backup
+                schedule_debounced_backup(context.bot)
                 amt_s = format_currency(tx['amount'])
                 bal_s = format_currency(tx['balance_after'])
                 from bot.keyboards import get_cafeteria_tagged_keyboard
@@ -1817,12 +1787,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_quick_undo_keyboard(tx.id),
                 parse_mode='HTML'
             )
-            try:
-                from services.backup_service import backup_to_telegram, export_database_to_json
-                export_database_to_json()
-                asyncio.create_task(backup_to_telegram(context.bot))
-            except Exception:
-                pass
+            from services.task_manager import schedule_debounced_backup
+            schedule_debounced_backup(context.bot)
             return
 
     # Try parsing text as a transaction
@@ -1844,10 +1810,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         response += "\n\n🍽️ <b>Cafeteria Bill Detected!</b> Select your menu item below:"
 
                     await update.message.reply_text(response, reply_markup=markup, parse_mode='HTML')
-                    try:
-                        asyncio.create_task(backup_to_telegram(context.bot))
-                    except Exception:
-                        pass
+                    from services.task_manager import schedule_debounced_backup
+                    schedule_debounced_backup(context.bot)
                 else:
                     await update.message.reply_text("⚠️ Transaction already recorded.")
                 return

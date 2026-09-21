@@ -1,11 +1,16 @@
 import os
+import re
 import json
 import sqlite3
 import hashlib
+import threading
+import uuid
+import asyncio
 from pathlib import Path
 from datetime import datetime
 from config import DATA_DIR, DB_PATH, TELEGRAM_GROUP_ID, TELEGRAM_USER_ID, logger
 from database.db import get_db_connection, LEDGER_LOCK
+from utils.dates import utc_now_iso
 from utils.validation import (
     parse_decimal_amount,
     validate_transaction_type,
@@ -14,88 +19,137 @@ from utils.validation import (
 )
 
 BACKUP_JSON_PATH = DATA_DIR / 'backup_transactions.json'
+EXPORT_LOCK = threading.RLock()
 
 def export_database_to_json(output_path: Path = None) -> dict:
     """
-    Exports all transactions (including tombstones), custom menu items, and settings
-    to a versioned JSON structure (Format v2) and saves to disk under LEDGER_LOCK.
-    Refuses to overwrite existing backup if the database is empty (Zero-Data-Loss protection).
+    Exports all transactions (including tombstones), custom menu items, budgets, and settings
+    to a versioned JSON structure (Format v2) and saves to disk atomically under EXPORT_LOCK and LEDGER_LOCK.
+    Refuses to overwrite existing backup if the database has 0 transactions (Zero-Data-Loss protection).
+    Does NOT increment revision on export (revision increases per committed mutation).
     """
     path = output_path or BACKUP_JSON_PATH
-    with LEDGER_LOCK:
-        try:
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
+    with EXPORT_LOCK:
+        with LEDGER_LOCK:
+            try:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    
+                    # 1. Total row count check (Zero-Data-Loss safety)
+                    cursor.execute("SELECT COUNT(*) FROM transactions")
+                    total_rows = cursor.fetchone()[0]
+                    if total_rows == 0:
+                        logger.warning("Database contains 0 transactions. Refusing to overwrite backup with empty database.")
+                        return {}
+
+                    cursor.execute("SELECT * FROM transactions ORDER BY occurred_at ASC, created_at ASC, id ASC")
+                    tx_rows = [dict(row) for row in cursor.fetchall()]
+                    
+                    # Format dates/timestamps for JSON serialization
+                    for tx in tx_rows:
+                        for k, v in tx.items():
+                            if isinstance(v, (datetime, )):
+                                tx[k] = v.isoformat()
+                            elif v is not None and not isinstance(v, (int, float, str, bool)):
+                                tx[k] = str(v)
+                                
+                    # Fetch settings (do NOT increment revision on export)
+                    cursor.execute("SELECT key, value FROM settings")
+                    settings = {row['key']: row['value'] for row in cursor.fetchall()}
+                    rev = int(settings.get('backup_revision', '1'))
+
+                    # Ensure database_id exists
+                    db_id = settings.get('database_id')
+                    now_utc = utc_now_iso()
+                    if not db_id:
+                        db_id = str(uuid.uuid4())
+                        cursor.execute(
+                            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('database_id', ?, ?)",
+                            (db_id, now_utc)
+                        )
+                        settings['database_id'] = db_id
+
+                    # Fetch custom cafeteria menu dishes
+                    cursor.execute("SELECT name, price, category, is_veg FROM custom_menu_items ORDER BY id ASC")
+                    menu_items = [dict(row) for row in cursor.fetchall()]
+
+                    # Fetch budgets if table exists
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='budgets'")
+                    if cursor.fetchone():
+                        cursor.execute("SELECT * FROM budgets")
+                        budgets = [dict(row) for row in cursor.fetchall()]
+                    else:
+                        budgets = []
+
+                    # Fetch live transactions count and derived balance
+                    cursor.execute("SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL")
+                    live_count = cursor.fetchone()[0]
+                    cursor.execute("SELECT value FROM settings WHERE key = 'current_balance'")
+                    bal_row = cursor.fetchone()
+                    current_balance = float(bal_row['value']) if bal_row else 0.0
+
+                    # Record local backup timestamp in settings
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_local_backup_at', ?, ?)",
+                        (now_utc, now_utc)
+                    )
+                    settings['last_local_backup_at'] = now_utc
+                    conn.commit()
+
+                # Build payload for canonical checksum
+                payload_for_hash = {
+                    "version": 2,
+                    "revision": rev,
+                    "settings": settings,
+                    "custom_menu_items": menu_items,
+                    "budgets": budgets,
+                    "transactions": tx_rows,
+                }
+                canonical_str = json.dumps(
+                    payload_for_hash,
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    separators=(',', ':')
+                )
+                checksum = hashlib.sha256(canonical_str.encode('utf-8')).hexdigest()
+
+                backup_data = {
+                    "version": 2,
+                    "database_id": db_id,
+                    "revision": rev,
+                    "exported_at": now_utc,
+                    "transaction_count": len(tx_rows),
+                    "live_count": live_count,
+                    "empty_ledger": (live_count == 0),
+                    "balance": current_balance,
+                    "settings": settings,
+                    "custom_menu_items": menu_items,
+                    "budgets": budgets,
+                    "transactions": tx_rows,
+                    "checksum": checksum,
+                }
                 
-                # 1. Total row count check (Zero-Data-Loss safety)
-                cursor.execute("SELECT COUNT(*) FROM transactions")
-                total_rows = cursor.fetchone()[0]
-                if total_rows == 0:
-                    logger.warning("Database contains 0 transactions. Refusing to overwrite backup with empty database.")
-                    return {}
-
-                cursor.execute("SELECT * FROM transactions ORDER BY id ASC")
-                tx_rows = [dict(row) for row in cursor.fetchall()]
-                
-                # Format dates/timestamps for JSON serialization
-                for tx in tx_rows:
-                    for k, v in tx.items():
-                        if isinstance(v, (datetime, )):
-                            tx[k] = v.isoformat()
-                        elif v is not None and not isinstance(v, (int, float, str, bool)):
-                            tx[k] = str(v)
-                            
-                # Fetch settings and increment revision
-                cursor.execute("SELECT key, value FROM settings")
-                settings = {row['key']: row['value'] for row in cursor.fetchall()}
-                rev = int(settings.get('backup_revision', '1')) + 1
-                cursor.execute("UPDATE settings SET value = ? WHERE key = 'backup_revision'", (str(rev),))
-                settings['backup_revision'] = str(rev)
-
-                # Fetch custom cafeteria menu dishes
-                cursor.execute("SELECT name, price, category, is_veg FROM custom_menu_items")
-                menu_items = [dict(row) for row in cursor.fetchall()]
-
-                # Fetch live transactions count and derived balance
-                cursor.execute("SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL")
-                live_count = cursor.fetchone()[0]
-                cursor.execute("SELECT value FROM settings WHERE key = 'current_balance'")
-                bal_row = cursor.fetchone()
-                current_balance = float(bal_row['value']) if bal_row else 0.0
-
-            # Build payload for checksum
-            payload_for_hash = {
-                "version": 2,
-                "revision": rev,
-                "transactions": tx_rows,
-                "custom_menu_items": menu_items,
-                "settings": settings
-            }
-            canonical_str = json.dumps(payload_for_hash, sort_keys=True, ensure_ascii=False)
-            checksum = hashlib.sha256(canonical_str.encode('utf-8')).hexdigest()
-
-            backup_data = {
-                "version": 2,
-                "revision": rev,
-                "checksum": checksum,
-                "exported_at": datetime.now().isoformat(),
-                "transaction_count": len(tx_rows),
-                "live_count": live_count,
-                "balance": current_balance,
-                "settings": settings,
-                "custom_menu_items": menu_items,
-                "transactions": tx_rows
-            }
-            
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(backup_data, f, indent=2, ensure_ascii=False)
-                
-            logger.info(f"Exported {len(tx_rows)} transactions (v2, rev {rev}, {live_count} live) to JSON backup at {path}")
-            return backup_data
-        except Exception as e:
-            logger.error(f"Error exporting database to JSON: {e}", exc_info=True)
-            return {}
+                # Atomic file write: write to .tmp file, flush, fsync, then replace
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}_{threading.get_ident()}")
+                try:
+                    with open(tmp_path, 'w', encoding='utf-8') as f:
+                        json.dump(backup_data, f, indent=2, ensure_ascii=False)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    tmp_path.replace(path)
+                finally:
+                    if tmp_path.exists():
+                        try:
+                            tmp_path.unlink()
+                        except OSError:
+                            pass
+                    
+                logger.info(f"Exported {len(tx_rows)} transactions (v2, rev {rev}, {live_count} live, empty_ledger={live_count == 0}) to JSON backup at {path}")
+                return backup_data
+            except Exception as e:
+                logger.error(f"Error exporting database to JSON: {e}", exc_info=True)
+                return {}
 
 def import_database_from_json(input_path: Path = None, data_dict: dict = None) -> dict:
     """
@@ -338,30 +392,78 @@ def record_confirmed_backup(timestamp_iso: str = None) -> str:
     logger.info(f"Recorded confirmed backup upload timestamp: {ts}")
     return ts
 
-async def backup_to_telegram(bot, chat_id: str = None) -> bool:
-    """
-    Exports the current database to JSON (Format v2) and uploads it to Telegram as a pinned backup document.
-    Never uploads if database contains 0 transactions.
-    Records confirmed backup timestamp upon success.
-    """
-    target_chat = chat_id or TELEGRAM_GROUP_ID or TELEGRAM_USER_ID
-    if not target_chat or not bot:
-        logger.warning("No Telegram chat or bot available for cloud backup.")
-        return False
-        
+def mark_dirty():
+    """Marks database dirty in settings table."""
     try:
-        data = export_database_to_json()
+        now_utc = utc_now_iso()
+        with LEDGER_LOCK:
+            with get_db_connection() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('is_dirty', '1', ?)",
+                    (now_utc,)
+                )
+                conn.commit()
+    except Exception as e:
+        logger.debug(f"Notice marking dirty: {e}")
+
+async def backup_to_telegram(bot, chat_id: str = None, timeout: float = 20.0, force: bool = False) -> bool:
+    """
+    Exports current database to JSON (Format v2) and uploads it to Telegram as a pinned backup document.
+    Never uploads if database contains 0 transactions (including tombstones).
+    Refuses upload if local revision is lower than newest cloud revision.
+    Rotates backup messages retaining the last 7; older ones are removed/unpinned only after upload confirmation.
+    Awaits cloud backup with configurable timeout (default 20s).
+    """
+    async def _do_backup() -> bool:
+        target_chat = chat_id or TELEGRAM_GROUP_ID or TELEGRAM_USER_ID
+        if not target_chat or not bot:
+            logger.warning("No Telegram chat or bot available for cloud backup.")
+            mark_dirty()
+            return False
+            
+        with EXPORT_LOCK:
+            data = export_database_to_json()
+
         if not data or not BACKUP_JSON_PATH.exists():
+            logger.warning("No valid backup data generated or backup file missing.")
+            mark_dirty()
             return False
             
         tx_count = data.get("transaction_count", 0)
-        live_count = data.get("live_count", tx_count)
+        live_count = data.get("live_count", 0)
         rev = data.get("revision", 1)
+
+        # Empty rule: if transactions table has ZERO rows including tombstones, never upload
         if tx_count == 0:
-            logger.warning("Skipping Telegram cloud backup: 0 transactions.")
+            logger.warning("Empty rule enforced: database contains 0 transactions (including tombstones). Refusing cloud backup.")
             return False
 
-        caption = f"#PAYMENT_TRACKER_BACKUP_V2 ☁️ Auto-Backup Rev {rev} ({tx_count} records, {live_count} live)"
+        # Cloud revision check: refuse if local revision is lower than newest cloud revision
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM settings WHERE key = 'last_backup_ok_revision'")
+            row = cursor.fetchone()
+            last_ok_rev = int(row['value']) if row and row['value'] and str(row['value']).isdigit() else 0
+
+        if rev < last_ok_rev and not force:
+            logger.warning(f"Refusing to upload backup: local revision ({rev}) is lower than last confirmed cloud revision ({last_ok_rev}).")
+            return False
+
+        try:
+            chat = await bot.get_chat(chat_id=target_chat)
+            pinned = getattr(chat, 'pinned_message', None)
+            if pinned and pinned.caption:
+                m = re.search(r"Rev\s+(\d+)", pinned.caption)
+                if m:
+                    cloud_rev = int(m.group(1))
+                    if rev < cloud_rev and not force:
+                        logger.warning(f"Refusing to upload backup: local revision ({rev}) is lower than cloud revision ({cloud_rev}).")
+                        return False
+        except Exception as chat_err:
+            logger.debug(f"Notice inspecting cloud chat pinned revision: {chat_err}")
+
+        ledger_status = "live" if live_count > 0 else "empty active ledger"
+        caption = f"#PAYMENT_TRACKER_BACKUP_V2 ☁️ Auto-Backup Rev {rev} ({tx_count} records, {live_count} {ledger_status})"
 
         with open(BACKUP_JSON_PATH, 'rb') as doc_file:
             msg = await bot.send_document(
@@ -372,22 +474,80 @@ async def backup_to_telegram(bot, chat_id: str = None) -> bool:
                 disable_notification=True
             )
             
+        # Pin new message
         try:
-            # Pin the latest backup silently so it can always be retrieved on fresh boots
             await bot.pin_chat_message(
                 chat_id=target_chat,
                 message_id=msg.message_id,
                 disable_notification=True
             )
         except Exception as pin_err:
-            logger.info(f"Could not pin backup message (maybe not admin or already pinned): {pin_err}")
-            
-        # Record confirmed backup upload timestamp in settings
-        record_confirmed_backup()
+            logger.debug(f"Notice pinning new backup message: {pin_err}")
+
+        # Rotate backup messages: retain last 7 message IDs
+        to_prune = []
+        now_utc = utc_now_iso()
+        with LEDGER_LOCK:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT value FROM settings WHERE key = 'telegram_backup_message_ids'")
+                row = cursor.fetchone()
+                try:
+                    msg_ids = json.loads(row['value']) if row and row['value'] else []
+                except Exception:
+                    msg_ids = []
+                if not isinstance(msg_ids, list):
+                    msg_ids = []
+
+                msg_ids.append(msg.message_id)
+                if len(msg_ids) > 7:
+                    to_prune = msg_ids[:-7]
+                    msg_ids = msg_ids[-7:]
+
+                cursor.execute(
+                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('telegram_backup_message_ids', ?, ?)",
+                    (json.dumps(msg_ids), now_utc)
+                )
+                cursor.execute(
+                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_telegram_backup_at', ?, ?)",
+                    (now_utc, now_utc)
+                )
+                cursor.execute(
+                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_confirmed_backup_at', ?, ?)",
+                    (now_utc, now_utc)
+                )
+                cursor.execute(
+                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_backup_ok_revision', ?, ?)",
+                    (str(rev), now_utc)
+                )
+                cursor.execute(
+                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('is_dirty', '0', ?)",
+                    (now_utc,)
+                )
+                conn.commit()
+
+        # Remove or unpin older backup messages only after confirmed upload
+        for old_id in to_prune:
+            try:
+                await bot.delete_message(chat_id=target_chat, message_id=old_id)
+            except Exception:
+                try:
+                    await bot.unpin_chat_message(chat_id=target_chat, message_id=old_id)
+                except Exception:
+                    pass
+
         logger.info(f"Successfully backed up database (v2, rev {rev}) to Telegram cloud.")
         return True
+
+    try:
+        return await asyncio.wait_for(_do_backup(), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning(f"Telegram backup timed out after {timeout} seconds.")
+        mark_dirty()
+        return False
     except Exception as e:
         logger.error(f"Failed to backup database to Telegram: {e}", exc_info=True)
+        mark_dirty()
         return False
 
 async def restore_from_telegram(bot, chat_id: str = None) -> bool:

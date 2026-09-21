@@ -11,6 +11,28 @@ from utils.validation import (
 )
 from config import logger
 
+def increment_revision_and_mark_dirty(conn) -> int:
+    """
+    Increments the persisted backup_revision counter in settings by 1 and marks is_dirty = '1'.
+    Must be called inside the active database transaction of a committed mutation under LEDGER_LOCK.
+    Returns the new revision integer.
+    """
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = 'backup_revision'")
+    row = cursor.fetchone()
+    current_rev = int(row['value']) if row and str(row['value']).isdigit() else 1
+    new_rev = current_rev + 1
+    now_utc = utc_now_iso()
+    cursor.execute(
+        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('backup_revision', ?, ?)",
+        (str(new_rev), now_utc)
+    )
+    cursor.execute(
+        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('is_dirty', '1', ?)",
+        (now_utc,)
+    )
+    return new_rev
+
 def insert_transaction_with_balance(t: Transaction) -> int:
     """
     Inserts a transaction and recalculates the balance chain atomically.
@@ -94,6 +116,7 @@ def insert_transaction_with_balance(t: Transaction) -> int:
 
             # Step 5: Recalculate chain in this connection
             recalculate_in_connection(conn)
+            increment_revision_and_mark_dirty(conn)
 
             # Step 6: Commit happens on exit of context manager
             return new_id
@@ -154,6 +177,7 @@ def insert_transaction(t: Transaction) -> int:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(query, values)
+            increment_revision_and_mark_dirty(conn)
             conn.commit()
             return cursor.lastrowid
 
@@ -384,6 +408,9 @@ def update_transaction(tx_id: int, updates: dict) -> bool:
             if any(f in validated_updates for f in balance_fields):
                 recalculate_in_connection(conn)
 
+            if success:
+                increment_revision_and_mark_dirty(conn)
+
             conn.commit()
             return success
 
@@ -408,6 +435,7 @@ def delete_transaction(tx_id: int) -> bool:
 
             if deleted:
                 recalculate_in_connection(conn)
+                increment_revision_and_mark_dirty(conn)
 
             conn.commit()
             return deleted
@@ -433,6 +461,7 @@ def delete_transaction_by_uid(uid: str) -> bool:
 
             if deleted:
                 recalculate_in_connection(conn)
+                increment_revision_and_mark_dirty(conn)
 
             conn.commit()
             return deleted
@@ -467,6 +496,7 @@ def restore_soft_deleted_transaction(uid: str = None, tx_id: int = None) -> bool
 
             if restored:
                 recalculate_in_connection(conn)
+                increment_revision_and_mark_dirty(conn)
 
             conn.commit()
             return restored
@@ -479,6 +509,7 @@ def update_balance_setting(new_balance: float):
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('current_balance', ?, ?)", (bal_str, utc_now_iso()))
+            increment_revision_and_mark_dirty(conn)
             conn.commit()
 
 def get_balance_setting() -> float:
@@ -504,6 +535,7 @@ def set_budget_setting(amount: float):
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('monthly_budget', ?, ?)", (str(float(dec_amount)), utc_now_iso()))
+            increment_revision_and_mark_dirty(conn)
             conn.commit()
 
 def get_monthly_spending(year: int, month: int) -> float:

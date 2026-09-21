@@ -5,6 +5,7 @@ timer to send automatic daily digests at 9:00 PM IST.
 """
 import time
 import threading
+import asyncio
 from datetime import datetime, timezone, timedelta
 from database.queries import get_daily_summary_stats, get_balance_setting, get_monthly_spending, get_budget_setting
 from services.category_service import get_category_icon
@@ -102,18 +103,22 @@ def format_daily_digest(target_date_str: str = None) -> str:
 
 
 class DailyDigestScheduler:
-    """Lightweight background thread that checks IST time and delivers 9:00 PM digests."""
-    def __init__(self, bot_instance=None, target_chat_id=None):
+    """Lightweight background thread that checks IST time and delivers 9:00 PM digests, plus retries dirty cloud backups every 60s."""
+    def __init__(self, bot_instance=None, target_chat_id=None, loop=None):
         self.bot = bot_instance
         self.target_chat_id = target_chat_id or TELEGRAM_GROUP_ID or TELEGRAM_USER_ID
+        self.loop = loop
         self.last_sent_date = None
+        self._last_retry_time = 0.0
         self._running = False
         self._thread = None
         
-    def set_bot(self, bot_instance, chat_id=None):
+    def set_bot(self, bot_instance, chat_id=None, loop=None):
         self.bot = bot_instance
         if chat_id:
             self.target_chat_id = chat_id
+        if loop:
+            self.loop = loop
             
     def start(self):
         if self._running:
@@ -121,7 +126,7 @@ class DailyDigestScheduler:
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True, name="DailyDigestThread")
         self._thread.start()
-        logger.info("Daily 9:00 PM Digest Scheduler started.")
+        logger.info("Daily 9:00 PM Digest Scheduler and 60s Backup Retry Job started.")
         
     def stop(self):
         self._running = False
@@ -137,11 +142,15 @@ class DailyDigestScheduler:
                     if self.bot and self.target_chat_id:
                         try:
                             digest_text = format_daily_digest(today_str)
-                            self.bot.send_message(
-                                chat_id=self.target_chat_id,
-                                text=digest_text,
-                                parse_mode='HTML'
-                            )
+                            if self.loop and not self.loop.is_closed():
+                                asyncio.run_coroutine_threadsafe(
+                                    self.bot.send_message(
+                                        chat_id=self.target_chat_id,
+                                        text=digest_text,
+                                        parse_mode='HTML'
+                                    ),
+                                    self.loop
+                                )
                             self.last_sent_date = today_str
                             logger.info(f"Sent 9:00 PM daily digest for {today_str} to chat {self.target_chat_id}")
                         except Exception as send_err:
@@ -153,12 +162,35 @@ class DailyDigestScheduler:
                             purge_eligible_tombstones()
                         except Exception as m_err:
                             logger.debug(f"Scheduled maintenance notice: {m_err}")
+
+                # 60-second dirty retry job
+                if time.time() - self._last_retry_time >= 60.0:
+                    self._last_retry_time = time.time()
+                    try:
+                        from database.db import get_db_connection
+                        is_dirty = False
+                        with get_db_connection() as conn:
+                            cur = conn.cursor()
+                            cur.execute("SELECT value FROM settings WHERE key = 'is_dirty'")
+                            row = cur.fetchone()
+                            if row and row['value'] == '1':
+                                is_dirty = True
+                        if is_dirty and self.bot:
+                            logger.info("Scheduler: database is dirty. Triggering retry cloud backup...")
+                            if self.loop and not self.loop.is_closed():
+                                from services.backup_service import backup_to_telegram
+                                asyncio.run_coroutine_threadsafe(
+                                    backup_to_telegram(self.bot, self.target_chat_id),
+                                    self.loop
+                                )
+                    except Exception as retry_err:
+                        logger.debug(f"Scheduler dirty retry notice: {retry_err}")
                             
-                # Sleep for 30 seconds before next check
-                time.sleep(30)
+                # Sleep for 10 seconds before next check
+                time.sleep(10)
             except Exception as e:
                 logger.error(f"Error in scheduler loop: {e}")
-                time.sleep(60)
+                time.sleep(30)
 
 # Global scheduler singleton
 scheduler = DailyDigestScheduler()
