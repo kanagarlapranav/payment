@@ -1,7 +1,66 @@
+from datetime import date, datetime, timezone
 import re
-from datetime import datetime, date
+from typing import Any
 import pytz
-from config import DEFAULT_TIMEZONE
+from config import DEFAULT_TIMEZONE, logger
+
+def utc_now_iso() -> str:
+    """Returns timezone-aware UTC datetime formatted as ISO 8601 with microseconds."""
+    return datetime.now(timezone.utc).isoformat()
+
+def build_occurred_at(tx_date: Any, tx_time: Any) -> str:
+    """
+    Builds a canonical occurred_at timestamp string in 'YYYY-MM-DD HH:MM:SS' format
+    from transaction_date and transaction_time (12-hour or 24-hour).
+    If tx_time is blank or unparsable, defaults to '00:00:00' (logging unparsable inputs).
+    """
+    # 1. Parse and canonicalize date part
+    date_part = None
+    if isinstance(tx_date, (datetime, date)):
+        date_part = tx_date.strftime("%Y-%m-%d")
+    elif tx_date:
+        s_date = str(tx_date).strip()
+        # Direct YYYY-MM-DD match
+        m = re.match(r"^(\d{4}-\d{2}-\d{2})", s_date)
+        if m:
+            date_part = m.group(1)
+        else:
+            parsed = parse_date(s_date)
+            if parsed:
+                date_part = parsed.strftime("%Y-%m-%d")
+
+    if not date_part:
+        date_part = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # 2. Parse and canonicalize time part
+    time_part = "00:00:00"
+    if tx_time is not None:
+        raw_t = str(tx_time).strip()
+        if raw_t:
+            cleaned_t = re.sub(r"\s+", " ", raw_t).upper().replace(".", ":")
+            # Separate digits and AM/PM if stuck together (e.g. 10:02AM -> 10:02 AM)
+            cleaned_t = re.sub(r"(\d{1,2}:\d{2}(?::\d{2})?)\s*([AP]M)", r"\1 \2", cleaned_t)
+
+            time_formats = [
+                "%I:%M %p",
+                "%I:%M:%S %p",
+                "%H:%M:%S",
+                "%H:%M",
+            ]
+            parsed_time = None
+            for fmt in time_formats:
+                try:
+                    parsed_time = datetime.strptime(cleaned_t, fmt).time()
+                    time_part = parsed_time.strftime("%H:%M:%S")
+                    break
+                except ValueError:
+                    continue
+
+            if not parsed_time:
+                logger.warning(f"Unparsable transaction_time: {tx_time!r}, defaulting to 00:00:00")
+                time_part = "00:00:00"
+
+    return f"{date_part} {time_part}"
 
 def get_current_time_in_tz():
     """Returns current datetime in default timezone."""
