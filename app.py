@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import asyncio
 import json
 import urllib.parse
 import hmac
@@ -65,22 +66,35 @@ async def on_startup(app):
     except Exception as e:
         logger.warning(f"Startup initialization notice: {e}")
 
-    # Hook bot instance into background scheduler in its own decoupled block
+    # Hook bot instance and event loop into background scheduler in its own decoupled block
     try:
-        scheduler.set_bot(app.bot)
+        scheduler.set_bot(app.bot, loop=asyncio.get_running_loop())
         scheduler.start()
         logger.info("Background scheduler started successfully.")
     except Exception as sched_err:
         logger.error(f"Scheduler startup error: {sched_err}")
 
-async def on_shutdown(app):
-    """Executes graceful final backup on SIGTERM or container stop."""
+async def on_stop(app):
+    """Executes graceful final backup before HTTP client closes, only if dirty, with 10s timeout."""
     try:
+        from database.db import get_db_connection
+        is_dirty = False
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT value FROM settings WHERE key = 'is_dirty'")
+            row = cur.fetchone()
+            if row and row['value'] == '1':
+                is_dirty = True
+
+        if not is_dirty:
+            logger.info("Shutdown hook (post_stop): database is clean. Skipping final cloud backup.")
+            return
+
         from services.backup_service import backup_to_telegram, export_database_to_json
-        logger.info("Executing graceful pre-shutdown database backup...")
+        logger.info("Shutdown hook (post_stop): database is dirty. Executing final database backup before HTTP client closes (10s timeout)...")
         export_database_to_json()
-        await backup_to_telegram(app.bot)
-        logger.info("Pre-shutdown backup completed.")
+        await backup_to_telegram(app.bot, timeout=10.0)
+        logger.info("Shutdown hook: final backup completed.")
     except Exception as e:
         logger.warning(f"Shutdown backup notice: {e}")
 
@@ -88,7 +102,7 @@ def build_application():
     """Builds and configures the Telegram Application."""
     setup_database()
     req = HTTPXRequest(read_timeout=60.0, write_timeout=60.0, connect_timeout=30.0, pool_timeout=60.0)
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(req).post_init(on_startup).post_shutdown(on_shutdown).build()
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(req).post_init(on_startup).post_stop(on_stop).build()
 
     # Core commands
     app.add_handler(CommandHandler("start", start_command))

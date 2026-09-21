@@ -699,10 +699,8 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bal_flow = f"\n💰 *Balance Flow:* {format_currency(updated_tx['balance_before'])} ➔ *{format_currency(updated_tx['balance_after'])}"
 
         from bot.keyboards import get_undo_keyboard
-        try:
-            asyncio.create_task(backup_to_telegram(context.bot))
-        except Exception:
-            pass
+        from services.task_manager import schedule_debounced_backup
+        schedule_debounced_backup(context.bot)
         await update.message.reply_text(
             f"✅ *Transaction #{tx_id} Updated*\n\n"
             f"👤 *Person:* {person}\n"
@@ -789,13 +787,11 @@ async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         from utils.validation import parse_decimal_amount
         new_balance = float(parse_decimal_amount(context.args[0], allow_zero=True))
         final_bal = set_explicit_balance(new_balance)
-        try:
-            asyncio.create_task(backup_to_telegram(context.bot))
-        except Exception:
-            pass
-        await update.message.reply_text(f"✅ Balance set to {format_currency(final_bal)}")
-    except ValueError as val_err:
-        await update.message.reply_text(f"❌ Invalid amount format: {val_err}. Example: /setbalance 50000")
+        backed_up = await backup_to_telegram(context.bot)
+        status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
+        await update.message.reply_text(f"✅ Balance set to {format_currency(final_bal)}\n{status_line}")
+    except Exception as val_err:
+        await update.message.reply_text(f"❌ Nothing was saved: {val_err}")
 
 
 async def send_pdf_report(chat, bot):
@@ -945,10 +941,8 @@ async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         raw_amt = "".join(context.args)
         amt = float(parse_decimal_amount(raw_amt, allow_zero=True))
         msg = set_budget(amt)
-        try:
-            asyncio.create_task(backup_to_telegram(context.bot))
-        except Exception:
-            pass
+        from services.task_manager import schedule_debounced_backup
+        schedule_debounced_backup(context.bot)
         await update.message.reply_text(msg, parse_mode='HTML')
     except ValueError as val_err:
         await update.message.reply_text(f"❌ Invalid amount format: {val_err}. Example: <code>/setbudget 20000</code>", parse_mode='HTML')
@@ -1168,8 +1162,12 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Restoring ledger from backup via idempotent upsert...")
     result = import_database_from_json()
     if not result.get('success'):
-        await update.message.reply_text(f"❌ Restore failed: {html.escape(str(result.get('error')))}", parse_mode='HTML')
+        await update.message.reply_text(f"❌ Nothing was saved: {html.escape(str(result.get('error')))}", parse_mode='HTML')
         return
+
+    from services.backup_service import backup_to_telegram
+    backed_up = await backup_to_telegram(context.bot)
+    status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
 
     txs = get_all_transactions()
     ins = result.get('inserted', 0)
@@ -1179,7 +1177,8 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• <b>{ins}</b> new records inserted.\n"
         f"• <b>{upd}</b> existing records updated.\n"
         f"• <b>{len(txs)}</b> active live transactions now available.\n"
-        f"• Permanent UIDs & running balances verified.\n\n"
+        f"• Permanent UIDs & running balances verified.\n"
+        f"• <b>Cloud Status:</b> {status_line}\n\n"
         f"Use <code>/history</code> or <code>/balance</code> to view restored transactions.",
         parse_mode='HTML'
     )
@@ -1196,13 +1195,11 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     success, msg = perform_undo(chat_id=chat_id, user_id=user_id)
     if success:
-        try:
-            asyncio.create_task(backup_to_telegram(context.bot))
-        except Exception:
-            pass
-        await update.message.reply_text(msg, parse_mode='HTML')
+        backed_up = await backup_to_telegram(context.bot)
+        status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
+        await update.message.reply_text(f"{msg}\n{status_line}", parse_mode='HTML')
     else:
-        await update.message.reply_text(f"ℹ️ {msg}", parse_mode='HTML')
+        await update.message.reply_text(f"❌ Nothing was saved: {msg}", parse_mode='HTML')
 
 
 

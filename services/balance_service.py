@@ -119,6 +119,8 @@ def set_explicit_balance(new_balance: float) -> float:
 
             # Recalculate within this same connection
             final_bal = recalculate_in_connection(conn)
+            from database.queries import increment_revision_and_mark_dirty
+            increment_revision_and_mark_dirty(conn)
             conn.commit()
             return final_bal
 

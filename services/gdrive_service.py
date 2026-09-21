@@ -141,4 +141,19 @@ def upload_statement_to_drive(file_path: str) -> str | None:
 
 def upload_backup_to_drive(file_path: str) -> str | None:
     """Uploads a JSON database backup snapshot to Google Drive."""
-    return upload_file_to_drive(file_path, destination_folder_name="Backups")
+    drive_id = upload_file_to_drive(file_path, destination_folder_name="Backups")
+    if drive_id:
+        try:
+            from database.db import get_db_connection, LEDGER_LOCK
+            from utils.dates import utc_now_iso
+            now_utc = utc_now_iso()
+            with LEDGER_LOCK:
+                with get_db_connection() as conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_drive_backup_at', ?, ?)",
+                        (now_utc, now_utc)
+                    )
+                    conn.commit()
+        except Exception as e:
+            logger.debug(f"Notice updating last_drive_backup_at: {e}")
+    return drive_id

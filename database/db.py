@@ -1,5 +1,6 @@
 import sqlite3
 import threading
+import uuid
 from contextlib import contextmanager
 from config import DB_PATH, logger
 
@@ -177,11 +178,23 @@ def setup_database():
                     logger.info(f"Executed schema migration v3: backfilled occurred_at for {len(backfill_rows)} rows, stamped updated_at with {mig_time}")
 
                 now_utc = utc_now_iso()
+                # Ensure permanent database_id exists
+                cursor.execute("SELECT value FROM settings WHERE key = 'database_id'")
+                db_id_row = cursor.fetchone()
+                if not db_id_row:
+                    cursor.execute("INSERT INTO settings (key, value, updated_at) VALUES ('database_id', ?, ?)", (str(uuid.uuid4()), now_utc))
+
                 # Ensure default settings exist without overwriting live values
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('initial_balance', '0.0', now_utc))
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('current_balance', '0.0', now_utc))
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('monthly_budget', '0.0', now_utc))
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('backup_revision', '1', now_utc))
+                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('is_dirty', '0', now_utc))
+                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('last_backup_ok_revision', '0', now_utc))
+                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('telegram_backup_message_ids', '[]', now_utc))
+                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('last_local_backup_at', '', now_utc))
+                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('last_telegram_backup_at', '', now_utc))
+                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('last_drive_backup_at', '', now_utc))
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('schema_version', '3', now_utc))
                 
                 conn.commit()
@@ -207,7 +220,9 @@ def delete_custom_menu_item_by_id(item_id: int):
             if not row:
                 return False, "Item not found"
             name = row['name']
+            from database.queries import increment_revision_and_mark_dirty
             cursor.execute("DELETE FROM custom_menu_items WHERE id = ?", (item_id,))
+            increment_revision_and_mark_dirty(conn)
             conn.commit()
         try:
             from services.backup_service import export_database_to_json
