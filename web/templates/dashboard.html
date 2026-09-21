@@ -727,22 +727,14 @@
             }
         }
 
-        let currentYear = 2026;
-        let currentMonth = 9;
+        // Dynamic Initial Year & Month
+        const _initDate = new Date();
+        let currentYear = _initDate.getFullYear();
+        let currentMonth = _initDate.getMonth() + 1;
         let categoryChartInstance = null;
         let cashflowChartInstance = null;
         let allCurrentTransactions = [];
         let currentTypeFilter = 'ALL';
-
-        function getDashboardToken() {
-            const urlParams = new URLSearchParams(window.location.search);
-            const queryToken = urlParams.get('token');
-            if (queryToken) {
-                localStorage.setItem('dashboard_token', queryToken);
-                return queryToken;
-            }
-            return localStorage.getItem('dashboard_token') || '';
-        }
 
         function formatINR(num) {
             return '₹' + Number(num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -754,20 +746,14 @@
 
         async function fetchDashboardData() {
             try {
-                const token = getDashboardToken();
-                const headers = { 'Accept': 'application/json' };
-                if (token) headers['X-Dash-Token'] = token;
-
-                const endpoint = `/api/data?year=${currentYear}&month=${currentMonth}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
-                const res = await fetch(endpoint, { headers });
+                const endpoint = `/api/data?year=${currentYear}&month=${currentMonth}`;
+                const res = await fetch(endpoint, {
+                    headers: { 'Accept': 'application/json' },
+                    credentials: 'same-origin'
+                });
 
                 if (res.status === 401) {
-                    const entered = prompt("🔒 Protected Dashboard API\nPlease enter DASHBOARD_TOKEN:");
-                    if (entered && entered.trim()) {
-                        localStorage.setItem('dashboard_token', entered.trim());
-                        return fetchDashboardData();
-                    }
-                    document.getElementById('sub-header').innerText = "❌ Unauthorized: Valid DASHBOARD_TOKEN required.";
+                    document.getElementById('sub-header').textContent = "🔒 Session expired or unauthorized. Run /dashboard in Telegram to login.";
                     return;
                 }
 
@@ -797,14 +783,14 @@
             allCurrentTransactions = data.recent_transactions || [];
 
             // Header & Month
-            document.getElementById('month-display').innerText = data.period_name;
-            document.getElementById('sub-header').innerText = `${data.month_transactions_count || 0} monthly transactions recorded • Last synced ${new Date().toLocaleTimeString('en-IN')}`;
+            document.getElementById('month-display').textContent = data.period_name;
+            document.getElementById('sub-header').textContent = `${data.month_transactions_count || 0} monthly transactions recorded • Last synced ${new Date().toLocaleTimeString('en-IN')}`;
 
             // KPI Cards
-            document.getElementById('val-balance').innerText = formatINR(data.current_balance);
-            document.getElementById('val-spent').innerText = formatINR(data.total_spent);
-            document.getElementById('val-income').innerText = formatINR(data.total_received);
-            document.getElementById('val-net').innerText = formatINR(data.net_savings);
+            document.getElementById('val-balance').textContent = formatINR(data.current_balance);
+            document.getElementById('val-spent').textContent = formatINR(data.total_spent);
+            document.getElementById('val-income').textContent = formatINR(data.total_received);
+            document.getElementById('val-net').textContent = formatINR(data.net_savings);
 
             // Month-over-month deltas
             const cmp = data.comparison;
@@ -815,25 +801,25 @@
                 const spentTag = document.getElementById('tag-spent');
                 if (sDelta.direction === 'up') {
                     spentTag.className = 'delta-tag delta-up-red';
-                    spentTag.innerText = `▲ ${sDelta.pct}% vs last month`;
+                    spentTag.textContent = `▲ ${sDelta.pct}% vs last month`;
                 } else if (sDelta.direction === 'down') {
                     spentTag.className = 'delta-tag delta-down-green';
-                    spentTag.innerText = `▼ ${Math.abs(sDelta.pct)}% vs last month`;
+                    spentTag.textContent = `▼ ${Math.abs(sDelta.pct)}% vs last month`;
                 } else {
                     spentTag.className = 'delta-tag delta-flat';
-                    spentTag.innerText = `Flat vs last month`;
+                    spentTag.textContent = `Flat vs last month`;
                 }
 
                 const incTag = document.getElementById('tag-income');
                 if (rDelta.direction === 'up') {
                     incTag.className = 'delta-tag delta-up-green';
-                    incTag.innerText = `▲ ${rDelta.pct}% vs last month`;
+                    incTag.textContent = `▲ ${rDelta.pct}% vs last month`;
                 } else if (rDelta.direction === 'down') {
                     incTag.className = 'delta-tag delta-up-red';
-                    incTag.innerText = `▼ ${Math.abs(rDelta.pct)}% vs last month`;
+                    incTag.textContent = `▼ ${Math.abs(rDelta.pct)}% vs last month`;
                 } else {
                     incTag.className = 'delta-tag delta-flat';
-                    incTag.innerText = `Flat vs last month`;
+                    incTag.textContent = `Flat vs last month`;
                 }
             }
 
@@ -948,13 +934,13 @@
 
         function renderCalendarHeatmap(year, month, dailySeries) {
             const container = document.getElementById('heatmap-container');
-            container.innerHTML = '';
+            container.textContent = '';
 
             const weekdays = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
             weekdays.forEach(w => {
                 const wh = document.createElement('div');
                 wh.className = 'heatmap-header';
-                wh.innerText = w;
+                wh.textContent = w;
                 container.appendChild(wh);
             });
 
@@ -987,36 +973,66 @@
                 }
                 cell.className = `heatmap-day ${lvl}`;
                 cell.title = `Day ${day}: ${formatINR(spent)}`;
-                cell.innerHTML = `
-                    <span class="heatmap-day-num">${day}</span>
-                    ${spent > 0 ? `<span class="heatmap-day-amt">${formatINRShort(spent)}</span>` : ''}
-                `;
+
+                const spanNum = document.createElement('span');
+                spanNum.className = 'heatmap-day-num';
+                spanNum.textContent = day;
+                cell.appendChild(spanNum);
+
+                if (spent > 0) {
+                    const spanAmt = document.createElement('span');
+                    spanAmt.className = 'heatmap-day-amt';
+                    spanAmt.textContent = formatINRShort(spent);
+                    cell.appendChild(spanAmt);
+                }
+
                 container.appendChild(cell);
             }
         }
 
         function renderTopPayees(payees) {
             const container = document.getElementById('payees-container');
-            container.innerHTML = '';
+            container.textContent = '';
 
             if (!payees.length) {
-                container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">No payees recorded this month.</div>';
+                const empty = document.createElement('div');
+                empty.style.cssText = 'color:var(--text-muted);font-size:13px;text-align:center;padding:16px;';
+                empty.textContent = 'No payees recorded this month.';
+                container.appendChild(empty);
                 return;
             }
 
             payees.forEach((p, idx) => {
                 const item = document.createElement('div');
                 item.className = 'payee-item';
-                item.innerHTML = `
-                    <div class="payee-info">
-                        <div class="payee-rank">${idx + 1}</div>
-                        <div>
-                            <div class="payee-name">${p.person_name}</div>
-                            <div class="payee-cat">${p.primary_category || 'General'} • ${p.count} txs</div>
-                        </div>
-                    </div>
-                    <div class="payee-amt">${formatINR(p.total_amount)}</div>
-                `;
+
+                const info = document.createElement('div');
+                info.className = 'payee-info';
+
+                const rank = document.createElement('div');
+                rank.className = 'payee-rank';
+                rank.textContent = idx + 1;
+
+                const details = document.createElement('div');
+                const name = document.createElement('div');
+                name.className = 'payee-name';
+                name.textContent = p.person_name || '—';
+
+                const cat = document.createElement('div');
+                cat.className = 'payee-cat';
+                cat.textContent = `${p.primary_category || 'General'} • ${p.count || 0} txs`;
+
+                details.appendChild(name);
+                details.appendChild(cat);
+                info.appendChild(rank);
+                info.appendChild(details);
+
+                const amt = document.createElement('div');
+                amt.className = 'payee-amt';
+                amt.textContent = formatINR(p.total_amount);
+
+                item.appendChild(info);
+                item.appendChild(amt);
                 container.appendChild(item);
             });
         }
@@ -1032,7 +1048,7 @@
         function filterTransactions() {
             const query = (document.getElementById('table-search').value || '').toLowerCase();
             const tbody = document.getElementById('tx-tbody');
-            tbody.innerHTML = '';
+            tbody.textContent = '';
 
             const filtered = allCurrentTransactions.filter(tx => {
                 if (currentTypeFilter !== 'ALL' && tx.transaction_type !== currentTypeFilter) return false;
@@ -1045,7 +1061,13 @@
             });
 
             if (!filtered.length) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px;">No transactions match your search.</td></tr>';
+                const tr = document.createElement('tr');
+                const td = document.createElement('td');
+                td.colSpan = 7;
+                td.style.cssText = 'text-align:center;color:var(--text-muted);padding:24px;';
+                td.textContent = 'No transactions match your search.';
+                tr.appendChild(td);
+                tbody.appendChild(tr);
                 return;
             }
 
@@ -1057,15 +1079,48 @@
                 const amtSign = isReceived ? '+' : '-';
                 const amtColor = isReceived ? 'val-green' : 'val-red';
 
-                tr.innerHTML = `
-                    <td><strong>#${tx.id}</strong></td>
-                    <td>${tx.transaction_date || ''}</td>
-                    <td><span class="pill ${pillClass}">${typeText}</span></td>
-                    <td><b>${tx.person_name || '—'}</b></td>
-                    <td><span class="pill pill-category">${tx.category || 'General'}</span></td>
-                    <td class="${amtColor}"><strong>${amtSign}${formatINR(tx.amount)}</strong></td>
-                    <td>${formatINR(tx.balance_after)}</td>
-                `;
+                const tdId = document.createElement('td');
+                const strongId = document.createElement('strong');
+                strongId.textContent = `#${tx.id}`;
+                tdId.appendChild(strongId);
+
+                const tdDate = document.createElement('td');
+                tdDate.textContent = tx.transaction_date || '';
+
+                const tdType = document.createElement('td');
+                const spanType = document.createElement('span');
+                spanType.className = `pill ${pillClass}`;
+                spanType.textContent = typeText;
+                tdType.appendChild(spanType);
+
+                const tdPerson = document.createElement('td');
+                const bPerson = document.createElement('b');
+                bPerson.textContent = tx.person_name || '—';
+                tdPerson.appendChild(bPerson);
+
+                const tdCat = document.createElement('td');
+                const spanCat = document.createElement('span');
+                spanCat.className = 'pill pill-category';
+                spanCat.textContent = tx.category || 'General';
+                tdCat.appendChild(spanCat);
+
+                const tdAmt = document.createElement('td');
+                tdAmt.className = amtColor;
+                const strongAmt = document.createElement('strong');
+                strongAmt.textContent = `${amtSign}${formatINR(tx.amount)}`;
+                tdAmt.appendChild(strongAmt);
+
+                const tdBal = document.createElement('td');
+                tdBal.textContent = formatINR(tx.balance_after);
+
+                tr.appendChild(tdId);
+                tr.appendChild(tdDate);
+                tr.appendChild(tdType);
+                tr.appendChild(tdPerson);
+                tr.appendChild(tdCat);
+                tr.appendChild(tdAmt);
+                tr.appendChild(tdBal);
+
                 tr.onclick = () => openDrawer(tx);
                 tbody.appendChild(tr);
             });
@@ -1074,45 +1129,49 @@
         function openDrawer(tx) {
             const drawer = document.getElementById('detail-drawer');
             const body = document.getElementById('drawer-body');
-            document.getElementById('d-title').innerText = `Transaction #${tx.id}`;
+            body.textContent = '';
+            document.getElementById('d-title').textContent = `Transaction #${tx.id}`;
 
             const isReceived = tx.transaction_type === 'RECEIVED';
             const typeColor = isReceived ? 'var(--accent-green)' : 'var(--accent-red)';
 
-            body.innerHTML = `
-                <div class="drawer-row">
-                    <span class="drawer-lbl">Amount</span>
-                    <span class="drawer-val" style="color:${typeColor}; font-size:16px;">${isReceived ? '+' : '-'}${formatINR(tx.amount)}</span>
-                </div>
-                <div class="drawer-row">
-                    <span class="drawer-lbl">Payee / Counterparty</span>
-                    <span class="drawer-val">${tx.person_name || '—'}</span>
-                </div>
-                <div class="drawer-row">
-                    <span class="drawer-lbl">Type</span>
-                    <span class="drawer-val" style="color:${typeColor}">${tx.transaction_type}</span>
-                </div>
-                <div class="drawer-row">
-                    <span class="drawer-lbl">Category</span>
-                    <span class="drawer-val">${tx.category || 'General'}</span>
-                </div>
-                <div class="drawer-row">
-                    <span class="drawer-lbl">Date & Time</span>
-                    <span class="drawer-val">${tx.transaction_date || ''} ${tx.transaction_time || ''}</span>
-                </div>
-                <div class="drawer-row">
-                    <span class="drawer-lbl">Reference / UTR</span>
-                    <span class="drawer-val"><code>${tx.reference_number || 'N/A'}</code></span>
-                </div>
-                <div class="drawer-row">
-                    <span class="drawer-lbl">Bank / Payment App</span>
-                    <span class="drawer-val">${tx.bank_name || tx.payment_app || 'UPI'}</span>
-                </div>
-                <div class="drawer-row">
-                    <span class="drawer-lbl">Balance After</span>
-                    <span class="drawer-val">${formatINR(tx.balance_after)}</span>
-                </div>
-            `;
+            const rows = [
+                { label: 'Amount', value: `${isReceived ? '+' : '-'}${formatINR(tx.amount)}`, color: typeColor, fontSize: '16px' },
+                { label: 'Payee / Counterparty', value: tx.person_name || '—' },
+                { label: 'Type', value: tx.transaction_type || '—', color: typeColor },
+                { label: 'Category', value: tx.category || 'General' },
+                { label: 'Date & Time', value: `${tx.transaction_date || ''} ${tx.transaction_time || ''}`.trim() || '—' },
+                { label: 'Reference / UTR', value: tx.reference_number || 'N/A', isCode: true },
+                { label: 'Bank / Payment App', value: tx.bank_name || tx.payment_app || 'UPI' },
+                { label: 'Balance After', value: formatINR(tx.balance_after) }
+            ];
+
+            rows.forEach(r => {
+                const rowDiv = document.createElement('div');
+                rowDiv.className = 'drawer-row';
+
+                const lbl = document.createElement('span');
+                lbl.className = 'drawer-lbl';
+                lbl.textContent = r.label;
+
+                const val = document.createElement('span');
+                val.className = 'drawer-val';
+                if (r.color) val.style.color = r.color;
+                if (r.fontSize) val.style.fontSize = r.fontSize;
+
+                if (r.isCode) {
+                    const code = document.createElement('code');
+                    code.textContent = r.value;
+                    val.appendChild(code);
+                } else {
+                    val.textContent = r.value;
+                }
+
+                rowDiv.appendChild(lbl);
+                rowDiv.appendChild(val);
+                body.appendChild(rowDiv);
+            });
+
             drawer.style.display = 'flex';
         }
 
@@ -1121,9 +1180,7 @@
         }
 
         function downloadCSV() {
-            const token = getDashboardToken();
-            const url = `/api/export.csv${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-            window.open(url, '_blank');
+            window.open('/api/export.csv', '_blank');
         }
 
         // Initial Load & Auto-Refresh every 60s

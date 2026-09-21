@@ -10,11 +10,16 @@ from database.queries import (
     get_recent_transactions, get_all_transactions
 )
 from services.budget_service import get_budget_info
+from services.dashboard_auth import create_one_time_code, exchange_code_for_session
 from app import WebAppAndHealthHandler
 
 class TestDashboardData(unittest.TestCase):
     def setUp(self):
         setup_database()
+        # Create a valid session cookie for tests
+        code = create_one_time_code()
+        success, sid, cookie_hdr = exchange_code_for_session(code, client_ip="127.0.0.1")
+        self.session_cookie = cookie_hdr.split(";")[0]
 
     def test_dashboard_template_exists(self):
         template_path = BASE_DIR / 'web' / 'templates' / 'dashboard.html'
@@ -24,7 +29,7 @@ class TestDashboardData(unittest.TestCase):
         self.assertIn("Payment Tracker", content)
         self.assertIn("categoryChart", content)
         self.assertIn("cashflowChart", content)
-        self.assertIn("X-Dash-Token", content)
+        self.assertNotIn("localStorage.setItem('dashboard_token'", content)
 
     def test_api_data_payload_structure(self):
         balance = get_balance_setting()
@@ -57,6 +62,8 @@ class TestDashboardData(unittest.TestCase):
     def test_handler_healthz_get(self):
         handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
         handler.path = '/healthz'
+        handler.client_address = ('127.0.0.1', 1234)
+        handler.headers = {}
         handler.send_response = MagicMock()
         handler.send_header = MagicMock()
         handler.end_headers = MagicMock()
@@ -69,6 +76,8 @@ class TestDashboardData(unittest.TestCase):
     def test_handler_healthz_head(self):
         handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
         handler.path = '/healthz'
+        handler.client_address = ('127.0.0.1', 1234)
+        handler.headers = {}
         handler.send_response = MagicMock()
         handler.send_header = MagicMock()
         handler.end_headers = MagicMock()
@@ -76,80 +85,59 @@ class TestDashboardData(unittest.TestCase):
         handler.do_HEAD()
         handler.send_response.assert_called_with(200)
 
-    def test_handler_api_unauthorized_without_token(self):
+    def test_handler_api_unauthorized_without_session(self):
         handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
         handler.path = '/api/data'
+        handler.client_address = ('127.0.0.1', 1234)
         handler.headers = {}
         handler.send_response = MagicMock()
         handler.send_header = MagicMock()
         handler.end_headers = MagicMock()
         handler.wfile = io.BytesIO()
 
-        with patch.dict(os.environ, {"DASHBOARD_TOKEN": "test_secret_123"}):
-            with patch("app.DASHBOARD_TOKEN", "test_secret_123"):
-                handler.do_GET()
-                handler.send_response.assert_called_with(401)
+        handler.do_GET()
+        handler.send_response.assert_called_with(401)
 
-    def test_handler_api_authorized_with_valid_header_token(self):
+    def test_handler_api_authorized_with_valid_session_cookie(self):
         handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
         handler.path = '/api/data'
-        handler.headers = {'X-Dash-Token': 'test_secret_123'}
+        handler.client_address = ('127.0.0.1', 1234)
+        handler.headers = {'Cookie': self.session_cookie}
         handler.send_response = MagicMock()
         handler.send_header = MagicMock()
         handler.end_headers = MagicMock()
         handler.wfile = io.BytesIO()
 
-        with patch.dict(os.environ, {"DASHBOARD_TOKEN": "test_secret_123"}):
-            with patch("app.DASHBOARD_TOKEN", "test_secret_123"):
-                handler.do_GET()
-                handler.send_response.assert_called_with(200)
-                # Verify CORS wildcard is removed
-                for call in handler.send_header.call_args_list:
-                    self.assertNotEqual(call[0][0], 'Access-Control-Allow-Origin')
-
-    def test_handler_api_authorized_with_valid_query_token(self):
-        handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
-        handler.path = '/api/data?token=test_secret_123'
-        handler.headers = {}
-        handler.send_response = MagicMock()
-        handler.send_header = MagicMock()
-        handler.end_headers = MagicMock()
-        handler.wfile = io.BytesIO()
-
-        with patch.dict(os.environ, {"DASHBOARD_TOKEN": "test_secret_123"}):
-            with patch("app.DASHBOARD_TOKEN", "test_secret_123"):
-                handler.do_GET()
-                handler.send_response.assert_called_with(200)
+        handler.do_GET()
+        handler.send_response.assert_called_with(200)
 
     def test_handler_api_invalid_year(self):
         for bad_year in ["abc", "1899", "2101"]:
             handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
-            handler.path = f'/api/data?token=test_secret_123&year={bad_year}'
-            handler.headers = {}
+            handler.path = f'/api/data?year={bad_year}'
+            handler.client_address = ('127.0.0.1', 1234)
+            handler.headers = {'Cookie': self.session_cookie}
             handler.send_response = MagicMock()
             handler.send_header = MagicMock()
             handler.end_headers = MagicMock()
             handler.wfile = io.BytesIO()
 
-            with patch.dict(os.environ, {"DASHBOARD_TOKEN": "test_secret_123"}):
-                with patch("app.DASHBOARD_TOKEN", "test_secret_123"):
-                    handler.do_GET()
-                    handler.send_response.assert_called_with(400)
+            handler.do_GET()
+            handler.send_response.assert_called_with(400)
 
     def test_handler_api_invalid_month(self):
         for bad_month in ["abc", "0", "13", "-1"]:
             handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
-            handler.path = f'/api/data?token=test_secret_123&month={bad_month}'
-            handler.headers = {}
+            handler.path = f'/api/data?month={bad_month}'
+            handler.client_address = ('127.0.0.1', 1234)
+            handler.headers = {'Cookie': self.session_cookie}
             handler.send_response = MagicMock()
             handler.send_header = MagicMock()
             handler.end_headers = MagicMock()
             handler.wfile = io.BytesIO()
 
-            with patch.dict(os.environ, {"DASHBOARD_TOKEN": "test_secret_123"}):
-                with patch("app.DASHBOARD_TOKEN", "test_secret_123"):
-                    handler.do_GET()
-                    handler.send_response.assert_called_with(400)
+            handler.do_GET()
+            handler.send_response.assert_called_with(400)
 
 if __name__ == '__main__':
     unittest.main()
