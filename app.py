@@ -21,7 +21,7 @@ from bot.commands import (
     cafestats_command, cafeedit_command, addmenu_command, delmenu_command, restore_command, undo_command
 )
 from bot.handlers import handle_image, handle_callback_query, handle_text
-from services.scheduler_service import scheduler
+from services.scheduler_service import register_scheduler_jobs
 
 async def on_startup(app):
     """
@@ -96,14 +96,6 @@ async def on_startup(app):
     except Exception as e:
         logger.warning(f"Startup initialization notice: {e}")
 
-    # Hook bot instance and event loop into background scheduler in its own decoupled block
-    try:
-        scheduler.set_bot(app.bot, loop=asyncio.get_running_loop())
-        scheduler.start()
-        logger.info("Background scheduler started successfully.")
-    except Exception as sched_err:
-        logger.error(f"Scheduler startup error: {sched_err}")
-
 async def on_stop(app):
     """Executes graceful final backup before HTTP client closes, only if dirty, with 10s timeout."""
     try:
@@ -133,6 +125,9 @@ def build_application():
     setup_database()
     req = HTTPXRequest(read_timeout=60.0, write_timeout=60.0, connect_timeout=30.0, pool_timeout=60.0)
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(req).post_init(on_startup).post_stop(on_stop).build()
+
+    # Register PTB JobQueue background jobs (Daily Digest, Backup Retry, Tombstone Purge)
+    register_scheduler_jobs(app)
 
     # Core commands
     app.add_handler(CommandHandler("start", start_command))
