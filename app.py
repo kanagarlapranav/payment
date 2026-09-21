@@ -21,7 +21,7 @@ from bot.commands import (
     insights_command, budget_command, setbudget_command, digest_command, dashboard_command, menu_command,
     cafestats_command, cafeedit_command, addmenu_command, delmenu_command, restore_command, undo_command
 )
-from bot.handlers import handle_image, handle_callback_query, handle_text
+from bot.handlers import handle_image, handle_callback_query, handle_text, handle_document
 from services.scheduler_service import register_scheduler_jobs
 
 async def on_startup(app):
@@ -189,6 +189,9 @@ def build_application():
 
     # Image handler (photos and documents)
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
+
+    # Backup document handler (JSON files)
+    app.add_handler(MessageHandler(filters.Document.ALL & ~filters.Document.IMAGE, handle_document))
 
     # Text message handler (non-command messages)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

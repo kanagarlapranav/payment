@@ -2185,3 +2185,46 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_home_menu_keyboard(),
         parse_mode='HTML'
     )
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles uploaded backup JSON documents directly in Telegram."""
+    if not update.message or not update.message.document:
+        return
+    doc = update.message.document
+    fn = (doc.file_name or "").lower()
+    if not fn.endswith('.json'):
+        return
+
+    from bot.auth import require_admin
+    if not await require_admin(update):
+        return
+
+    from config import BACKUP_JSON_PATH
+    from services.backup_service import import_database_from_json
+    from database.queries import get_all_transactions, get_balance_setting
+    from utils.formatting import format_currency
+    import html
+    import asyncio
+
+    await update.message.reply_text("📥 <b>Received backup document. Downloading and verifying...</b>", parse_mode='HTML')
+    try:
+        file_obj = await context.bot.get_file(doc.file_id)
+        await file_obj.download_to_drive(custom_path=BACKUP_JSON_PATH)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to download backup file: {e}")
+        return
+
+    result = await asyncio.to_thread(import_database_from_json)
+    if result.get('success'):
+        await backup_to_telegram(context.bot)
+        txs = await asyncio.to_thread(get_all_transactions)
+        cur_b = format_currency(get_balance_setting())
+        await update.message.reply_text(
+            f"✅ <b>Backup Restored Successfully!</b>\n\n"
+            f"• <b>{len(txs)}</b> live transactions restored.\n"
+            f"• <b>Current Balance:</b> {cur_b}\n\n"
+            f"Use <code>/balance</code> or <code>/history</code> to view your ledger.",
+            parse_mode='HTML'
+        )
+    else:
+        await update.message.reply_text(f"❌ Restore failed: {html.escape(str(result.get('error')))}", parse_mode='HTML')
