@@ -22,7 +22,7 @@ from bot.keyboards import (
     get_confirmation_card_keyboard, get_edit_pending_fields_keyboard, get_category_picker_keyboard,
     get_quick_undo_keyboard, get_quick_add_keyboard, get_history_paginated_keyboard,
     get_add_menu_keyboard, get_more_menu_keyboard, get_transaction_detail_keyboard,
-    get_backup_status_keyboard
+    get_backup_status_keyboard, get_json_import_confirm_keyboard
 )
 from ocr.extractor import perform_ocr, perform_ocr_async
 from ocr.gemini_vision import is_gemini_available, extract_transaction_with_gemini
@@ -42,6 +42,10 @@ from utils.dates import parse_date, get_current_time_in_tz, format_display_date
 
 # In-memory store for pending transactions awaiting confirmation
 pending_transactions = {}
+
+# In-memory store for staged (not yet confirmed) JSON import payloads
+# Maps token -> {'path': Path, 'preview': dict}
+_pending_json_imports: dict = {}
 
 def format_receipt_card(transaction, dup_warning: str = None) -> str:
     """Formats the polished receipt confirmation card requested by user."""
@@ -128,7 +132,7 @@ ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles incoming images (screenshots) with RapidOCR + Gemini Vision AI fallback & cross-verification."""
+    """Handles incoming images with Gemini Vision AI first, RapidOCR + Heuristic Parser fallback."""
     if not await require_admin(update): return
     
     message = update.message
@@ -194,18 +198,15 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        # Run OCR first with native async & timeout for deterministic cross-verification
-        ocr_text = await perform_ocr_async(str(image_path))
-
         transaction = None
         confidence = 0
 
-        # Tier 1: Try Google Gemini Vision AI if API key is configured and valid
+        # Tier 1: Try Google Gemini Vision AI first (no OCR pre-processing needed)
         if is_gemini_available():
             try:
-                logger.info("Attempting Gemini Vision extraction with OCR cross-verification...")
+                logger.info("Attempting Gemini Vision extraction (Gemini-first, no OCR pre-pass)...")
                 g_tx, g_conf = await asyncio.to_thread(
-                    extract_transaction_with_gemini, str(image_path), caption, ocr_text
+                    extract_transaction_with_gemini, str(image_path), caption, None
                 )
                 if g_tx and g_conf >= 40:
                     transaction = g_tx
@@ -213,13 +214,16 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     transaction.telegram_message_id = message_id
                     transaction.telegram_chat_id = chat_id
                     transaction.original_image_path = str(image_path)
+                    logger.info(f"Gemini Vision succeeded with confidence {g_conf}.")
             except Exception as gem_err:
-                logger.warning(f"Gemini Vision error, falling back to local OCR parser: {gem_err}")
+                logger.warning(f"Gemini Vision error, falling back to RapidOCR parser: {gem_err}")
         else:
             logger.warning("Gemini Vision skipped — API key not configured or empty. Falling back to local OCR.")
 
-        # Tier 2: Fallback to local RapidOCR + Regex Heuristic Parser
+        # Tier 2: Fallback to local RapidOCR + Regex Heuristic Parser (only if Gemini failed/skipped)
         if not transaction or not transaction.amount:
+            logger.info("Gemini did not return a usable result — running RapidOCR fallback.")
+            ocr_text = await perform_ocr_async(str(image_path))
             if not ocr_text or not ocr_text.strip():
                 await deliver_response(
                     status_msg, message,
@@ -665,6 +669,89 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif action == "restore_cancel":
         await query.edit_message_text("❌ <b>Restore Cancelled.</b>", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+        return
+
+    elif action == "json_import_confirm":
+        # Confirm a staged JSON import (from handle_document preview flow).
+        token = parts[1] if len(parts) > 1 else ""
+        staged = _pending_json_imports.pop(token, None)
+        if not staged:
+            await query.edit_message_text(
+                "❌ <b>Import session expired or not found.</b>\nPlease re-upload the backup file.",
+                reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML'
+            )
+            return
+
+        tmp_path = staged['path']
+        await query.edit_message_text("⏳ <b>Importing backup into ledger…</b>", parse_mode='HTML')
+        try:
+            from services.backup_service import import_database_from_json, export_database_to_json, backup_to_telegram
+            from services.balance_service import recalculate_all_balances
+            from database.queries import get_all_transactions, get_balance_setting
+
+            # Step 1: Import (reads from temp file — never from BACKUP_JSON_PATH)
+            result = await asyncio.to_thread(import_database_from_json, input_path=tmp_path)
+            if not result.get('success'):
+                await query.edit_message_text(
+                    f"❌ <b>Import Failed:</b> {html.escape(str(result.get('error', 'Unknown error')))}",
+                    reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML'
+                )
+                return
+
+            # Step 2: Recalculate balances (already done inside import_database_from_json, but be explicit)
+            await asyncio.to_thread(recalculate_all_balances)
+
+            # Step 3: Export a FRESH backup from the live DB → this becomes the new BACKUP_JSON_PATH
+            from config import BACKUP_JSON_PATH
+            await asyncio.to_thread(export_database_to_json, BACKUP_JSON_PATH)
+
+            # Step 4: Cloud-upload the fresh backup
+            await backup_to_telegram(context.bot)
+
+            # Step 5: Report result
+            txs = await asyncio.to_thread(get_all_transactions)
+            cur_b = format_currency(get_balance_setting())
+            ins = result.get('inserted', 0)
+            upd = result.get('updated', 0)
+            skp = result.get('skipped', 0)
+            bal_match = result.get('balance_match', True)
+            bal_note = "" if bal_match else "\n⚠️ Balance mismatch detected — please verify with /balance."
+            await query.edit_message_text(
+                f"✅ <b>Import Successful!</b>\n\n"
+                f"• ➕ Added: {ins}   ✏️ Updated: {upd}   ⏩ Skipped: {skp}\n"
+                f"• <b>{len(txs)}</b> live transactions in ledger.\n"
+                f"• <b>Current Balance:</b> {cur_b}{bal_note}\n\n"
+                f"A fresh backup has been exported and uploaded to cloud.",
+                reply_markup=get_back_to_menu_keyboard(),
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            logger.error(f"Error during json_import_confirm: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ <b>Import error:</b> {html.escape(str(e))}",
+                reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML'
+            )
+        finally:
+            # Always remove the temp file
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+        return
+
+    elif action == "json_import_cancel":
+        token = parts[1] if len(parts) > 1 else ""
+        staged = _pending_json_imports.pop(token, None)
+        if staged and staged.get('path') and staged['path'].exists():
+            try:
+                staged['path'].unlink()
+            except OSError:
+                pass
+        await query.edit_message_text(
+            "❌ <b>Import cancelled.</b> No changes were made.",
+            reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML'
+        )
         return
 
     # --- 1. Transaction Detail, Duplicate & Backup Actions ---
@@ -2238,7 +2325,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles uploaded backup JSON documents directly in Telegram."""
+    """
+    Handles uploaded backup JSON documents.
+    Flow: download → validate → preview → owner confirmation → import → recalculate
+          → verify → export fresh backup → cloud backup.
+    The uploaded file is NEVER written to BACKUP_JSON_PATH; it is treated as a
+    temporary input only. After a successful import a fresh export is created.
+    """
     if not update.message or not update.message.document:
         return
     doc = update.message.document
@@ -2251,40 +2344,72 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     from config import BACKUP_JSON_PATH
-    from services.backup_service import import_database_from_json, backup_to_telegram
-    from database.queries import get_all_transactions, get_balance_setting
-    from utils.currency import format_currency
+    from services.backup_service import preview_database_import
     import html
-    import asyncio
-    import uuid
+    import json
 
-    tmp_path = BACKUP_JSON_PATH.with_name(f"temp_upload_{uuid.uuid4().hex}.json")
-    await update.message.reply_text("📥 <b>Received backup document. Downloading and verifying...</b>", parse_mode='HTML')
+    # Use a UUID-named temp file — never overwrite BACKUP_JSON_PATH
+    tmp_token = uuid.uuid4().hex[:12]
+    data_dir = BACKUP_JSON_PATH.parent
+    tmp_path = data_dir / f"tmp_upload_{tmp_token}.json"
+
+    await update.message.reply_text(
+        "📥 <b>Backup file received. Downloading and validating…</b>",
+        parse_mode='HTML'
+    )
     try:
         file_obj = await context.bot.get_file(doc.file_id)
         await file_obj.download_to_drive(custom_path=tmp_path)
 
-        result = await asyncio.to_thread(import_database_from_json, tmp_path)
-        if result.get('success'):
-            try:
-                tmp_path.replace(BACKUP_JSON_PATH)
-            except Exception:
-                pass
-            await backup_to_telegram(context.bot)
-            txs = await asyncio.to_thread(get_all_transactions)
-            cur_b = format_currency(get_balance_setting())
+        # -- Validate & preview (dry-run, no DB writes) --
+        preview = await asyncio.to_thread(preview_database_import, tmp_path)
+        if not preview.get('success'):
             await update.message.reply_text(
-                f"✅ <b>Backup Restored Successfully!</b>\n\n"
-                f"• <b>{len(txs)}</b> live transactions restored.\n"
-                f"• <b>Current Balance:</b> {cur_b}\n\n"
-                f"Use <code>/balance</code> or <code>/history</code> to view your ledger.",
+                f"❌ <b>Validation failed:</b> {html.escape(str(preview.get('error', 'Unknown error')))}\n\n"
+                "The file has not been imported. No changes were made.",
                 parse_mode='HTML'
             )
-        else:
-            await update.message.reply_text(f"❌ Restore failed: {html.escape(str(result.get('error')))}", parse_mode='HTML')
+            return
+
+        # -- Stash validated path for confirmation step --
+        _pending_json_imports[tmp_token] = {'path': tmp_path, 'preview': preview}
+
+        rev = preview.get('revision', '?')
+        exported_at = preview.get('exported_at', '?')
+        to_add = preview.get('to_add', 0)
+        to_update = preview.get('to_update', 0)
+        to_skip = preview.get('to_skip', 0)
+        total = preview.get('total', 0)
+        ver = preview.get('version', '?')
+        bal = preview.get('backup_balance', 0)
+        from utils.currency import format_currency as fmt_cur
+        bal_str = fmt_cur(bal) if bal else '?'
+
+        preview_text = (
+            "📋 <b>Backup Preview — Pending Confirmation</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"📁 <b>Version:</b> {ver}   📌 <b>Revision:</b> {rev}\n"
+            f"🕒 <b>Exported at:</b> {exported_at}\n"
+            f"💰 <b>Backup balance:</b> {bal_str}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"<b>Rows to import:</b> {total} total\n"
+            f"  ➕ Add: {to_add}   ✏️ Update: {to_update}   ⏩ Skip: {to_skip}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ <b>This action will merge the backup into the live database.</b>\n"
+            "Tap <b>Import</b> to confirm, or <b>Cancel</b> to discard."
+        )
+        await update.message.reply_text(
+            preview_text,
+            reply_markup=get_json_import_confirm_keyboard(tmp_token),
+            parse_mode='HTML'
+        )
+
     except Exception as e:
-        await update.message.reply_text(f"❌ Failed to download backup file: {e}")
-    finally:
+        logger.error(f"Error handling uploaded JSON document: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ Failed to process backup file: {html.escape(str(e))}"
+        )
+        # Clean up temp file on error
         if tmp_path.exists():
             try:
                 tmp_path.unlink()

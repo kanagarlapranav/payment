@@ -301,18 +301,16 @@ async def extract_transaction_with_gemini_async(
                     logger.warning(f"Gemini returned invalid amount {raw_amt!r}: {val_amt_err}. Moving to next model.")
                     continue
 
-                is_unknown_type = False
                 raw_tx_type = str(parsed.get("transaction_type") or "").strip().upper()
-                if raw_tx_type in ("SENT", "RECEIVED"):
+                if raw_tx_type in ("SENT", "RECEIVED", "TRANSFER"):
                     tx_type = raw_tx_type
                 else:
                     logger.warning(
-                        "Gemini returned unknown transaction type %r for model %s. Setting UNKNOWN with low confidence.",
+                        "Gemini returned invalid transaction type %r for model %s. Rejecting model response.",
                         raw_tx_type,
                         model_name
                     )
-                    tx_type = "UNKNOWN"
-                    is_unknown_type = True
+                    continue
 
                 # Validate strings and dates
                 raw_person = parsed.get("person_name") or "Unknown"
@@ -343,8 +341,7 @@ async def extract_transaction_with_gemini_async(
                     tx_type=tx_type,
                     ocr_text=ocr_text if ocr_text else ""
                 )
-                if is_unknown_type:
-                    confidence = min(confidence, 40)
+
 
                 transaction = Transaction(
                     transaction_type=tx_type,

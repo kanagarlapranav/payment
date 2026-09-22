@@ -186,7 +186,7 @@ def test_gemini_malformed_json_fallback_to_next_model():
 # --- 2. Validation & Deterministic Confidence Computation ---
 
 def test_gemini_invalid_transaction_type_does_not_become_sent():
-    """Invalid or missing transaction type must NOT become SENT: marked UNKNOWN with low confidence."""
+    """Invalid transaction type must be REJECTED outright — no UNKNOWN/SENT fallback."""
     def mock_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={
             "candidates": [{
@@ -209,9 +209,9 @@ def test_gemini_invalid_transaction_type_does_not_become_sent():
                 with patch("ocr.gemini_vision.os.path.exists", return_value=True):
                     with patch("ocr.gemini_vision._prepare_image_b64", return_value=("dummy_b64", "image/jpeg")):
                         tx, conf = await gv.extract_transaction_with_gemini_async("dummy.jpg", client=client)
-                        assert tx is not None
-                        # Must be low confidence (40 or below) to force user confirmation
-                        assert conf <= 40
+                        # Invalid type → all models rejected → must return None
+                        assert tx is None, f"Expected None for invalid type, got {tx!r}"
+                        assert conf == 0, f"Expected confidence 0, got {conf}"
 
     asyncio.run(_run())
 

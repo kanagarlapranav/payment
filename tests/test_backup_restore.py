@@ -457,7 +457,10 @@ class TestBackupRestorePrompt6(unittest.TestCase):
         res = import_database_from_json(data_dict=stale_backup, allow_empty_ledger=False)
         self.assertFalse(res.get("success"))
         err_msg = res.get("error", "")
-        self.assertTrue("Stale" in err_msg or "requires" in err_msg)
+        self.assertTrue(
+            any(kw in err_msg for kw in ("Stale", "stale", "rejected", "requires", "required", "Empty backup")),
+            f"Expected stale/rejection message, got: {err_msg!r}"
+        )
         
         with get_db_connection() as conn:
             cnt = conn.execute("SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL").fetchone()[0]

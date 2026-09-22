@@ -454,11 +454,15 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                 is_empty_backup = bool(data_dict.get('empty_ledger') or len(transactions) == 0)
 
                 if is_empty_backup and local_live_count > 0:
-                    if inc_rev < local_rev:
-                        logger.warning(f"Stale empty backup rejected (inc_rev={inc_rev} < local_rev={local_rev})")
+                    if inc_rev <= local_rev:
+                        logger.warning(f"Stale or equal-revision empty backup rejected (inc_rev={inc_rev} <= local_rev={local_rev})")
                         return {
                             'success': False,
-                            'error': f"Stale empty backup rejected (incoming rev {inc_rev} < local rev {local_rev}). Protection active."
+                            'error': (
+                                f"Empty backup rejected: incoming revision {inc_rev} ≤ local revision {local_rev}. "
+                                "This looks like a stale or same-database re-import. "
+                                "Explicit owner confirmation required (allow_empty_ledger=True)."
+                            )
                         }
                     if not allow_empty_ledger:
                         logger.warning("Empty backup restore over live rows attempted without allow_empty_ledger=True")
