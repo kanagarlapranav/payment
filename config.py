@@ -19,8 +19,7 @@ BASE_DIR = Path(__file__).resolve().parent
 ENV_NAME = os.getenv("PAYMENT_TRACKER_ENV", "").strip().lower()
 
 IS_TEST_ENV = (
-    ENV_NAME == "test"
-    or "PYTEST_CURRENT_TEST" in os.environ
+    os.getenv("PAYMENT_TRACKER_ENV", "").strip().lower() == "test"
     or "pytest" in sys.modules
 )
 
@@ -28,20 +27,15 @@ production_dir = (BASE_DIR / "data").resolve()
 
 if IS_TEST_ENV:
     if not os.getenv("DATA_DIR"):
-        raise RuntimeError(
-            "Test mode requires DATA_DIR to point to an isolated temporary directory."
-        )
+        raise RuntimeError("Test mode requires DATA_DIR to point to an isolated temporary directory.")
+    if not os.getenv("DATABASE_PATH"):
+        raise RuntimeError("Test mode requires DATABASE_PATH to point to an isolated temporary directory.")
+    if not os.getenv("LOG_DIR"):
+        raise RuntimeError("Test mode requires LOG_DIR to point to an isolated temporary directory.")
 
     resolved_data_dir = Path(os.environ["DATA_DIR"]).resolve()
-
-    if (
-        resolved_data_dir == production_dir
-        or production_dir in resolved_data_dir.parents
-    ):
-        raise RuntimeError(
-            f"Refusing to run tests against production data directory: "
-            f"{resolved_data_dir}"
-        )
+    if resolved_data_dir == production_dir or production_dir in resolved_data_dir.parents:
+        raise RuntimeError(f"Refusing to run tests against production data directory: {resolved_data_dir}")
     DATA_DIR = resolved_data_dir
 elif ENV_NAME == "development":
     raw_data = os.getenv("DATA_DIR")
@@ -59,7 +53,7 @@ else:
     DATA_DIR = Path(raw_data.strip()).resolve() if (raw_data and raw_data.strip()) else production_dir
 
 IMAGE_DIR = DATA_DIR / 'images'
-LOG_DIR = Path(os.getenv('LOG_DIR', str(BASE_DIR / 'logs'))).resolve()
+LOG_DIR = Path(os.getenv('LOG_DIR', str(DATA_DIR / 'logs'))).resolve()
 DB_PATH = Path(os.getenv('DATABASE_PATH', str(DATA_DIR / 'database.sqlite3'))).resolve()
 BACKUP_JSON_PATH = Path(os.getenv('BACKUP_JSON_PATH', str(DATA_DIR / 'backup_transactions.json'))).resolve()
 
@@ -68,6 +62,8 @@ if IS_TEST_ENV:
         raise RuntimeError(f"Refusing to run tests with DATABASE_PATH pointing inside production data: {DB_PATH}")
     if BACKUP_JSON_PATH == production_dir / "backup_transactions.json" or production_dir in BACKUP_JSON_PATH.parents:
         raise RuntimeError(f"Refusing to run tests with BACKUP_JSON_PATH pointing inside production data: {BACKUP_JSON_PATH}")
+    if LOG_DIR == BASE_DIR / "logs" or production_dir in LOG_DIR.parents:
+        raise RuntimeError(f"Refusing to run tests with LOG_DIR pointing inside production/global logs: {LOG_DIR}")
 
 # Ensure directories exist safely
 DATA_DIR.mkdir(parents=True, exist_ok=True)

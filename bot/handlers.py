@@ -385,7 +385,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             elif nav_target == "history":
                 page = int(parts[2]) if len(parts) > 2 else 1
                 ft = parts[3] if len(parts) > 3 else "ALL"
-                text, markup = render_history_page(page=page, filter_type=ft, page_size=5)
+                sb = parts[4] if len(parts) > 4 else "date_desc"
+                text, markup = render_history_page(page=page, filter_type=ft, page_size=5, sort_by=sb)
                 await query.edit_message_text(text, reply_markup=markup, parse_mode='HTML')
             elif nav_target == "history_noop":
                 pass
