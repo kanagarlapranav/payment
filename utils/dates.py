@@ -1,7 +1,16 @@
 from datetime import date, datetime, timezone
 import re
 from typing import Any
-import pytz
+try:
+    import zoneinfo
+except ImportError:
+    zoneinfo = None
+
+try:
+    import pytz
+except ImportError:
+    pytz = None
+
 from config import DEFAULT_TIMEZONE, logger
 
 def utc_now_iso() -> str:
@@ -64,8 +73,22 @@ def build_occurred_at(tx_date: Any, tx_time: Any) -> str:
 
 def get_current_time_in_tz():
     """Returns current datetime in default timezone."""
-    tz = pytz.timezone(DEFAULT_TIMEZONE)
-    return datetime.now(tz)
+    if zoneinfo:
+        try:
+            tz = zoneinfo.ZoneInfo(DEFAULT_TIMEZONE)
+            return datetime.now(tz)
+        except Exception:
+            pass
+    if pytz:
+        try:
+            tz = pytz.timezone(DEFAULT_TIMEZONE)
+            return datetime.now(tz)
+        except Exception:
+            pass
+    from datetime import timedelta
+    if DEFAULT_TIMEZONE == 'Asia/Kolkata':
+        return datetime.now(timezone(timedelta(hours=5, minutes=30)))
+    return datetime.now(timezone.utc)
 
 def parse_date(date_str: str, fallback_year: int = None) -> date:
     """Attempts to parse a date string like '31 Aug', '15 Sept 2026', '06 Sep 2026', or '04Sep2026'."""

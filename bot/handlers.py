@@ -1692,101 +1692,101 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     cmd_lower = text.lower()
     
-    if cmd_lower in (r'\\undo', 'undo', '/undo', 'revert', '/revert'):
+    if cmd_lower in (r'\undo', 'undo', '/undo', 'revert', '/revert'):
         await undo_command(update, context)
         return
-    elif cmd_lower in (r'\\edit', 'edit', '/edit'):
+    elif cmd_lower in (r'\edit', 'edit', '/edit'):
         await edit_command(update, context)
         return
-    elif cmd_lower in (r'\\delete', 'delete', '/delete'):
+    elif cmd_lower in (r'\delete', 'delete', '/delete'):
         await delete_command(update, context)
         return
-    elif cmd_lower in (r'\\history', 'history', '/history'):
+    elif cmd_lower in (r'\history', 'history', '/history'):
         await history_command(update, context)
         return
-    elif cmd_lower in (r'\\balance', 'balance', '/balance'):
+    elif cmd_lower in (r'\balance', 'balance', '/balance'):
         await balance_command(update, context)
         return
-    elif cmd_lower.startswith((r'\\date', 'date ', '/date ')):
+    elif cmd_lower.startswith((r'\date', 'date ', '/date ')):
         parts = text.split(maxsplit=1)
         context.args = [parts[1]] if len(parts) > 1 else []
         await date_command(update, context)
         return
-    elif cmd_lower.startswith((r'\\search', 'search ', '/search ')):
+    elif cmd_lower.startswith((r'\search', 'search ', '/search ')):
         parts = text.split(maxsplit=1)
         context.args = [parts[1]] if len(parts) > 1 else []
         await search_command(update, context)
         return
-    elif cmd_lower.startswith((r'\\amount', 'amount ', '/amount ')):
+    elif cmd_lower.startswith((r'\amount', 'amount ', '/amount ')):
         parts = text.split(maxsplit=1)
         context.args = [parts[1]] if len(parts) > 1 else []
         await amount_command(update, context)
         return
-    elif cmd_lower in (r'\\monthly', 'monthly', '/monthly', 'stats', '/stats'):
+    elif cmd_lower in (r'\monthly', 'monthly', '/monthly', 'stats', '/stats'):
         await monthly_command(update, context)
         return
-    elif cmd_lower in (r'\\filter', 'filter', '/filter'):
+    elif cmd_lower in (r'\filter', 'filter', '/filter'):
         await filter_command(update, context)
         return
-    elif cmd_lower in (r'\\sort', 'sort', '/sort'):
+    elif cmd_lower in (r'\sort', 'sort', '/sort'):
         await sort_command(update, context)
         return
-    elif cmd_lower in (r'\\details', 'details', '/details', 'ids', '/ids'):
+    elif cmd_lower in (r'\details', 'details', '/details', 'ids', '/ids'):
         await details_command(update, context)
         return
-    elif cmd_lower in (r'\\menu', 'menu', '/menu', 'cafeteria', '/cafeteria', 'canteen', '/canteen'):
+    elif cmd_lower in (r'\menu', 'menu', '/menu', 'cafeteria', '/cafeteria', 'canteen', '/canteen'):
         from bot.commands import menu_command
         await menu_command(update, context)
         return
-    elif cmd_lower in (r'\\dashboard', 'dashboard', '/dashboard'):
+    elif cmd_lower in (r'\dashboard', 'dashboard', '/dashboard'):
         from bot.commands import dashboard_command
         await dashboard_command(update, context)
         return
-    elif cmd_lower.startswith((r'\\digest', 'digest', '/digest')):
+    elif cmd_lower.startswith((r'\digest', 'digest', '/digest')):
         parts = text.split(maxsplit=1)
         context.args = parts[1:] if len(parts) > 1 else []
         from bot.commands import digest_command
         await digest_command(update, context)
         return
-    elif cmd_lower.startswith((r'\\insights', 'insights', '/insights')):
+    elif cmd_lower.startswith((r'\insights', 'insights', '/insights')):
         parts = text.split(maxsplit=1)
         context.args = parts[1:] if len(parts) > 1 else []
         from bot.commands import insights_command
         await insights_command(update, context)
         return
-    elif cmd_lower.startswith((r'\\budget', 'budget', '/budget')):
+    elif cmd_lower.startswith((r'\budget', 'budget', '/budget')):
         parts = text.split(maxsplit=1)
         context.args = parts[1:] if len(parts) > 1 else []
         from bot.commands import budget_command
         await budget_command(update, context)
         return
-    elif cmd_lower.startswith((r'\\setbudget', 'setbudget', '/setbudget')):
+    elif cmd_lower.startswith((r'\setbudget', 'setbudget', '/setbudget')):
         parts = text.split(maxsplit=1)
         context.args = parts[1:] if len(parts) > 1 else []
         from bot.commands import setbudget_command
         await setbudget_command(update, context)
         return
-    elif cmd_lower.startswith((r'\\setbalance', 'setbalance', '/setbalance')):
+    elif cmd_lower.startswith((r'\setbalance', 'setbalance', '/setbalance')):
         parts = text.split(maxsplit=1)
         context.args = parts[1:] if len(parts) > 1 else []
         from bot.commands import setbalance_command
         await setbalance_command(update, context)
         return
-    elif cmd_lower.startswith((r'\\export', 'export', '/export', 'statement', '/statement', 'report', '/report')):
+    elif cmd_lower.startswith((r'\export', 'export', '/export', 'statement', '/statement', 'report', '/report')):
         parts = text.split(maxsplit=1)
         context.args = parts[1:] if len(parts) > 1 else []
         from bot.commands import export_command
         await export_command(update, context)
         return
-    elif cmd_lower in (r'\\help', 'help', '/help'):
+    elif cmd_lower in (r'\help', 'help', '/help'):
         from bot.commands import help_command
         await help_command(update, context)
         return
-    elif cmd_lower in (r'\\cafestats', 'cafestats', '/cafestats', 'cafespends', '/cafespends'):
+    elif cmd_lower in (r'\cafestats', 'cafestats', '/cafestats', 'cafespends', '/cafespends'):
         from bot.commands import cafestats_command
         await cafestats_command(update, context)
         return
-    elif cmd_lower.startswith((r'\\cafeedit', 'cafeedit', '/cafeedit', 'editcafe', '/editcafe')):
+    elif cmd_lower.startswith((r'\cafeedit', 'cafeedit', '/cafeedit', 'editcafe', '/editcafe')):
         parts = text.split(maxsplit=1)
         context.args = [parts[1]] if len(parts) > 1 else []
         from bot.commands import cafeedit_command
