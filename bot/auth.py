@@ -47,6 +47,8 @@ ADMIN_CALLBACK_ACTIONS = {
     "cafe_del_item", "cafe_del_cancel", "cafe_edit_last", "cafe_skip",
     # Backup & Restore Confirmation
     "restore_confirm", "restore_cancel", "backup_now",
+    # JSON Upload Import Confirmation
+    "json_import_confirm", "json_import_cancel",
     # Recurring & Monthly Reviews
     "rec_paid", "rec_skip", "rec_pause", "rec_resume", "rec_del", "close_month"
 }

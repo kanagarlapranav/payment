@@ -162,6 +162,15 @@ def get_backup_status_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
+def get_json_import_confirm_keyboard(token: str):
+    """Returns Confirm / Cancel buttons for a staged JSON import."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Import", callback_data=f"json_import_confirm:{token}"),
+            InlineKeyboardButton("❌ Cancel", callback_data=f"json_import_cancel:{token}")
+        ]
+    ])
+
 def get_back_to_menu_keyboard(extra_row=None):
     """Returns a keyboard with a back-to-menu button and optional extra buttons."""
     keyboard = []
