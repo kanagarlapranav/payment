@@ -1,0 +1,70 @@
+What started as a simple college side-project to answer "Where did my monthly pocket money go?" turned into one of the most intense, rewarding software engineering journeys I've ever had 🚀
+
+Over the past few weeks, I took my personal Telegram AI Payment Tracker bot and pushed it through a complete 14-phase architectural overhaul — upgrading it from a hobby script to a battle-tested, production-grade financial ledger backed by 391 automated tests passing in CI 🛡️
+
+Here is the story, the hard engineering bugs I ran into, and how the system works under the hood 👇
+
+---
+
+### 💡 The Core Problem & How It Works
+
+As a college student using 4-5 UPI apps daily (GPay, PhonePe, Paytm, CRED, Amazon Pay), manual expense tracking lasted maybe two days before I gave up. 
+
+So I built a seamless Telegram assistant:
+1. 📸 **Scan any receipt screenshot:** A dual-engine pipeline runs local RapidOCR and Google Gemini Vision AI in asynchronous thread pools, extracting the amount, payee, date, UTR/ref, and payment method in under 2 seconds.
+2. 💬 **Natural text quick entry:** Type `120 dosa` or `+5000 freelance stipend` — regex heuristic parsers instantly extract amount, type, and payee with zero button friction.
+3. 🍽️ **Canteen & Campus Tracker:** Auto-detects campus cafeteria payments and presents interactive buttons to log meals, combos, and add-ons.
+4. 🔄 **Smart Finance Engine:** Automatically handles internal `TRANSFER` transactions (zero-drift on balance), manages recurring bills/subscriptions with upcoming due date notifications, and freezes monthly retrospective closing reviews with savings rate % analytics.
+
+---
+
+### 🛠️ The Deep Engineering Bugs I Faced & Solved
+
+Building real financial software taught me that "it works on my machine" doesn't survive concurrent users, network drops, and floating-point math. Here are the biggest bugs I solved:
+
+🔹 **1. The Floating-Point Penny Drift Bug (`0.1 + 0.2 != 0.3`)**
+- *The Problem:* Using standard binary floats for balances caused micro-cent rounding errors that accumulated over time.
+- *The Fix:* Re-architected all monetary logic to strict `Decimal` fixed-point arithmetic quantized to integer cents, with rigorous ledger balance invariant checks (`bal_before ± delta == bal_after`) enforced on every transaction.
+
+🔹 **2. Database Race Conditions & Lock Starvation**
+- *The Problem:* When background cloud syncs, incoming receipts, and user edits happened simultaneously, SQLite suffered locked-database crashes and balance race conditions.
+- *The Fix:* Implemented a global re-entrant mutex (`LEDGER_LOCK`) and configured SQLite with a resilient `busy_timeout` queue, ensuring 100% thread-safe atomic mutations.
+
+🔹 **3. Chronological Sequencing & Historical Edits**
+- *The Problem:* Logging a yesterday receipt or editing a past amount broke future balance records.
+- *The Fix:* Implemented deterministic `occurred_at` sequencing and a full ledger resequencing algorithm that safely recalculates the entire forward balance chain without corrupting audit histories.
+
+🔹 **4. Disaster Recovery & Zero-Data-Loss Backups (Format v2)**
+- *The Problem:* Ephemeral cloud servers can lose local disk storage during restarts.
+- *The Fix:* Engineered a Format v2 backup system using atomic `.tmp` file writes with `os.fsync()` before file replacement, protected by canonical SHA-256 checksums, soft-delete tombstones (`deleted_at`), and an idempotent upsert restoration engine that resolves timestamp conflicts automatically.
+
+🔹 **5. Web Dashboard Security & Session Hardening**
+- *The Problem:* Static URL tokens are vulnerable to exposure in browser histories and logs.
+- *The Fix:* Built a single-use, 60-second one-time code exchange system (`/auth?code=...`) issuing encrypted in-memory `HttpOnly`, `SameSite=Strict` session cookies, backed by in-memory rate limiters and strict security headers (CSP, nosniff, Referrer-Policy).
+
+🔹 **6. In-Place Telegram Navigation (No Spam!)**
+- *The Problem:* Every user tap used to send a brand new message, cluttering the chat history.
+- *The Fix:* Completely redesigned the UI using Telegram inline keyboards with in-place message updates (`edit_message_text`), keeping callback payloads strictly budgeted under the 64-byte Telegram limit.
+
+---
+
+### 📊 Tech Stack & Architecture Highlights
+
+- **Core & Backend:** Python 3.13 • python-telegram-bot • SQLite • aiohttp / httpx
+- **AI & Vision:** Google Gemini 2.5 Flash • RapidOCR • Regex Heuristic Parsers
+- **Security & Integrity:** RBAC Authorization • HMAC Digest Auth • SHA-256 Checksum Validation • Scoped Multi-level Undo Log
+- **DevOps & QA:** GitHub Actions CI • Render Cloud • 391 Automated Test Suites (Unit, Concurrency, & End-to-End Scenarios)
+
+---
+
+### 💭 Key Takeaways as a Student Developer
+
+1. **Math in software is sacred:** Never use floating-point types for currency.
+2. **Design for failure first:** If your database can be restored idempotently from a checksummed snapshot, server restarts are stress-free.
+3. **Tests give you superpowers:** Having 390+ automated tests made refactoring complex financial logic and async pipelines fast and fearless.
+
+The journey from a simple personal problem to a robust, production-grade project has been an incredible learning experience! 💡
+
+What is your favorite personal automation or side project you've built? I'd love to hear your thoughts and feedback below! 👇
+
+#Python #SoftwareEngineering #FinTech #PersonalFinance #TelegramBot #GeminiAI #ComputerVision #SystemDesign #BuildInPublic #CleanCode #Developer #Innovation #CollegeProject

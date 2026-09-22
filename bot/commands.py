@@ -81,7 +81,8 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
         "━━━━━━━━━━━━━━━━━━━━"
     ]
     
-    for t in items:
+    start_num = (page - 1) * page_size + 1
+    for idx, t in enumerate(items, start=start_num):
         ttype = t.get('transaction_type')
         if ttype == 'RECEIVED':
             badge = "🟢"
@@ -100,7 +101,7 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
         bal = format_currency(t.get('balance_after', 0))
         
         lines.append(
-            f"<b>#{t['id']}</b> {badge} <b>{arrow}{amt}</b> — {html.escape(person)}\n"
+            f"<b>{idx}.</b> {badge} <b>{arrow}{amt}</b> — {html.escape(person)}\n"
             f"   🏷 {html.escape(cat)} | 📅 {date_val}\n"
             f"   💼 Bal: <code>{bal}</code>\n"
         )
@@ -434,7 +435,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     curr_balance = get_balance_setting()
 
     lines_list = ["📜 *Payment History*\n"]
-    for t in transactions:
+    for idx, t in enumerate(transactions, 1):
         date_str = format_display_date(t['transaction_date'])
         person = t['person_name'] or "Unknown"
         badge = "🔴" if t['transaction_type'] == 'SENT' else "🟢"
@@ -442,7 +443,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bal_str = format_currency(t['balance_after'])
 
         lines_list.append(
-            f"*{t['id']}.* {badge} *{amt_str}* — {person}\n"
+            f"*{idx}.* {badge} *{amt_str}* — {person}\n"
             f"   📅 {date_str} | 💰 Bal: `{bal_str}`\n"
         )
 
@@ -1326,15 +1327,28 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from telegram import InlineKeyboardMarkup, InlineKeyboardButton
     import html
 
-    # 1. If replying to a document attachment, download it directly
+    # 1. If replying to a document attachment, download to temporary file and validate preview before overwrite
     if update.message and update.message.reply_to_message and update.message.reply_to_message.document:
         doc = update.message.reply_to_message.document
+        import uuid
+        tmp_path = BACKUP_JSON_PATH.with_name(f"temp_reply_{uuid.uuid4().hex}.json")
         try:
             file_obj = await context.bot.get_file(doc.file_id)
-            await file_obj.download_to_drive(custom_path=BACKUP_JSON_PATH)
+            await file_obj.download_to_drive(custom_path=tmp_path)
+            preview = preview_database_import(tmp_path)
+            if not preview.get('success'):
+                await update.message.reply_text(f"❌ <b>Invalid Backup Document:</b> {html.escape(str(preview.get('error')))}", parse_mode='HTML')
+                return
+            tmp_path.replace(BACKUP_JSON_PATH)
         except Exception as dl_err:
             await update.message.reply_text(f"❌ Failed to download attached backup document: {dl_err}")
             return
+        finally:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
 
     # 2. If no local backup exists, fetch from pinned Telegram cloud backup
     if not BACKUP_JSON_PATH.exists():
@@ -1391,7 +1405,7 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text("⏳ Restoring ledger from backup via idempotent upsert...")
-    result = await asyncio.to_thread(import_database_from_json)
+    result = await asyncio.to_thread(import_database_from_json, allow_empty_ledger=True)
     if not result.get('success'):
         await update.message.reply_text(f"❌ Nothing was saved: {html.escape(str(result.get('error')))}", parse_mode='HTML')
         return

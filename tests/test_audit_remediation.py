@@ -258,7 +258,7 @@ def test_newer_empty_backup_prevents_old_cloud_resurrection():
     }
     empty_backup_payload["checksum"] = compute_canonical_checksum(empty_backup_payload)
 
-    res = import_database_from_json(data_dict=empty_backup_payload)
+    res = import_database_from_json(data_dict=empty_backup_payload, allow_empty_ledger=True)
     assert res["success"] is True
 
     # 3. Verify no live transactions exist and balance is 0.0

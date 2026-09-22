@@ -20,8 +20,14 @@ from services.balance_service import validate_ledger_invariants
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1].strip():
-        target_db = Path(sys.argv[1].strip()).resolve()
+    target_db = None
+    args = sys.argv[1:]
+    if "--database" in args:
+        idx = args.index("--database")
+        if idx + 1 < len(args):
+            target_db = Path(args[idx + 1].strip()).resolve()
+    elif len(args) > 0 and not args[0].startswith("-"):
+        target_db = Path(args[0].strip()).resolve()
     elif os.getenv("DATABASE_PATH"):
         target_db = Path(os.getenv("DATABASE_PATH").strip()).resolve()
     elif os.getenv("DATA_DIR"):

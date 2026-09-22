@@ -280,13 +280,14 @@ def get_history_paginated_keyboard(page: int, total_pages: int, filter_type: str
     # 1. Row buttons to open detail screen for items on this page
     if tx_rows:
         row_buttons = []
-        for r in tx_rows[:6]:
+        start_num = (page - 1) * 5 + 1
+        for idx, r in enumerate(tx_rows[:6], start=start_num):
             badge = "🟢" if r.get('transaction_type') == 'RECEIVED' else "🔴"
             try:
                 amt = int(float(r.get('amount', 0)))
             except Exception:
                 amt = 0
-            label = f"#{r['id']} {badge} ₹{amt}"
+            label = f"#{idx} {badge} ₹{amt}"
             row_buttons.append(InlineKeyboardButton(label, callback_data=f"tx_view:{r['id']}"))
             if len(row_buttons) == 2:
                 keyboard.append(row_buttons)

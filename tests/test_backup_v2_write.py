@@ -22,28 +22,22 @@ from services.task_manager import TaskManager
 
 
 class TestBackupV2WriteSide(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.db_backup = None
-        cls.json_backup = None
-        if os.path.exists(DB_PATH):
-            with open(DB_PATH, 'rb') as f:
-                cls.db_backup = f.read()
-        if os.path.exists(BACKUP_JSON_PATH):
-            with open(BACKUP_JSON_PATH, 'rb') as f:
-                cls.json_backup = f.read()
-
-    @classmethod
-    def tearDownClass(cls):
-        if cls.db_backup is not None:
-            with open(DB_PATH, 'wb') as f:
-                f.write(cls.db_backup)
-        if cls.json_backup is not None:
-            with open(BACKUP_JSON_PATH, 'wb') as f:
-                f.write(cls.json_backup)
-
     def setUp(self):
         setup_database()
+        is_empty = False
+        with LEDGER_LOCK, get_db_connection() as conn:
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('database_initialized', '1')")
+            cur = conn.cursor()
+            if cur.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 0:
+                is_empty = True
+        if is_empty:
+            t = Transaction()
+            t.amount = 10.0
+            t.transaction_type = "SENT"
+            t.person_name = "Setup"
+            t.transaction_date = "2026-09-22"
+            t.transaction_time = "00:00:00"
+            insert_transaction_with_balance(t)
 
     def test_checksum_generation_canonical(self):
         """1. Checksum generation: SHA-256 over canonical JSON of version, revision, settings, custom_menu_items, budgets, transactions."""
@@ -139,7 +133,7 @@ class TestBackupV2WriteSide(unittest.TestCase):
                     cursor = conn.cursor()
                     cursor.execute("DELETE FROM transactions")
                     conn.commit()
-                if self.db_backup:
+                if getattr(self, "db_backup", None):
                     with open(DB_PATH, 'wb') as f:
                         f.write(self.db_backup)
         finally:
@@ -234,6 +228,7 @@ class TestBackupV2WriteSide(unittest.TestCase):
         # Set local database revision lower (e.g. 100)
         with LEDGER_LOCK, get_db_connection() as conn:
             conn.execute("UPDATE settings SET value = '100' WHERE key = 'backup_revision'")
+            conn.execute("UPDATE settings SET value = '100' WHERE key = 'last_backup_ok_revision'")
             conn.commit()
 
         ok = asyncio.run(backup_to_telegram(mock_bot, chat_id="12345"))

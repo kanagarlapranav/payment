@@ -1,18 +1,37 @@
 import concurrent.futures
+import asyncio
 from ocr.engine import extract_text_from_image
 from config import logger
 
-# Module-level executor to prevent blocking on worker exit
 _OCR_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocr_worker")
-
-# Timeout for the entire OCR pipeline (seconds)
 _OCR_PIPELINE_TIMEOUT = 30.0
+
+
+async def perform_ocr_async(image_path: str, timeout: float = _OCR_PIPELINE_TIMEOUT, engine_fn=None) -> str:
+    fn = engine_fn or extract_text_from_image
+    loop = asyncio.get_running_loop()
+    try:
+        logger.info(f"Starting OCR on: {image_path} (timeout={timeout}s)")
+        result = await asyncio.wait_for(
+            loop.run_in_executor(_OCR_EXECUTOR, fn, image_path),
+            timeout=timeout
+        )
+        if result and result.strip():
+            logger.info(f"OCR completed successfully ({len(result)} chars extracted).")
+            return result
+        logger.warning("OCR returned no text from the image.")
+        return ""
+    except asyncio.TimeoutError:
+        logger.warning(f"OCR pipeline timed out after {timeout}s on {image_path}")
+        return ""
+    except Exception as e:
+        logger.error(f"OCR pipeline error on {image_path}: {e}")
+        return ""
 
 
 def perform_ocr(image_path: str, timeout: float = _OCR_PIPELINE_TIMEOUT, engine_fn=None) -> str:
     """
-    Orchestrates the OCR pipeline with a hard timeout using a module-level ThreadPoolExecutor.
-    Returns the raw extracted text, or "" on timeout / failure.
+    Synchronous wrapper used by existing code paths.
     """
     fn = engine_fn or extract_text_from_image
     try:

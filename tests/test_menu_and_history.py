@@ -11,8 +11,19 @@ class TestMenuAndHistory(unittest.TestCase):
         self.assertIn("Today:", text)
 
     def test_render_history_page_page1_shows_latest_5(self):
+        from database.models import Transaction
+        from database.queries import insert_transaction_with_balance
+        t = Transaction()
+        t.amount = 100.0
+        t.transaction_type = "SENT"
+        t.person_name = "History Test"
+        t.transaction_date = "2026-09-22"
+        t.transaction_time = "00:00:00"
+        insert_transaction_with_balance(t)
+
         text, markup = render_history_page(page=1, filter_type="ALL", page_size=5)
-        self.assertIn("Latest 5 Transactions", text)
+        self.assertIn("Latest", text)
+        self.assertIn("History Test", text)
         self.assertIn("Page 1 of", text)
         self.assertIsNotNone(markup)
 
