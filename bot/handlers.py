@@ -2345,8 +2345,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     from config import BACKUP_JSON_PATH
     from services.backup_service import preview_database_import
-    import html
-    import json
 
     # Use a UUID-named temp file — never overwrite BACKUP_JSON_PATH
     tmp_token = uuid.uuid4().hex[:12]
