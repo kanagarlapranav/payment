@@ -50,11 +50,12 @@ def render_home_menu_text() -> str:
         f"<i>Select an option or send a receipt screenshot:</i>"
     )
 
-def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int = 5):
-    """Renders a formatted page of transactions with navigation keyboard."""
+def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int = 5, sort_by: str = "date_desc"):
+    """Renders a formatted page of transactions with navigation keyboard and sort order control."""
     from database.queries import get_transactions_paginated
+    sort_by = sort_by or "date_desc"
     tx_filter = filter_type if filter_type in ('SENT', 'RECEIVED', 'TRANSFER') else None
-    data = get_transactions_paginated(page=page, page_size=page_size, tx_type=tx_filter)
+    data = get_transactions_paginated(page=page, page_size=page_size, tx_type=tx_filter, sort_by=sort_by)
     
     items = data['transactions']
     total_pages = data['total_pages']
@@ -68,10 +69,15 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
             "💡 <i>Tap a filter below to switch view, or tap Back to return to Home.</i>\n"
             "━━━━━━━━━━━━━━━━━━━━"
         )
-        return text, get_history_paginated_keyboard(1, 1, filter_type, tx_rows=[])
+        return text, get_history_paginated_keyboard(1, 1, filter_type, tx_rows=[], sort_by=sort_by)
         
     if page == 1 and filter_type == "ALL":
-        header = f"🧾 <b>Latest {len(items)} Transactions</b>"
+        if sort_by == "date_asc":
+            header = f"🧾 <b>Transactions (Oldest First — ASC)</b>"
+        elif sort_by in ("id_desc", "created_desc"):
+            header = f"🧾 <b>Transactions (ID Order — DESC)</b>"
+        else:
+            header = f"🧾 <b>Latest {len(items)} Transactions</b>"
     else:
         header = f"🧾 <b>Transaction History ({filter_type})</b>"
 
@@ -107,7 +113,7 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
         )
     
     lines.append("━━━━━━━━━━━━━━━━━━━━\n<i>💡 Tap a transaction # button below to view details, edit, or delete:</i>")
-    return "\n".join(lines), get_history_paginated_keyboard(page, total_pages, filter_type, tx_rows=items)
+    return "\n".join(lines), get_history_paginated_keyboard(page, total_pages, filter_type, tx_rows=items, sort_by=sort_by)
 
 def render_transaction_detail(tx_id: int):
     """Renders the detailed view of a single transaction."""
@@ -411,15 +417,25 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
 
-    # If user asks for IDs or full list explicitly e.g. /history ids, /history full
-    if context.args and context.args[0].lower() in ('ids', 'id', 'details'):
-        await details_command(update, context)
-        return
-        
     recalculate_all_balances()
 
+    sort_by = "date_desc"
+    if context.args:
+        arg0 = context.args[0].lower()
+        if arg0 in ('ids', 'details'):
+            await details_command(update, context)
+            return
+        elif arg0 in ('asc', 'ascending', 'oldest', 'date_asc'):
+            sort_by = "date_asc"
+        elif arg0 in ('id_desc', 'created_desc', 'id'):
+            sort_by = "id_desc"
+        elif arg0 in ('id_asc', 'created_asc'):
+            sort_by = "id_asc"
+        elif arg0 in ('desc', 'descending', 'newest', 'date_desc'):
+            sort_by = "date_desc"
+
     if not context.args or context.args[0].lower() not in ('full', 'all'):
-        text, markup = render_history_page(page=1, filter_type="ALL", page_size=5)
+        text, markup = render_history_page(page=1, filter_type="ALL", page_size=5, sort_by=sort_by)
         await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
         return
 

@@ -774,9 +774,10 @@ def get_transactions_paginated(
     tx_type: str = None,
     transaction_type: str = None,
     year: int = None,
-    month: int = None
+    month: int = None,
+    sort_by: str = "date_desc"
 ):
-    """Fetches paginated transactions with optional filters and safe bounds."""
+    """Fetches paginated transactions with optional filters, customizable sorting, and safe bounds."""
     try:
         page = max(1, int(page or 1))
     except (ValueError, TypeError):
@@ -828,6 +829,18 @@ def get_transactions_paginated(
         
     where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     
+    sort_map = {
+        "date_desc": "occurred_at DESC, created_at DESC, id DESC",
+        "date_asc": "occurred_at ASC, created_at ASC, id ASC",
+        "id_desc": "id DESC, created_at DESC",
+        "id_asc": "id ASC, created_at ASC",
+        "created_desc": "created_at DESC, id DESC",
+        "created_asc": "created_at ASC, id ASC",
+        "amount_desc": "amount DESC, occurred_at DESC",
+        "amount_asc": "amount ASC, occurred_at ASC",
+    }
+    order_clause = sort_map.get((sort_by or "date_desc").lower(), "occurred_at DESC, created_at DESC, id DESC")
+
     with get_db_connection() as conn:
         cursor = conn.cursor()
         # Count total matching
@@ -840,7 +853,7 @@ def get_transactions_paginated(
         cursor.execute(f"""
             SELECT * FROM transactions 
             {where_clause}
-            ORDER BY occurred_at DESC, created_at DESC, id DESC
+            ORDER BY {order_clause}
             LIMIT ? OFFSET ?
         """, paginated_params)
         items = [dict(r) for r in cursor.fetchall()]

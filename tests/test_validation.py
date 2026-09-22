@@ -159,6 +159,18 @@ class TestValidationMatrix(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_name(None, required=True)
 
+    def test_decimal_precision_addition_and_multiplication(self):
+        """Proves exact Decimal precision: 100 * ₹0.10 = ₹10.00 and ₹0.10 + ₹0.20 = ₹0.30."""
+        from utils.validation import parse_decimal_amount, CENT
+        amt_ten_paisa = parse_decimal_amount("0.10")
+        amt_twenty_paisa = parse_decimal_amount("0.20")
+        
+        sum_amt = (amt_ten_paisa + amt_twenty_paisa).quantize(CENT)
+        self.assertEqual(sum_amt, Decimal("0.30"))
+
+        mult_amt = (amt_ten_paisa * 100).quantize(CENT)
+        self.assertEqual(mult_amt, Decimal("10.00"))
+
 
 if __name__ == "__main__":
     unittest.main()

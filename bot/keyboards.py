@@ -273,9 +273,10 @@ def get_quick_add_keyboard(top_payees: list = None):
     ])
     return InlineKeyboardMarkup(keyboard)
 
-def get_history_paginated_keyboard(page: int, total_pages: int, filter_type: str = "ALL", tx_rows: list = None):
-    """Returns interactive pagination buttons, filter chips, and row tap shortcuts for /history."""
+def get_history_paginated_keyboard(page: int, total_pages: int, filter_type: str = "ALL", tx_rows: list = None, sort_by: str = "date_desc"):
+    """Returns interactive pagination buttons, filter chips, sort toggle, and row tap shortcuts for /history."""
     keyboard = []
+    sort_by = sort_by or "date_desc"
     
     # 1. Row buttons to open detail screen for items on this page
     if tx_rows:
@@ -300,21 +301,30 @@ def get_history_paginated_keyboard(page: int, total_pages: int, filter_type: str
     sent_label = "● 🔴 Sent" if filter_type == "SENT" else "🔴 Sent"
     recv_label = "● 🟢 Recv" if filter_type == "RECEIVED" else "🟢 Recv"
     keyboard.append([
-        InlineKeyboardButton(all_label, callback_data="nav:history:1:ALL"),
-        InlineKeyboardButton(sent_label, callback_data="nav:history:1:SENT"),
-        InlineKeyboardButton(recv_label, callback_data="nav:history:1:RECEIVED")
+        InlineKeyboardButton(all_label, callback_data=f"nav:history:1:ALL:{sort_by}"),
+        InlineKeyboardButton(sent_label, callback_data=f"nav:history:1:SENT:{sort_by}"),
+        InlineKeyboardButton(recv_label, callback_data=f"nav:history:1:RECEIVED:{sort_by}")
     ])
     
-    # 3. Navigation row
+    # 3. Sort Order Toggle Row
+    if sort_by == "date_asc":
+        sort_btn = InlineKeyboardButton("⬆️ Oldest First (ASC)", callback_data=f"nav:history:1:{filter_type}:id_desc")
+    elif sort_by in ("id_desc", "created_desc"):
+        sort_btn = InlineKeyboardButton("🆔 ID Order (ID DESC)", callback_data=f"nav:history:1:{filter_type}:date_desc")
+    else:
+        sort_btn = InlineKeyboardButton("⬇️ Newest First (DESC)", callback_data=f"nav:history:1:{filter_type}:date_asc")
+    keyboard.append([sort_btn])
+
+    # 4. Navigation row
     nav_row = []
     if page > 1:
-        nav_row.append(InlineKeyboardButton("◀ Prev", callback_data=f"nav:history:{page-1}:{filter_type}"))
+        nav_row.append(InlineKeyboardButton("◀ Prev", callback_data=f"nav:history:{page-1}:{filter_type}:{sort_by}"))
     nav_row.append(InlineKeyboardButton(f"{page} / {max(1, total_pages)}", callback_data="nav:history_noop"))
     if page < total_pages:
-        nav_row.append(InlineKeyboardButton("Next ▶", callback_data=f"nav:history:{page+1}:{filter_type}"))
+        nav_row.append(InlineKeyboardButton("Next ▶", callback_data=f"nav:history:{page+1}:{filter_type}:{sort_by}"))
     keyboard.append(nav_row)
     
-    # 4. Back to Menu
+    # 5. Back to Menu
     keyboard.append([InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:home")])
     return InlineKeyboardMarkup(keyboard)
 

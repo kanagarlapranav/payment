@@ -48,5 +48,21 @@ class TestMenuAndHistory(unittest.TestCase):
         items_after = get_custom_menu_items()
         self.assertIsNone(next((it for it in items_after if it['name'] == dish_name), None))
 
+    def test_render_history_page_sorting(self):
+        from database.models import Transaction
+        from database.queries import insert_transaction_with_balance
+        t1 = Transaction(amount=50.0, transaction_type="SENT", person_name="Early Person", transaction_date="2026-09-01")
+        t2 = Transaction(amount=75.0, transaction_type="RECEIVED", person_name="Late Person", transaction_date="2026-09-20")
+        insert_transaction_with_balance(t1)
+        insert_transaction_with_balance(t2)
+
+        # Test ascending sort
+        text_asc, markup_asc = render_history_page(page=1, filter_type="ALL", page_size=5, sort_by="date_asc")
+        self.assertIn("Oldest First", text_asc)
+
+        # Test ID DESC sort
+        text_id_desc, markup_id_desc = render_history_page(page=1, filter_type="ALL", page_size=5, sort_by="id_desc")
+        self.assertIn("ID Order", text_id_desc)
+
 if __name__ == "__main__":
     unittest.main()
