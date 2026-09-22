@@ -94,6 +94,7 @@ DAILY_DIGEST_TIME = os.getenv('DAILY_DIGEST_TIME', '22:00')
 
 # Dashboard Security Token for /api/data
 DASHBOARD_TOKEN = os.getenv('DASHBOARD_TOKEN', '')
+RENDER_EXTERNAL_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://payment-3-kldp.onrender.com').rstrip('/')
 
 # Google Gemini Vision AI Configuration
 GEMINI_API_KEY = os.getenv('GOOGLE_API_KEY') or os.getenv('GEMINI_API_KEY')

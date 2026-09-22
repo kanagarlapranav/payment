@@ -517,8 +517,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 text = render_contacts_ledger_text()
                 await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
             elif nav_target == "dash_info":
-                from config import DASHBOARD_TOKEN
-                base_url = "https://payment-tracker-3r8w.onrender.com"
+                from config import DASHBOARD_TOKEN, RENDER_EXTERNAL_URL
+                base_url = RENDER_EXTERNAL_URL
                 token_str = f"?token={DASHBOARD_TOKEN}" if DASHBOARD_TOKEN else ""
                 dash_link = f"{base_url}/dashboard{token_str}"
                 text = (

@@ -1155,7 +1155,8 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from services.dashboard_auth import create_one_time_code
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
     
-    render_url = os.getenv("RENDER_EXTERNAL_URL", "https://payment-tracker-3r8w.onrender.com").rstrip('/')
+    from config import RENDER_EXTERNAL_URL
+    render_url = RENDER_EXTERNAL_URL
     code = create_one_time_code()
     auth_url = f"{render_url}/auth?code={code}"
     
