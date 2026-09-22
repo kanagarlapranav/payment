@@ -13,7 +13,13 @@ from database.models import Transaction
 from utils.dates import parse_date
 from utils.validation import parse_decimal_amount, validate_name, validate_reference
 
-GEMINI_MODELS = ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-flash-latest"]
+# Prefer env-configured models; fallback to a single known-good model
+GEMINI_MODELS = [
+    m.strip()
+    for m in os.getenv("GEMINI_MODELS", "gemini-flash-latest").split(",")
+    if m.strip()
+] or ["gemini-flash-latest"]
+
 GEMINI_API_KEY = None  # May be set or overridden in tests
 
 # Timeouts specified by Prompt 8
@@ -51,30 +57,23 @@ def _sanitize_error_message(err: Exception, api_key: str = "") -> str:
     msg = str(err)
     if api_key:
         msg = msg.replace(api_key, "[REDACTED_API_KEY]")
-    # Redact full local paths e.g. C:\Users\... or /home/...
     msg = re.sub(r"[A-Za-z]:\\[^\s'\"]+", "[LOCAL_PATH]", msg)
     msg = re.sub(r"/(?:Users|home|root)/[^\s'\"]+", "[LOCAL_PATH]", msg)
     return msg
 
 
 def _prepare_image_b64(image_path: str) -> tuple[str, str]:
-    """
-    Conditionally crops status/chat bars (only if detected on tall screenshots)
-    and resizes image to max 1280px for high-accuracy OCR extraction.
-    """
     try:
         with Image.open(image_path) as img:
             img = img.convert("RGB")
             w, h = img.size
-            
-            # Conditional crop: only crop if tall phone screenshot (h > w * 1.4)
-            # indicating a full device screenshot with system status bar and bottom nav/chat UI
+
             if h > w * 1.4:
-                top = int(h * 0.08)
-                bottom = int(h * 0.88)
+                # Keep crop conservative; do not aggressively cut receipt details
+                top = int(h * 0.03)
+                bottom = int(h * 0.97)
                 img = img.crop((0, top, w, bottom))
 
-            # Resize to max 1280px side as specified in Prompt 8
             img.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=85, optimize=True)
@@ -96,12 +95,6 @@ async def _call_gemini_api_async(
     payload: dict,
     timeout: float = IMAGE_REQUEST_TIMEOUT
 ) -> Tuple[Optional[httpx.Response], Optional[str]]:
-    """
-    Executes an async POST to Gemini API.
-    - 401/403: stops immediately and returns (None, 'CREDENTIAL_ERROR')
-    - 429: exponential backoff
-    - 5xx & timeouts: retries up to 3 times
-    """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
     headers = {
         "Content-Type": "application/json",
@@ -112,35 +105,39 @@ async def _call_gemini_api_async(
     for attempt in range(max_retries):
         try:
             response = await client.post(url, headers=headers, json=payload, timeout=timeout)
-            
-            # 1. Credential Error
+
             if response.status_code in (401, 403):
                 logger.error(f"Gemini API credential error ({response.status_code}) on model {model_name}. Halting.")
                 return None, "CREDENTIAL_ERROR"
 
-            # 2. Rate Limit (429) -> Exponential backoff
             if response.status_code == 429:
                 if attempt < max_retries - 1:
                     delay = 1.0 * (2 ** attempt)
                     logger.warning(f"Gemini rate limit (429) on {model_name}. Backing off for {delay}s...")
                     await asyncio.sleep(delay)
                     continue
-                else:
-                    logger.warning(f"Gemini rate limit (429) exhausted retries on {model_name}.")
-                    return None, "RATE_LIMIT"
+                logger.warning(f"Gemini rate limit (429) exhausted retries on {model_name}.")
+                return None, "RATE_LIMIT"
 
-            # 3. Server Error (5xx) -> Retry
             if response.status_code >= 500:
                 if attempt < max_retries - 1:
                     delay = 0.5 * (2 ** attempt)
                     logger.warning(f"Gemini server error ({response.status_code}) on {model_name}. Retrying in {delay}s...")
                     await asyncio.sleep(delay)
                     continue
-                else:
-                    logger.warning(f"Gemini server error ({response.status_code}) on {model_name} after {max_retries} attempts.")
-                    return response, None
+                logger.warning(f"Gemini server error ({response.status_code}) on {model_name} after {max_retries} attempts.")
+                return response, None
 
-            # Success or client error
+            # 400/404/413/415 -> stop trying this model; log response body to debug
+            if response.status_code in (400, 404, 413, 415):
+                logger.warning(
+                    "Gemini model %s rejected request (%s): %s",
+                    model_name,
+                    response.status_code,
+                    response.text[:500],
+                )
+                return response, None
+
             return response, None
 
         except (httpx.TimeoutException, httpx.NetworkError) as net_err:
@@ -161,12 +158,6 @@ def compute_deterministic_confidence(
     tx_type: str,
     ocr_text: str = ""
 ) -> int:
-    """
-    Computes confidence score deterministically without trusting model hallucinated confidence:
-    - Verifies amount presence in RapidOCR text.
-    - Verifies 12-digit reference number presence in RapidOCR text.
-    - Flags for review (low confidence) if amount or type is dubious.
-    """
     if tx_type not in ("SENT", "RECEIVED") or tx_type == "UNKNOWN":
         return 40
 
@@ -174,15 +165,13 @@ def compute_deterministic_confidence(
         return 20
 
     if not ocr_text:
-        # Without OCR text to cross-verify, return moderate baseline
-        return 80
+        return 70
 
     ocr_upper = ocr_text.upper()
     amt_str_clean = f"{amount:.2f}".rstrip('0').rstrip('.')
     amt_str_full = f"{amount:.2f}"
     amt_int = str(int(amount)) if amount == int(amount) else None
 
-    # Check if amount is present in OCR text
     amount_found = (
         amt_str_clean in ocr_text or
         amt_str_full in ocr_text or
@@ -192,7 +181,6 @@ def compute_deterministic_confidence(
         f"RS {amt_str_clean}" in ocr_upper
     )
 
-    # Check if reference number (UTR) is present in OCR text
     ref_found = False
     if reference_number and len(reference_number) >= 6:
         ref_found = reference_number in ocr_text
@@ -203,9 +191,7 @@ def compute_deterministic_confidence(
         return 90
     elif ref_found:
         return 75
-    else:
-        # Amount not found in raw OCR: flag for user review
-        return 50
+    return 50
 
 
 async def extract_transaction_with_gemini_async(
@@ -214,11 +200,6 @@ async def extract_transaction_with_gemini_async(
     ocr_text: str = "",
     client: Optional[httpx.AsyncClient] = None
 ) -> Tuple[Optional[Transaction], int]:
-    """
-    Asynchronously analyzes payment receipt screenshot using Google Gemini Vision API.
-    Uses thumbnail compression, prompt hygiene, multi-model fallback, JSON validation,
-    and deterministic OCR cross-verification.
-    """
     api_key = get_effective_gemini_api_key()
     if not api_key:
         return None, 0
@@ -230,9 +211,7 @@ async def extract_transaction_with_gemini_async(
     try:
         image_b64, mime_type = _prepare_image_b64(image_path)
 
-        # Prompt hygiene: synthetic names, amounts, UTRs, and isolated untrusted caption
         sanitized_caption = (caption or "").strip()[:500].replace("<", "&lt;").replace(">", "&gt;")
-        
         prompt = (
             "You are an expert Indian UPI & Banking Receipt OCR extractor.\n"
             "Analyze this payment receipt screenshot.\n"
@@ -256,6 +235,7 @@ async def extract_transaction_with_gemini_async(
             "Return ONLY the JSON object, without markdown code fences."
         )
 
+        # Runtime model selection
         models_to_try = list(GEMINI_MODELS)
         if GEMINI_MODEL and GEMINI_MODEL not in models_to_try:
             models_to_try.insert(0, GEMINI_MODEL)
@@ -265,12 +245,7 @@ async def extract_transaction_with_gemini_async(
                 {
                     "parts": [
                         {"text": prompt},
-                        {
-                            "inline_data": {
-                                "mime_type": mime_type,
-                                "data": image_b64
-                            }
-                        }
+                        {"inline_data": {"mime_type": mime_type, "data": image_b64}}
                     ]
                 }
             ],
@@ -282,7 +257,7 @@ async def extract_transaction_with_gemini_async(
 
         should_close_client = False
         if client is None:
-            client = httpx.AsyncClient()
+            client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=20.0, write=20.0, connect=10.0))
             should_close_client = True
 
         try:
@@ -317,7 +292,7 @@ async def extract_transaction_with_gemini_async(
                     logger.warning(f"Malformed JSON returned by {model_name} ({parse_err}). Falling back to next model.")
                     continue
 
-                # 1. Validate amount with validation module
+                # Validate amount
                 raw_amt = parsed.get("amount")
                 try:
                     amt_decimal = parse_decimal_amount(raw_amt, allow_zero=False)
@@ -326,15 +301,20 @@ async def extract_transaction_with_gemini_async(
                     logger.warning(f"Gemini returned invalid amount {raw_amt!r}: {val_amt_err}. Moving to next model.")
                     continue
 
-                # 2. Validate transaction type (do NOT default invalid type to SENT)
+                is_unknown_type = False
                 raw_tx_type = str(parsed.get("transaction_type") or "").strip().upper()
                 if raw_tx_type in ("SENT", "RECEIVED"):
                     tx_type = raw_tx_type
                 else:
-                    logger.warning(f"Gemini returned invalid transaction type '{raw_tx_type}'. Flagging as UNKNOWN for confirmation.")
+                    logger.warning(
+                        "Gemini returned unknown transaction type %r for model %s. Setting UNKNOWN with low confidence.",
+                        raw_tx_type,
+                        model_name
+                    )
                     tx_type = "UNKNOWN"
+                    is_unknown_type = True
 
-                # 3. Validate strings and dates
+                # Validate strings and dates
                 raw_person = parsed.get("person_name") or "Unknown"
                 try:
                     person = validate_name(raw_person, max_length=120)
@@ -356,20 +336,22 @@ async def extract_transaction_with_gemini_async(
                     except Exception:
                         ref_no = None
 
-                # 4. Compute deterministic confidence
+                # Use actual OCR text for independent confidence if available
                 confidence = compute_deterministic_confidence(
                     amount=amount,
                     reference_number=ref_no,
                     tx_type=tx_type,
-                    ocr_text=ocr_text or parsed.get("raw_text", "")
+                    ocr_text=ocr_text if ocr_text else ""
                 )
+                if is_unknown_type:
+                    confidence = min(confidence, 40)
 
                 transaction = Transaction(
-                    transaction_type="SENT" if tx_type != "RECEIVED" else "RECEIVED",
+                    transaction_type=tx_type,
                     amount=amount,
                     person_name=person,
                     sender_name=person if tx_type == "RECEIVED" else "",
-                    recipient_name=person if tx_type != "RECEIVED" else "",
+                    recipient_name=person if tx_type == "SENT" else "",
                     payment_app=payment_app,
                     transaction_date=date_obj,
                     transaction_time=time_str,
@@ -407,7 +389,6 @@ def extract_transaction_with_gemini(
             loop = None
 
         if loop and loop.is_running():
-            # If called inside an active event loop, run in thread or separate loop
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 return pool.submit(
@@ -450,7 +431,7 @@ async def parse_text_with_gemini_async(
 
     should_close_client = False
     if client is None:
-        client = httpx.AsyncClient()
+        client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=15.0, write=15.0, connect=10.0))
         should_close_client = True
 
     try:
@@ -486,9 +467,11 @@ async def parse_text_with_gemini_async(
             except Exception:
                 continue
 
-            tx_type = str(p.get("transaction_type") or "SENT").strip().upper()
+            # Critical fix: reject invalid type, never default to SENT
+            tx_type = str(p.get("transaction_type") or "").strip().upper()
             if tx_type not in ("SENT", "RECEIVED"):
-                tx_type = "SENT"
+                logger.warning("Invalid natural-language Gemini transaction type: %r", tx_type)
+                continue
 
             person = str(p.get("person_name") or "Unknown").title()
             cat = str(p.get("category") or "General")
@@ -549,7 +532,7 @@ async def generate_gemini_spending_advice_async(
 
     should_close_client = False
     if client is None:
-        client = httpx.AsyncClient()
+        client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=15.0, write=15.0, connect=10.0))
         should_close_client = True
 
     try:
@@ -607,7 +590,7 @@ async def generate_gemini_daily_commentary_async(
 
     should_close_client = False
     if client is None:
-        client = httpx.AsyncClient()
+        client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=15.0, write=15.0, connect=10.0))
         should_close_client = True
 
     try:

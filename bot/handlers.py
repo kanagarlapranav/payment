@@ -24,7 +24,7 @@ from bot.keyboards import (
     get_add_menu_keyboard, get_more_menu_keyboard, get_transaction_detail_keyboard,
     get_backup_status_keyboard
 )
-from ocr.extractor import perform_ocr
+from ocr.extractor import perform_ocr, perform_ocr_async
 from ocr.gemini_vision import is_gemini_available, extract_transaction_with_gemini
 from services.gdrive_service import is_gdrive_available, upload_receipt_to_drive, upload_backup_to_drive
 from services.transaction_service import process_transaction, commit_transaction
@@ -194,13 +194,13 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        # Run OCR first with thread executor & timeout for deterministic cross-verification
-        ocr_text = await asyncio.to_thread(perform_ocr, str(image_path))
+        # Run OCR first with native async & timeout for deterministic cross-verification
+        ocr_text = await perform_ocr_async(str(image_path))
 
         transaction = None
         confidence = 0
 
-        # Tier 1: Try Google Gemini Vision AI if API key is configured
+        # Tier 1: Try Google Gemini Vision AI if API key is configured and valid
         if is_gemini_available():
             try:
                 logger.info("Attempting Gemini Vision extraction with OCR cross-verification...")
@@ -215,19 +215,26 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     transaction.original_image_path = str(image_path)
             except Exception as gem_err:
                 logger.warning(f"Gemini Vision error, falling back to local OCR parser: {gem_err}")
+        else:
+            logger.warning("Gemini Vision skipped — API key not configured or empty. Falling back to local OCR.")
 
         # Tier 2: Fallback to local RapidOCR + Regex Heuristic Parser
         if not transaction or not transaction.amount:
             if not ocr_text or not ocr_text.strip():
                 await deliver_response(
                     status_msg, message,
-                    "❌ Could not extract any readable text from the image. Please upload a clearer screenshot."
+                    "❌ Could not read text from this image.\n\n"
+                    "💡 <b>Tip:</b> You can log it manually instead:\n"
+                    "<code>Paid 2000 to Kanagarla Sai Akhil Amazon Pay</code>\n"
+                    "or just <code>2000 sent Kanagarla</code>",
+                    parse_mode='HTML'
                 )
                 return
 
             transaction, confidence = await asyncio.to_thread(
                 process_transaction, ocr_text, str(image_path), message_id, chat_id, caption
             )
+
 
         # Basic validation
         if not transaction or not transaction.amount or transaction.amount <= 0:
@@ -363,11 +370,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 if not txs:
                     lines.append("<i>No transactions logged today yet.</i>\n\n💡 Tip: Send a receipt screenshot or type <code>120 dosa</code>.")
                 else:
-                    for t in txs:
+                    for idx, t in enumerate(txs, 1):
                         badge = "🟢" if t['transaction_type'] == 'RECEIVED' else "🔴"
                         arrow = "+" if t['transaction_type'] == 'RECEIVED' else "-"
                         lines.append(
-                            f"<b>#{t['id']}</b> {badge} <b>{arrow}{format_currency(t['amount'])}</b> — {html.escape(t.get('person_name') or 'Unknown')}\n"
+                            f"<b>{idx}.</b> {badge} <b>{arrow}{format_currency(t['amount'])}</b> — {html.escape(t.get('person_name') or 'Unknown')}\n"
                             f"   🏷 {html.escape(t.get('category') or 'General')} | 💼 Bal: <code>{format_currency(t.get('balance_after', 0))}</code>\n"
                         )
                 lines.append("━━━━━━━━━━━━━━")
@@ -2199,31 +2206,42 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     from config import BACKUP_JSON_PATH
-    from services.backup_service import import_database_from_json
+    from services.backup_service import import_database_from_json, backup_to_telegram
     from database.queries import get_all_transactions, get_balance_setting
-    from utils.formatting import format_currency
+    from utils.currency import format_currency
     import html
     import asyncio
+    import uuid
 
+    tmp_path = BACKUP_JSON_PATH.with_name(f"temp_upload_{uuid.uuid4().hex}.json")
     await update.message.reply_text("📥 <b>Received backup document. Downloading and verifying...</b>", parse_mode='HTML')
     try:
         file_obj = await context.bot.get_file(doc.file_id)
-        await file_obj.download_to_drive(custom_path=BACKUP_JSON_PATH)
+        await file_obj.download_to_drive(custom_path=tmp_path)
+
+        result = await asyncio.to_thread(import_database_from_json, tmp_path)
+        if result.get('success'):
+            try:
+                tmp_path.replace(BACKUP_JSON_PATH)
+            except Exception:
+                pass
+            await backup_to_telegram(context.bot)
+            txs = await asyncio.to_thread(get_all_transactions)
+            cur_b = format_currency(get_balance_setting())
+            await update.message.reply_text(
+                f"✅ <b>Backup Restored Successfully!</b>\n\n"
+                f"• <b>{len(txs)}</b> live transactions restored.\n"
+                f"• <b>Current Balance:</b> {cur_b}\n\n"
+                f"Use <code>/balance</code> or <code>/history</code> to view your ledger.",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(f"❌ Restore failed: {html.escape(str(result.get('error')))}", parse_mode='HTML')
     except Exception as e:
         await update.message.reply_text(f"❌ Failed to download backup file: {e}")
-        return
-
-    result = await asyncio.to_thread(import_database_from_json)
-    if result.get('success'):
-        await backup_to_telegram(context.bot)
-        txs = await asyncio.to_thread(get_all_transactions)
-        cur_b = format_currency(get_balance_setting())
-        await update.message.reply_text(
-            f"✅ <b>Backup Restored Successfully!</b>\n\n"
-            f"• <b>{len(txs)}</b> live transactions restored.\n"
-            f"• <b>Current Balance:</b> {cur_b}\n\n"
-            f"Use <code>/balance</code> or <code>/history</code> to view your ledger.",
-            parse_mode='HTML'
-        )
-    else:
-        await update.message.reply_text(f"❌ Restore failed: {html.escape(str(result.get('error')))}", parse_mode='HTML')
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass

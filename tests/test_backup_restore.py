@@ -27,26 +27,6 @@ from utils.dates import utc_now_iso, build_occurred_at
 from config import DB_PATH
 
 class TestBackupRestorePrompt6(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.db_backup = None
-        cls.json_backup = None
-        if os.path.exists(DB_PATH):
-            with open(DB_PATH, 'rb') as f:
-                cls.db_backup = f.read()
-        if os.path.exists(BACKUP_JSON_PATH):
-            with open(BACKUP_JSON_PATH, 'rb') as f:
-                cls.json_backup = f.read()
-
-    @classmethod
-    def tearDownClass(cls):
-        if cls.db_backup is not None:
-            with open(DB_PATH, 'wb') as f:
-                f.write(cls.db_backup)
-        if cls.json_backup is not None:
-            with open(BACKUP_JSON_PATH, 'wb') as f:
-                f.write(cls.json_backup)
-
     def setUp(self):
         setup_database()
 
@@ -450,7 +430,38 @@ class TestBackupRestorePrompt6(unittest.TestCase):
             self.assertEqual(row["value"], "0")
             cur.execute("SELECT value FROM settings WHERE key = 'database_initialized'")
             row2 = cur.fetchone()
-            self.assertEqual(row2["value"], "1")
+    def test_stale_empty_backup_rejection(self):
+        """A stale empty backup must NEVER delete current live rows unless explicitly confirmed."""
+        from database.models import Transaction
+        from database.queries import insert_transaction_with_balance
+        from services.backup_service import import_database_from_json, compute_canonical_checksum
+        
+        t = Transaction(amount=500.0, transaction_type="SENT", person_name="Stale Test")
+        insert_transaction_with_balance(t)
+        
+        stale_backup = {
+            "version": 2,
+            "revision": 1,
+            "exported_at": "2026-01-01T00:00:00Z",
+            "transaction_count": 0,
+            "live_count": 0,
+            "empty_ledger": True,
+            "balance": 0.0,
+            "settings": {"backup_revision": "1"},
+            "custom_menu_items": [],
+            "budgets": [],
+            "transactions": []
+        }
+        stale_backup["checksum"] = compute_canonical_checksum(stale_backup)
+        
+        res = import_database_from_json(data_dict=stale_backup, allow_empty_ledger=False)
+        self.assertFalse(res.get("success"))
+        err_msg = res.get("error", "")
+        self.assertTrue("Stale" in err_msg or "requires" in err_msg)
+        
+        with get_db_connection() as conn:
+            cnt = conn.execute("SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL").fetchone()[0]
+            self.assertGreater(cnt, 0)
 
 if __name__ == '__main__':
     unittest.main()

@@ -395,7 +395,7 @@ def preview_database_import(input_path: Path = None, data_dict: dict = None) -> 
         'backup_balance': data_dict.get('balance', 0.0),
     }
 
-def import_database_from_json(input_path: Path = None, data_dict: dict = None) -> dict:
+def import_database_from_json(input_path: Path = None, data_dict: dict = None, allow_empty_ledger: bool = False) -> dict:
     """
     Imports transactions, custom menu items, and settings from JSON into SQLite database.
     Order:
@@ -403,15 +403,16 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None) -
       2. Validate schema
       3. Verify checksum (missing or mismatched = reject)
       4. Validate every field with utils/validation
-      5. Import inside ONE connection and ONE database transaction under LEDGER_LOCK.
+      5. Protection against destructive stale or unconfirmed empty-ledger restores.
+      6. Import inside ONE connection and ONE database transaction under LEDGER_LOCK.
          Any failure rolls back everything.
-      6. Per-row rules for v2: match by uid; compare parsed UTC datetimes. Newer wins,
+      7. Per-row rules for v2: match by uid; compare parsed UTC datetimes. Newer wins,
          older ignored, equal -> tombstone wins. Newer local tombstone always beats older live backup row.
          Idempotent on re-import.
-      7. v1 backups (no uid): never match by local id. Skipped if live row has same reference
+      8. v1 backups (no uid): never match by local id. Skipped if live row has same reference
          or (type, amount, date, time, person). Otherwise insert with new generated uid.
-      8. Recalculate balances inside the same connection.
-      9. Compare recalculated balance with backup balance. On mismatch, report loudly.
+      9. Recalculate balances inside the same connection.
+      10. Compare recalculated balance with backup balance. On mismatch, report loudly.
     """
     path = input_path or BACKUP_JSON_PATH
     if data_dict is None:
@@ -441,6 +442,31 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None) -
             with get_db_connection() as conn:
                 cursor = conn.cursor()
 
+                # Step 5: Destructive empty-backup protection & revision check
+                cursor.execute("SELECT value FROM settings WHERE key = 'backup_revision'")
+                rev_row = cursor.fetchone()
+                local_rev = int(rev_row['value']) if rev_row and rev_row['value'] and str(rev_row['value']).isdigit() else 1
+                inc_rev = int(data_dict.get('revision', 1))
+
+                cursor.execute("SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL")
+                local_live_count = cursor.fetchone()[0]
+
+                is_empty_backup = bool(data_dict.get('empty_ledger') or len(transactions) == 0)
+
+                if is_empty_backup and local_live_count > 0:
+                    if inc_rev < local_rev:
+                        logger.warning(f"Stale empty backup rejected (inc_rev={inc_rev} < local_rev={local_rev})")
+                        return {
+                            'success': False,
+                            'error': f"Stale empty backup rejected (incoming rev {inc_rev} < local rev {local_rev}). Protection active."
+                        }
+                    if not allow_empty_ledger:
+                        logger.warning("Empty backup restore over live rows attempted without allow_empty_ledger=True")
+                        return {
+                            'success': False,
+                            'error': "Restoring an empty backup over live transactions requires explicit owner confirmation."
+                        }
+
                 cursor.execute("SELECT * FROM transactions")
                 existing_rows = cursor.fetchall()
                 existing_by_uid = {r['uid']: dict(r) for r in existing_rows if r['uid']}
@@ -451,7 +477,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None) -
 
                 if version >= 2:
                     now_utc = utc_now_iso()
-                    if data_dict.get('empty_ledger') and len(transactions) == 0:
+                    if is_empty_backup:
                         cursor.execute("UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE deleted_at IS NULL", (now_utc, now_utc))
                     for tx in transactions:
                         tx_uid = tx['uid']

@@ -165,10 +165,6 @@ def update_balance_for_transaction(transaction: Transaction) -> Transaction:
 
     final_bal = float(new_balance.quantize(CENT))
     transaction.balance_after = final_bal
-    try:
-        update_balance_setting(final_bal)
-    except Exception:
-        pass
     return transaction
 
 def get_today_summary() -> TransactionSummary:
@@ -192,10 +188,7 @@ def get_today_summary() -> TransactionSummary:
         total_received = Decimal('0.00')
 
         for row in rows:
-            try:
-                amt = Decimal(str(row['amount'])).quantize(CENT)
-            except Exception:
-                amt = Decimal('0.00')
+            amt = parse_decimal_amount(row['amount'], allow_zero=False)
             if row['transaction_type'] == 'SENT':
                 total_sent += amt
             elif row['transaction_type'] == 'RECEIVED':
@@ -225,10 +218,7 @@ def get_overall_summary() -> TransactionSummary:
         total_received = Decimal('0.00')
 
         for row in rows:
-            try:
-                amt = Decimal(str(row['amount'])).quantize(CENT)
-            except Exception:
-                amt = Decimal('0.00')
+            amt = parse_decimal_amount(row['amount'], allow_zero=False)
             if row['transaction_type'] == 'SENT':
                 total_sent += amt
             elif row['transaction_type'] == 'RECEIVED':
