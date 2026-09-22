@@ -1651,6 +1651,50 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from bot.commands import menu_command
         await menu_command(update, context)
         return
+    elif cmd_lower in (r'\\dashboard', 'dashboard', '/dashboard'):
+        from bot.commands import dashboard_command
+        await dashboard_command(update, context)
+        return
+    elif cmd_lower.startswith((r'\\digest', 'digest', '/digest')):
+        parts = text.split(maxsplit=1)
+        context.args = parts[1:] if len(parts) > 1 else []
+        from bot.commands import digest_command
+        await digest_command(update, context)
+        return
+    elif cmd_lower.startswith((r'\\insights', 'insights', '/insights')):
+        parts = text.split(maxsplit=1)
+        context.args = parts[1:] if len(parts) > 1 else []
+        from bot.commands import insights_command
+        await insights_command(update, context)
+        return
+    elif cmd_lower.startswith((r'\\budget', 'budget', '/budget')):
+        parts = text.split(maxsplit=1)
+        context.args = parts[1:] if len(parts) > 1 else []
+        from bot.commands import budget_command
+        await budget_command(update, context)
+        return
+    elif cmd_lower.startswith((r'\\setbudget', 'setbudget', '/setbudget')):
+        parts = text.split(maxsplit=1)
+        context.args = parts[1:] if len(parts) > 1 else []
+        from bot.commands import setbudget_command
+        await setbudget_command(update, context)
+        return
+    elif cmd_lower.startswith((r'\\setbalance', 'setbalance', '/setbalance')):
+        parts = text.split(maxsplit=1)
+        context.args = parts[1:] if len(parts) > 1 else []
+        from bot.commands import setbalance_command
+        await setbalance_command(update, context)
+        return
+    elif cmd_lower.startswith((r'\\export', 'export', '/export', 'statement', '/statement', 'report', '/report')):
+        parts = text.split(maxsplit=1)
+        context.args = parts[1:] if len(parts) > 1 else []
+        from bot.commands import export_command
+        await export_command(update, context)
+        return
+    elif cmd_lower in (r'\\help', 'help', '/help'):
+        from bot.commands import help_command
+        await help_command(update, context)
+        return
     elif cmd_lower in (r'\\cafestats', 'cafestats', '/cafestats', 'cafespends', '/cafespends'):
         from bot.commands import cafestats_command
         await cafestats_command(update, context)
