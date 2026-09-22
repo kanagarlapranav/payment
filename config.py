@@ -21,6 +21,7 @@ ENV_NAME = os.getenv("PAYMENT_TRACKER_ENV", "").strip().lower()
 IS_TEST_ENV = (
     os.getenv("PAYMENT_TRACKER_ENV", "").strip().lower() == "test"
     or "pytest" in sys.modules
+    or "PYTEST_CURRENT_TEST" in os.environ
 )
 
 production_dir = (BASE_DIR / "data").resolve()
