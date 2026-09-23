@@ -10,7 +10,10 @@ from bot.keyboards import (
     get_home_menu_keyboard, get_add_menu_keyboard, get_more_menu_keyboard,
     get_transaction_detail_keyboard, get_backup_status_keyboard,
     get_history_paginated_keyboard, get_quick_add_keyboard,
-    get_receipt_confirm_keyboard, get_receipt_edit_fields_keyboard
+    get_receipt_confirm_keyboard, get_receipt_edit_fields_keyboard,
+    get_help_keyboard, get_balance_keyboard, get_stats_keyboard,
+    get_budget_keyboard, get_insights_keyboard, get_digest_keyboard,
+    get_cafestats_keyboard, get_standard_nav_keyboard
 )
 from bot.commands import (
     render_home_menu_text, render_history_page, render_transaction_detail,
@@ -31,7 +34,15 @@ class TestUXAndNavigation(unittest.TestCase):
             get_history_paginated_keyboard(page=2, total_pages=5, filter_type="SENT", tx_rows=[{"id": 101}, {"id": 102}]),
             get_quick_add_keyboard(top_payees=[{"person_name": "Swiggy"}, {"person_name": "Zomato"}]),
             get_receipt_confirm_keyboard(pending_id="abc123def4", duplicate_warning=True),
-            get_receipt_edit_fields_keyboard(pending_id="abc123def4")
+            get_receipt_edit_fields_keyboard(pending_id="abc123def4"),
+            get_help_keyboard(),
+            get_balance_keyboard(),
+            get_stats_keyboard(),
+            get_budget_keyboard(),
+            get_insights_keyboard(),
+            get_digest_keyboard(),
+            get_cafestats_keyboard(),
+            get_standard_nav_keyboard()
         ]
         
         for kb in keyboards:
@@ -139,6 +150,54 @@ class TestUXAndNavigation(unittest.TestCase):
         self.assertIn("backup_now", callbacks)
         self.assertIn("nav:restore_info", callbacks)
         self.assertIn("nav:home", callbacks)
+
+    def test_command_keyboards_structure(self):
+        """Verify that every command keyboard exposes expected navigation actions."""
+        help_callbacks = [btn.callback_data for row in get_help_keyboard().inline_keyboard for btn in row]
+        self.assertIn("nav:home", help_callbacks)
+        self.assertIn("nav:history:1:ALL", help_callbacks)
+        self.assertIn("nav:balance", help_callbacks)
+        self.assertIn("nav:today", help_callbacks)
+        self.assertIn("nav:stats", help_callbacks)
+        self.assertIn("nav:budget", help_callbacks)
+        self.assertIn("nav:gemini", help_callbacks)
+        self.assertIn("nav:dash_info", help_callbacks)
+
+        balance_callbacks = [btn.callback_data for row in get_balance_keyboard().inline_keyboard for btn in row]
+        self.assertIn("nav:today", balance_callbacks)
+        self.assertIn("nav:history:1:ALL", balance_callbacks)
+        self.assertIn("nav:stats", balance_callbacks)
+        self.assertIn("nav:quickadd", balance_callbacks)
+        self.assertIn("nav:home", balance_callbacks)
+
+        stats_callbacks = [btn.callback_data for row in get_stats_keyboard().inline_keyboard for btn in row]
+        self.assertIn("nav:budget", stats_callbacks)
+        self.assertIn("nav:insights", stats_callbacks)
+        self.assertIn("nav:home", stats_callbacks)
+
+        budget_callbacks = [btn.callback_data for row in get_budget_keyboard().inline_keyboard for btn in row]
+        self.assertIn("nav:stats", budget_callbacks)
+        self.assertIn("nav:insights", budget_callbacks)
+        self.assertIn("nav:home", budget_callbacks)
+
+        insights_callbacks = [btn.callback_data for row in get_insights_keyboard().inline_keyboard for btn in row]
+        self.assertIn("nav:stats", insights_callbacks)
+        self.assertIn("nav:budget", insights_callbacks)
+        self.assertIn("nav:home", insights_callbacks)
+
+        digest_callbacks = [btn.callback_data for row in get_digest_keyboard().inline_keyboard for btn in row]
+        self.assertIn("nav:today", digest_callbacks)
+        self.assertIn("nav:stats", digest_callbacks)
+        self.assertIn("nav:home", digest_callbacks)
+
+        cafe_callbacks = [btn.callback_data for row in get_cafestats_keyboard().inline_keyboard for btn in row]
+        self.assertIn("cafe_view_menu", cafe_callbacks)
+        self.assertIn("cafe_edit_last", cafe_callbacks)
+        self.assertIn("nav:home", cafe_callbacks)
+
+        nav_callbacks = [btn.callback_data for row in get_standard_nav_keyboard().inline_keyboard for btn in row]
+        self.assertIn("nav:history:1:ALL", nav_callbacks)
+        self.assertIn("nav:home", nav_callbacks)
 
 if __name__ == "__main__":
     unittest.main()

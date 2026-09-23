@@ -344,14 +344,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if not await require_authorized(update):
             return
 
-    try:
-        await query.answer()
-    except Exception:
-        pass
-    
     data = query.data
     parts = data.split(":") if ":" in data else [data]
     action = parts[0]
+
+    if action not in ("set_model", "refresh_gemini"):
+        try:
+            await query.answer()
+        except Exception:
+            pass
     
     # --- 0. Interactive Home Menu Navigation ---
     if action == "nav":
@@ -378,9 +379,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     f"• Total Records: {overall.transaction_count}\n"
                     "━━━━━━━━━━━━━━"
                 )
-                from telegram import InlineKeyboardButton
-                extra_btn = [InlineKeyboardButton("➕ Quick Add", callback_data="nav:quickadd")]
-                await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(extra_btn), parse_mode='HTML')
+                from bot.keyboards import get_balance_keyboard
+                await query.edit_message_text(text, reply_markup=get_balance_keyboard(), parse_mode='HTML')
             elif nav_target == "today":
                 from database.queries import get_transactions_by_date
                 today_stats = get_today_summary()
@@ -402,9 +402,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                         )
                 lines.append("━━━━━━━━━━━━━━")
                 lines.append(f"🔴 Spent: {format_currency(today_stats.total_sent)} | 🟢 Recv: {format_currency(today_stats.total_received)}")
-                from telegram import InlineKeyboardButton
-                extra_btn = [InlineKeyboardButton("➕ Quick Add", callback_data="nav:quickadd")]
-                await query.edit_message_text("\n".join(lines), reply_markup=get_back_to_menu_keyboard(extra_btn), parse_mode='HTML')
+                from bot.keyboards import get_balance_keyboard
+                await query.edit_message_text("\n".join(lines), reply_markup=get_balance_keyboard(), parse_mode='HTML')
             elif nav_target == "history":
                 page = int(parts[2]) if len(parts) > 2 else 1
                 ft = parts[3] if len(parts) > 3 else "ALL"
@@ -602,6 +601,50 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 rev = await asyncio.to_thread(get_monthly_review, y, m)
                 text = await asyncio.to_thread(render_monthly_closing_summary_text, y, m)
                 await query.edit_message_text(text, reply_markup=get_monthly_closing_keyboard(y, m, is_closed=bool(rev)), parse_mode='HTML')
+            elif nav_target == "stats":
+                now_dt = get_current_time_in_tz()
+                stats = get_monthly_summary(now_dt.year, now_dt.month)
+                from datetime import date
+                month_name = date(now_dt.year, now_dt.month, 1).strftime("%B %Y")
+                top_p_text = "N/A"
+                if stats['top_recipient']:
+                    top_p_text = f"{stats['top_recipient']['person_name']} ({format_currency(stats['top_recipient']['total'])})"
+                text = (
+                    f"📊 <b>Monthly Analytics - {html.escape(month_name)}</b>\n\n"
+                    f"🔴 Total Sent: <b>{html.escape(format_currency(stats['total_sent']))}</b>\n"
+                    f"🟢 Total Received: <b>{html.escape(format_currency(stats['total_received']))}</b>\n"
+                    f"📈 Net Flow: <b>{html.escape(format_currency(stats['net_savings']))}</b>\n\n"
+                    f"🔢 Total Transactions: <b>{stats['tx_count']}</b>\n"
+                    f"🏆 Top Recipient: {html.escape(top_p_text)}"
+                )
+                from bot.keyboards import get_stats_keyboard
+                await query.edit_message_text(text, reply_markup=get_stats_keyboard(), parse_mode='HTML')
+            elif nav_target == "budget":
+                from services.budget_service import format_budget_status
+                now_dt = get_current_time_in_tz()
+                text = format_budget_status(now_dt.year, now_dt.month)
+                from bot.keyboards import get_budget_keyboard
+                await query.edit_message_text(text, reply_markup=get_budget_keyboard(), parse_mode='HTML')
+            elif nav_target == "insights":
+                from services.category_service import format_spending_insights
+                now_dt = get_current_time_in_tz()
+                text = format_spending_insights(now_dt.year, now_dt.month)
+                from bot.keyboards import get_insights_keyboard
+                await query.edit_message_text(text, reply_markup=get_insights_keyboard(), parse_mode='HTML')
+            elif nav_target == "digest":
+                from services.scheduler_service import format_daily_digest
+                text = format_daily_digest(None)
+                from bot.keyboards import get_digest_keyboard
+                await query.edit_message_text(text, reply_markup=get_digest_keyboard(), parse_mode='HTML')
+            elif nav_target == "cafe":
+                from services.cafeteria_service import format_cafeteria_stats
+                text = format_cafeteria_stats()
+                from bot.keyboards import get_cafestats_keyboard
+                await query.edit_message_text(text, reply_markup=get_cafestats_keyboard(), parse_mode='HTML')
+            elif nav_target in ("gemini", "gemini_status"):
+                from bot.commands import render_gemini_status_payload
+                card, keyboard = await render_gemini_status_payload(force_refresh=False)
+                await query.edit_message_text(card, reply_markup=keyboard, parse_mode='HTML')
         except Exception as nav_err:
             if "Message is not modified" not in str(nav_err):
                 logger.warning(f"Nav error ({nav_target}): {nav_err}")
@@ -1671,7 +1714,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception:
             pass
 
-        card, keyboard = await render_gemini_status_payload()
+        card, keyboard = await render_gemini_status_payload(force_refresh=False)
         try:
             await query.edit_message_text(card, reply_markup=keyboard, parse_mode='HTML')
         except Exception:
@@ -1684,7 +1727,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.answer("🔄 Refreshing Gemini quota and status…")
         except Exception:
             pass
-        card, keyboard = await render_gemini_status_payload()
+        card, keyboard = await render_gemini_status_payload(force_refresh=True)
         try:
             await query.edit_message_text(card, reply_markup=keyboard, parse_mode='HTML')
         except Exception:
