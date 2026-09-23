@@ -20,7 +20,7 @@ from bot.commands import (
     setbalance_command, export_command, help_command, chatid_command, amount_command,
     insights_command, budget_command, setbudget_command, digest_command, dashboard_command, menu_command,
     cafestats_command, cafeedit_command, addmenu_command, delmenu_command, restore_command, undo_command,
-    geministatus_command
+    geministatus_command, setmodel_command
 )
 from bot.handlers import handle_image, handle_callback_query, handle_text, handle_document
 from services.scheduler_service import register_scheduler_jobs
@@ -176,6 +176,7 @@ def build_application():
     app.add_handler(CommandHandler("digest", digest_command))
     app.add_handler(CommandHandler("dashboard", dashboard_command))
     app.add_handler(CommandHandler(["gemini", "geministatus", "quota", "ai", "status"], geministatus_command))
+    app.add_handler(CommandHandler(["setmodel", "model"], setmodel_command))
     app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(CommandHandler("cafeteria", menu_command))
     app.add_handler(CommandHandler("cafestats", cafestats_command))

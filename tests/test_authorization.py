@@ -135,6 +135,13 @@ ALL_COMMAND_HANDLERS = {
     "importbackup": cmd_module.restore_command,
     "undo": cmd_module.undo_command,
     "revert": cmd_module.undo_command,
+    "gemini": cmd_module.geministatus_command,
+    "geministatus": cmd_module.geministatus_command,
+    "quota": cmd_module.geministatus_command,
+    "ai": cmd_module.geministatus_command,
+    "status": cmd_module.geministatus_command,
+    "setmodel": cmd_module.setmodel_command,
+    "model": cmd_module.setmodel_command,
 }
 
 @pytest.mark.parametrize("cmd_name, handler", list(ALL_COMMAND_HANDLERS.items()))
@@ -177,7 +184,8 @@ def test_readonly_commands_allow_group_member(cmd_name):
          patch("services.cafeteria_service.format_full_menu", return_value="Menu"), \
          patch("services.cafeteria_service.format_cafeteria_stats", return_value="Stats"), \
          patch("services.scheduler_service.format_daily_digest", return_value="Digest"), \
-         patch("services.budget_service.format_budget_status", return_value="Budget"):
+         patch("services.budget_service.format_budget_status", return_value="Budget"), \
+         patch("ocr.gemini_vision.check_gemini_api_status_async", AsyncMock(return_value={"status": "OK", "model": "gemini-3.8-flash", "masked_key": "…1234"})):
         
         mock_ts.return_value.net_change = 0
         mock_ts.return_value.total_received = 0

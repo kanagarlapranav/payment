@@ -504,6 +504,26 @@ def set_budget_setting(amount: float):
             increment_revision_and_mark_dirty(conn)
             conn.commit()
 
+def get_model_setting() -> str:
+    """Gets the user-selected preferred Gemini model from settings ('AUTO' by default)."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = 'preferred_gemini_model'")
+        row = cursor.fetchone()
+        return str(row['value']).strip() if row and row['value'] else "AUTO"
+
+def set_model_setting(model_name: str) -> None:
+    """Persists the preferred Gemini model in settings under LEDGER_LOCK."""
+    with LEDGER_LOCK:
+        clean_model = (model_name or "AUTO").strip()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('preferred_gemini_model', ?, ?)",
+                (clean_model, utc_now_iso())
+            )
+            conn.commit()
+
 def get_monthly_spending(year: int, month: int) -> float:
     """Gets the total SENT amount for a given month."""
     month_str = f"{year:04d}-{month:02d}"

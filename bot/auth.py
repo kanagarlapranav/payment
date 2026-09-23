@@ -13,18 +13,19 @@ READ_ONLY_COMMANDS = {
     "start", "balance", "today", "history", "last5", "recent", "details", "ids",
     "date", "search", "find", "amount", "amt", "monthly", "stats", "filter",
     "sort", "chatid", "help", "menu", "cafeteria", "canteen", "cafestats",
-    "cafespends", "budget", "digest", "insights"
+    "cafespends", "budget", "digest", "insights", "gemini", "geministatus",
+    "quota", "ai", "status"
 }
 
 ADMIN_COMMANDS = {
     "edit", "delete", "setbalance", "export", "report", "statement",
     "restore", "importbackup", "undo", "revert", "setbudget", "addmenu", "delmenu",
-    "cafeedit", "editcafe", "dashboard"
+    "cafeedit", "editcafe", "dashboard", "setmodel", "model"
 }
 
 # Callback Action Prefix Policies
 READ_ONLY_CALLBACK_ACTIONS = {
-    "nav", "filter", "sort", "cafe_stats", "cafe_view_menu", "tx_view"
+    "nav", "filter", "sort", "cafe_stats", "cafe_view_menu", "tx_view", "refresh_gemini"
 }
 
 ADMIN_CALLBACK_ACTIONS = {
@@ -50,7 +51,9 @@ ADMIN_CALLBACK_ACTIONS = {
     # JSON Upload Import Confirmation
     "json_import_confirm", "json_import_cancel",
     # Recurring & Monthly Reviews
-    "rec_paid", "rec_skip", "rec_pause", "rec_resume", "rec_del", "close_month"
+    "rec_paid", "rec_skip", "rec_pause", "rec_resume", "rec_del", "close_month",
+    # Gemini Model Switching
+    "set_model"
 }
 
 def get_effective_user_id(update: Update) -> Optional[int]:

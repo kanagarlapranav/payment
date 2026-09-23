@@ -13,14 +13,59 @@ from database.models import Transaction
 from utils.dates import parse_date
 from utils.validation import parse_decimal_amount, validate_name, validate_reference
 
-# Prefer env-configured models; fallback to a single known-good model
-# Prefer env-configured models; fallback to models with active free-tier quota
-DEFAULT_GEMINI_MODELS = "gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-3.8-flash,gemini-flash-latest"
+# Default priority order requested by user:
+# 1st: gemini-3.8-flash, 2nd: gemini-3.7-flash, 3rd: gemini-3.6-flash, 4th: gemini-3.5-flash-lite
+DEFAULT_GEMINI_MODELS = "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,gemini-flash-latest"
 GEMINI_MODELS = [
     m.strip()
     for m in os.getenv("GEMINI_MODELS", DEFAULT_GEMINI_MODELS).split(",")
     if m.strip()
-] or ["gemini-3.6-flash", "gemini-3.5-flash-lite"]
+] or ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+
+
+def get_effective_model_list() -> list[str]:
+    """
+    Returns the ordered list of Gemini models to attempt.
+    Default priority: gemini-3.8-flash -> gemini-3.7-flash -> gemini-3.6-flash -> gemini-3.5-flash-lite.
+    If the user has selected a specific model via database settings or GEMINI_MODEL env var,
+    that model is prioritized as 1st, while retaining the remaining models for automatic failover.
+    """
+    base_models = [
+        m.strip()
+        for m in os.getenv("GEMINI_MODELS", DEFAULT_GEMINI_MODELS).split(",")
+        if m.strip()
+    ] or ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+
+    preferred_model = ""
+    try:
+        from database.queries import get_model_setting
+        preferred_model = get_model_setting()
+    except Exception:
+        preferred_model = ""
+
+    if not preferred_model or preferred_model == "AUTO":
+        if GEMINI_MODEL and GEMINI_MODEL.strip() and GEMINI_MODEL.strip() != "AUTO":
+            preferred_model = GEMINI_MODEL.strip()
+        else:
+            preferred_model = ""
+
+    result = []
+    seen = set()
+
+    if preferred_model and preferred_model != "AUTO":
+        clean_pref = preferred_model.strip()
+        result.append(clean_pref)
+        seen.add(clean_pref)
+
+    for m in base_models:
+        clean_m = m.strip()
+        if clean_m and clean_m not in seen and clean_m != "gemini-flash-latest":
+            seen.add(clean_m)
+            result.append(clean_m)
+
+    if not result:
+        result = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+    return result
 
 GEMINI_API_KEY = None  # May be set or overridden in tests
 
@@ -73,6 +118,12 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
     """
     Checks live Gemini API key and quota status across available models without leaking secrets.
     """
+    try:
+        from database.queries import get_model_setting
+        pref_setting = get_model_setting()
+    except Exception:
+        pref_setting = "AUTO"
+
     api_key = get_effective_gemini_api_key()
     if not api_key:
         return {
@@ -80,27 +131,16 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
             "available": False,
             "status": "NOT_CONFIGURED",
             "http_code": None,
-            "model": GEMINI_MODELS[0] if GEMINI_MODELS else "gemini-3.6-flash",
+            "model": "gemini-3.8-flash",
+            "preferred_setting": pref_setting,
             "message": "GEMINI_API_KEY is not configured or is disabled.",
             "masked_key": ""
         }
 
     masked_key = f"…{api_key[-4:]}" if len(api_key) >= 4 else "Configured"
 
-    # Deduplicate unique models to check
-    models_to_check = list(GEMINI_MODELS)
-    if GEMINI_MODEL and GEMINI_MODEL not in models_to_check:
-        models_to_check.insert(0, GEMINI_MODEL)
-
-    seen = set()
-    unique_models = []
-    for m in models_to_check:
-        clean_m = m.strip()
-        if clean_m and clean_m not in seen and clean_m != "gemini-flash-latest":
-            seen.add(clean_m)
-            unique_models.append(clean_m)
-    if not unique_models:
-        unique_models = ["gemini-3.6-flash"]
+    # Use ordered model priority list
+    unique_models = get_effective_model_list()
 
     headers = {
         "Content-Type": "application/json",
@@ -169,6 +209,7 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
                 "status": "OK",
                 "http_code": 200,
                 "model": active_model,
+                "preferred_setting": pref_setting,
                 "message": f"Gemini API is active and quota is available on {active_model}.",
                 "masked_key": masked_key,
                 "pool_status": pool_status
@@ -181,6 +222,7 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
                 "status": "CREDENTIAL_ERROR",
                 "http_code": 403,
                 "model": unique_models[0],
+                "preferred_setting": pref_setting,
                 "message": "Gemini API key was rejected as invalid or unauthorized.",
                 "masked_key": masked_key,
                 "pool_status": pool_status
@@ -193,6 +235,7 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
                 "status": "QUOTA_EXCEEDED",
                 "http_code": 429,
                 "model": unique_models[0],
+                "preferred_setting": pref_setting,
                 "message": first_429_err,
                 "masked_key": masked_key,
                 "daily_limit": 20,
@@ -207,6 +250,7 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
                 "status": "NETWORK_ERROR",
                 "http_code": None,
                 "model": unique_models[0],
+                "preferred_setting": pref_setting,
                 "message": f"Network error connecting to Gemini API: {sanitized}",
                 "masked_key": masked_key,
                 "pool_status": pool_status
@@ -218,6 +262,7 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
             "status": "HTTP_ERROR",
             "http_code": None,
             "model": unique_models[0],
+            "preferred_setting": pref_setting,
             "message": "All configured Gemini models were unavailable.",
             "masked_key": masked_key,
             "pool_status": pool_status
@@ -436,10 +481,8 @@ async def extract_transaction_with_gemini_async(
             "Return ONLY the JSON object, without markdown code fences."
         )
 
-        # Runtime model selection
-        models_to_try = list(GEMINI_MODELS)
-        if GEMINI_MODEL and GEMINI_MODEL not in models_to_try:
-            models_to_try.insert(0, GEMINI_MODEL)
+        # Runtime model selection using priority order and user override
+        models_to_try = get_effective_model_list()
 
         payload_template = {
             "contents": [
@@ -643,7 +686,7 @@ async def parse_text_with_gemini_async(
         should_close_client = True
 
     try:
-        for model_name in GEMINI_MODELS:
+        for model_name in get_effective_model_list():
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {"response_mime_type": "application/json", "temperature": 0.1}
@@ -744,7 +787,7 @@ async def generate_gemini_spending_advice_async(
         should_close_client = True
 
     try:
-        for model_name in GEMINI_MODELS:
+        for model_name in get_effective_model_list():
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0.3}
@@ -802,7 +845,7 @@ async def generate_gemini_daily_commentary_async(
         should_close_client = True
 
     try:
-        for model_name in GEMINI_MODELS:
+        for model_name in get_effective_model_list():
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0.3}

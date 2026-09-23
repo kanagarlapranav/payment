@@ -1654,6 +1654,43 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode='HTML'
         )
 
+    # --- 13. Gemini Model Switching & Refresh ---
+    elif action == "set_model":
+        target_model = parts[1] if len(parts) > 1 else "AUTO"
+        from database.queries import set_model_setting
+        from bot.commands import render_gemini_status_payload
+
+        valid_models = {"AUTO", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"}
+        if target_model not in valid_models:
+            target_model = "AUTO"
+
+        set_model_setting(target_model)
+        toast_label = "Auto-Failover (3.8 -> 3.7 -> 3.6 -> 3.5)" if target_model == "AUTO" else target_model
+        try:
+            await query.answer(f"✅ Priority set to {toast_label}!", show_alert=False)
+        except Exception:
+            pass
+
+        card, keyboard = await render_gemini_status_payload()
+        try:
+            await query.edit_message_text(card, reply_markup=keyboard, parse_mode='HTML')
+        except Exception:
+            pass
+        return
+
+    elif action == "refresh_gemini":
+        from bot.commands import render_gemini_status_payload
+        try:
+            await query.answer("🔄 Refreshing Gemini quota and status…")
+        except Exception:
+            pass
+        card, keyboard = await render_gemini_status_payload()
+        try:
+            await query.edit_message_text(card, reply_markup=keyboard, parse_mode='HTML')
+        except Exception:
+            pass
+        return
+
 
 
 
@@ -1772,6 +1809,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif cmd_lower in (r'\gemini', 'gemini', '/gemini', r'\geministatus', 'geministatus', '/geministatus', r'\quota', 'quota', '/quota', r'\ai', 'ai', '/ai', r'\status', 'status', '/status'):
         from bot.commands import geministatus_command
         await geministatus_command(update, context)
+        return
+    elif cmd_lower.startswith((r'\setmodel', 'setmodel', '/setmodel', r'\model', 'model', '/model')):
+        parts = text.split(maxsplit=1)
+        context.args = parts[1:] if len(parts) > 1 else []
+        from bot.commands import setmodel_command
+        await setmodel_command(update, context)
         return
     elif cmd_lower.startswith((r'\digest', 'digest', '/digest')):
         parts = text.split(maxsplit=1)
