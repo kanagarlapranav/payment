@@ -30,18 +30,149 @@ from services.gdrive_service import is_gdrive_available, upload_receipt_to_drive
 from services.transaction_service import process_transaction, commit_transaction
 from services.balance_service import recalculate_all_balances, get_today_summary, get_overall_summary
 from services.backup_service import backup_to_telegram
+from database.models import Transaction
 from database.queries import (
     get_transaction_by_id, get_transaction_by_reference, update_transaction, delete_transaction,
     search_transactions, get_monthly_summary, get_recent_transactions, get_balance_setting,
     get_payee_category, remember_payee_category, find_potential_duplicate, get_top_payees,
     get_daily_spend_series, get_month_comparison_stats, get_transactions_paginated, get_contact_ledger,
-    get_category_summary
+    get_category_summary, save_pending_receipt, get_pending_receipt, delete_pending_receipt
 )
-from utils.currency import parse_amount, format_currency
+from utils.currency import parse_amount, format_currency, normalize_amount_string
 from utils.dates import parse_date, get_current_time_in_tz, format_display_date
 
 # In-memory store for pending transactions awaiting confirmation
 pending_transactions = {}
+
+def set_pending_transaction(pending_id: str, transaction) -> None:
+    """Stores pending transaction in memory and persists to SQLite database."""
+    pending_transactions[pending_id] = transaction
+    try:
+        save_pending_receipt(pending_id, transaction)
+    except Exception as e:
+        logger.error(f"Error persisting pending receipt {pending_id}: {e}")
+
+def fetch_pending_transaction(pending_id: str):
+    """Fetches pending transaction from memory or falls back to SQLite database."""
+    tx = pending_transactions.get(pending_id)
+    if tx:
+        return tx
+    try:
+        tx = get_pending_receipt(pending_id)
+        if tx:
+            pending_transactions[pending_id] = tx
+            return tx
+    except Exception as e:
+        logger.error(f"Error retrieving pending receipt {pending_id}: {e}")
+    return None
+
+def pop_pending_transaction(pending_id: str):
+    """Pops pending transaction from memory and deletes from SQLite database."""
+    tx = pending_transactions.pop(pending_id, None)
+    try:
+        db_tx = get_pending_receipt(pending_id)
+        delete_pending_receipt(pending_id)
+        if not tx:
+            tx = db_tx
+    except Exception as e:
+        logger.error(f"Error deleting pending receipt {pending_id}: {e}")
+    return tx
+
+def reconstruct_transaction_from_card(text: str):
+    """Fallback parser to reconstruct a Transaction object directly from the receipt card message text."""
+    if not text:
+        return None
+    try:
+        clean = re.sub(r'<[^>]+>', '', text)
+        
+        # 1. Parse Amount, Type, and Person Name
+        m_tx = re.search(r'(?:💸\s*)?(?:₹|Rs\.?|INR)?\s*([\d,]+(?:\.\d{1,2})?)\s*(?:<b>)?\s*(→|➔|->|to|←|<-|from)\s*(?:</b>)?\s*([^\n\r🏷📅🏦]+)', clean, re.IGNORECASE)
+        if not m_tx:
+            m_tx = re.search(r'(?:₹|Rs\.?|INR)?\s*([\d,]+(?:\.\d{1,2})?)\s*(→|➔|->|to|←|<-|from)\s*([^\n\r🏷📅🏦]+)', clean, re.IGNORECASE)
+            
+        if not m_tx:
+            return None
+            
+        amt_str, arrow, person = m_tx.groups()
+        amount = normalize_amount_string(amt_str)
+        if amount <= 0:
+            return None
+            
+        arrow_clean = arrow.strip().lower()
+        if arrow_clean in ('←', '<-', 'from'):
+            tx_type = "RECEIVED"
+        else:
+            tx_type = "SENT"
+            
+        person = person.strip(' *_\t')
+        person = re.sub(r'\s*━━━━━━━━━━━━━━.*', '', person)
+        
+        # 2. Parse Category
+        cat = "General"
+        m_cat = re.search(r'🏷\s*([^📅\n\r|]+)', clean)
+        if m_cat:
+            cat = m_cat.group(1).strip()
+        else:
+            m_cat2 = re.search(r'(?:^|\n)\s*([A-Za-z &]+)\s*(?:\||\s{2,}📅)\s*', clean)
+            if m_cat2:
+                cat = m_cat2.group(1).strip()
+                
+        # 3. Parse Date and Time
+        tx_date = date.today()
+        tx_time = ""
+        m_date = re.search(r'📅\s*([^\n\r🏦]+)', clean)
+        date_raw = m_date.group(1).strip() if m_date else ""
+        if not date_raw:
+            m_date2 = re.search(r'(\d{1,2}\s+[A-Za-z]{3}(?:,?\s*\d{1,2}:\d{2}\s*(?:[APap][Mm])?)?)', clean)
+            if m_date2:
+                date_raw = m_date2.group(1).strip()
+                
+        if date_raw:
+            m_time = re.search(r'(\d{1,2}:\d{2}\s*(?:[APap][Mm])?)', date_raw)
+            if m_time:
+                tx_time = m_time.group(1).strip()
+                date_only = date_raw.replace(m_time.group(0), '').strip(' ,')
+            else:
+                date_only = date_raw.strip(' ,')
+                
+            parsed_d = parse_date(date_only)
+            if parsed_d:
+                tx_date = parsed_d
+                
+        # 4. Parse Bank & Reference Number
+        bank_name = ""
+        ref_num = ""
+        m_ref = re.search(r'(?:Ref|ref)[^\d\n\r]*(\d{3,})', clean, re.IGNORECASE)
+        if not m_ref:
+            m_ref = re.search(r'[…\.]{2,}\s*(\d{3,})', clean)
+        if m_ref:
+            ref_num = m_ref.group(1).strip()
+
+        m_bank = re.search(r'🏦\s*([^\n\r·]+)', clean)
+        if m_bank:
+            bank_name = m_bank.group(1).strip()
+        else:
+            m_bank2 = re.search(r'(?:^|\n)\s*([A-Za-z0-9 ]+(?:Bank|GPay|PhonePe|Paytm|Cred|UPI)[A-Za-z0-9 ]*)', clean, re.IGNORECASE)
+            if m_bank2:
+                bank_name = m_bank2.group(1).strip()
+                bank_name = re.sub(r'\s*(?:Ref|ref|[…\.]{2,}).*', '', bank_name).strip()
+                    
+        tx = Transaction(
+            amount=amount,
+            transaction_type=tx_type,
+            person_name=person,
+            sender_name=person if tx_type == "RECEIVED" else "",
+            recipient_name=person if tx_type == "SENT" else "",
+            category=cat or "General",
+            transaction_date=tx_date,
+            transaction_time=tx_time,
+            bank_name=bank_name,
+            reference_number=ref_num
+        )
+        return tx
+    except Exception as e:
+        logger.error(f"Error in reconstruct_transaction_from_card: {e}", exc_info=True)
+        return None
 
 # In-memory store for staged (not yet confirmed) JSON import payloads
 # Maps token -> {'path': Path, 'preview': dict}
@@ -294,7 +425,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # 3. Store in pending for interactive confirmation
         pending_id = uuid.uuid4().hex[:10]
-        pending_transactions[pending_id] = transaction
+        set_pending_transaction(pending_id, transaction)
 
         # 4. Render the polished Confirmation Card requested by user
         card_text = format_receipt_card(transaction, dup_warning)
@@ -846,10 +977,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             person_name=orig_tx.get('person_name'),
             category=orig_tx.get('category') or 'General',
             payment_app=orig_tx.get('payment_app'),
-            bank_name=orig_tx.get('bank_name'),
-            confidence=95
+            bank_name=orig_tx.get('bank_name')
         )
-        pending_transactions[dup_pending_id] = dup_tx
+        set_pending_transaction(dup_pending_id, dup_tx)
         card_text = format_receipt_card(dup_tx, dup_warning=f"📋 Duplicating Transaction #{tx_id}")
         await query.edit_message_text(card_text, reply_markup=get_confirmation_card_keyboard(dup_pending_id), parse_mode='HTML')
         return
@@ -901,7 +1031,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     # --- 1. Redesigned Receipt Card Actions ---
     elif action == "save_p":
         pending_id = parts[1]
-        transaction = pending_transactions.pop(pending_id, None)
+        transaction = pop_pending_transaction(pending_id)
+        if not transaction:
+            msg_text = (query.message.text if query.message else "") or (query.message.caption if query.message else "")
+            transaction = reconstruct_transaction_from_card(msg_text)
+            if transaction:
+                logger.info(f"Reconstructed transaction from receipt card text: {transaction}")
         if not transaction:
             await query.edit_message_text("❌ Receipt confirmation expired.", reply_markup=get_back_to_menu_keyboard())
             return
@@ -975,7 +1110,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif action == "ep_back":
         pending_id = parts[1]
-        transaction = pending_transactions.get(pending_id)
+        transaction = fetch_pending_transaction(pending_id)
+        if not transaction:
+            msg_text = (query.message.text if query.message else "") or (query.message.caption if query.message else "")
+            transaction = reconstruct_transaction_from_card(msg_text)
+            if transaction:
+                set_pending_transaction(pending_id, transaction)
         if not transaction:
             await query.edit_message_text("❌ Transaction expired.", reply_markup=get_back_to_menu_keyboard())
             return
@@ -1003,9 +1143,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "set_pcat":
         pending_id = parts[1]
         new_cat = parts[2]
-        transaction = pending_transactions.get(pending_id)
+        transaction = fetch_pending_transaction(pending_id)
+        if not transaction:
+            msg_text = (query.message.text if query.message else "") or (query.message.caption if query.message else "")
+            transaction = reconstruct_transaction_from_card(msg_text)
         if transaction:
             transaction.category = new_cat
+            set_pending_transaction(pending_id, transaction)
             if transaction.person_name:
                 remember_payee_category(transaction.person_name, new_cat)
             dup = find_potential_duplicate(
@@ -1023,7 +1167,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif action == "cancel_p":
         pending_id = parts[1]
-        pending_transactions.pop(pending_id, None)
+        pop_pending_transaction(pending_id)
         await query.edit_message_text("❌ Receipt discarded.", reply_markup=get_back_to_menu_keyboard())
         return
 
@@ -1092,7 +1236,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     # 1. OCR Confirmation / Cancellation (Legacy fallback)
     elif action in ("confirm_tx", "cancel_tx"):
         tx_id = parts[1]
-        transaction = pending_transactions.get(tx_id)
+        transaction = fetch_pending_transaction(tx_id)
         
         if not transaction:
             await query.edit_message_text("❌ Transaction expired or no longer available.")
@@ -1107,11 +1251,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 schedule_debounced_backup(context.bot)
             else:
                 await query.edit_message_text("⚠️ Transaction already recorded.")
-            del pending_transactions[tx_id]
+            pop_pending_transaction(tx_id)
             
         elif action == "cancel_tx":
             await query.edit_message_text("❌ Transaction cancelled.")
-            del pending_transactions[tx_id]
+            pop_pending_transaction(tx_id)
             
     # 2. Transaction Selection for Edit / Delete
     elif action == "select_edit":
@@ -2201,7 +2345,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         field = context.user_data.pop('pending_field', None)
         context.user_data.pop('action', None)
 
-        transaction = pending_transactions.get(pending_id)
+        transaction = fetch_pending_transaction(pending_id)
         if not transaction:
             await update.message.reply_text("❌ Receipt has expired.", reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
             return
@@ -2247,6 +2391,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if d_val:
                 transaction.transaction_date = d_val
 
+        set_pending_transaction(pending_id, transaction)
+
         dup = find_potential_duplicate(
             amount=transaction.amount,
             reference_number=transaction.reference_number,
@@ -2279,11 +2425,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             amount=val,
             transaction_type=tt,
             person_name=payee,
-            category=cat,
-            confidence=100
+            category=cat
         )
         pid = uuid.uuid4().hex[:10]
-        pending_transactions[pid] = t
+        set_pending_transaction(pid, t)
         card_text = format_receipt_card(t)
         await update.message.reply_text(
             card_text,
@@ -2298,7 +2443,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         transaction, conf = process_transaction(text, "", "", "")
         if transaction and transaction.amount and transaction.amount > 0:
             pid = uuid.uuid4().hex[:10]
-            pending_transactions[pid] = transaction
+            set_pending_transaction(pid, transaction)
             card_text = format_receipt_card(transaction)
             await update.message.reply_text(
                 card_text,
@@ -2424,7 +2569,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             elif confidence >= 30:
                 tx_id = uuid.uuid4().hex[:10]
-                pending_transactions[tx_id] = transaction
+                set_pending_transaction(tx_id, transaction)
                 card_text = format_receipt_card(transaction)
                 await update.message.reply_text(card_text, reply_markup=get_confirmation_card_keyboard(tx_id), parse_mode='HTML')
                 return

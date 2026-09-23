@@ -921,4 +921,70 @@ def get_contact_ledger():
         return contacts
 
 
+def save_pending_receipt(pending_id: str, transaction) -> None:
+    """Persists a pending receipt transaction in SQLite so it survives bot reboots/restarts."""
+    import json
+    from datetime import date, datetime
+
+    d = {}
+    for k, v in transaction.__dict__.items():
+        if isinstance(v, (datetime, date)):
+            d[k] = v.isoformat()
+        else:
+            d[k] = v
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO pending_receipts (pending_id, data_json, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+            (pending_id, json.dumps(d))
+        )
+        cursor.execute("DELETE FROM pending_receipts WHERE created_at < datetime('now', '-7 days')")
+        conn.commit()
+
+
+def get_pending_receipt(pending_id: str):
+    """Retrieves a persisted pending receipt transaction from SQLite."""
+    import json
+    from datetime import date, datetime
+    from database.models import Transaction
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT data_json FROM pending_receipts WHERE pending_id = ?", (pending_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        try:
+            d = json.loads(row['data_json'])
+            t = Transaction()
+            for k, v in d.items():
+                if hasattr(t, k):
+                    if k == 'transaction_date' and v and isinstance(v, str):
+                        try:
+                            setattr(t, k, date.fromisoformat(v[:10]))
+                        except Exception:
+                            setattr(t, k, None)
+                    elif k in ('deleted_at', 'created_at', 'updated_at') and v and isinstance(v, str):
+                        try:
+                            setattr(t, k, datetime.fromisoformat(v))
+                        except Exception:
+                            setattr(t, k, None)
+                    else:
+                        setattr(t, k, v)
+            return t
+        except Exception as e:
+            logger.error(f"Error parsing pending receipt {pending_id}: {e}")
+            return None
+
+
+def delete_pending_receipt(pending_id: str) -> None:
+    """Deletes a pending receipt transaction from SQLite."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM pending_receipts WHERE pending_id = ?", (pending_id,))
+        conn.commit()
+
+
 

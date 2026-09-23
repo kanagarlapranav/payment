@@ -199,5 +199,66 @@ class TestUXAndNavigation(unittest.TestCase):
         self.assertIn("nav:history:1:ALL", nav_callbacks)
         self.assertIn("nav:home", nav_callbacks)
 
+    def test_pending_receipt_persistence_and_restart_resilience(self):
+        """Verify that pending receipts survive memory cache clearance (bot restart/deploy)."""
+        from bot.handlers import (
+            set_pending_transaction, fetch_pending_transaction, pop_pending_transaction,
+            pending_transactions
+        )
+        import uuid
+        from datetime import date
+
+        pid = f"test_{uuid.uuid4().hex[:8]}"
+        tx = Transaction(
+            amount=250.0,
+            transaction_type="SENT",
+            person_name="Nagendra Test",
+            category="Food & Dining",
+            transaction_date=date(2026, 9, 23),
+            transaction_time="08:58 AM",
+            bank_name="Union Bank Of India",
+            reference_number="8233"
+        )
+        set_pending_transaction(pid, tx)
+
+        # Simulate bot reboot/restart wiping memory
+        pending_transactions.clear()
+        self.assertNotIn(pid, pending_transactions)
+
+        # Fetch should restore from SQLite
+        restored_tx = fetch_pending_transaction(pid)
+        self.assertIsNotNone(restored_tx)
+        self.assertEqual(restored_tx.amount, 250.0)
+        self.assertEqual(restored_tx.person_name, "Nagendra Test")
+        self.assertEqual(restored_tx.category, "Food & Dining")
+        self.assertEqual(restored_tx.reference_number, "8233")
+
+        # Pop should remove from both memory and DB
+        popped = pop_pending_transaction(pid)
+        self.assertIsNotNone(popped)
+        self.assertIsNone(fetch_pending_transaction(pid))
+
+    def test_reconstruct_transaction_from_card_exact_video(self):
+        """Verify fallback parsing of the exact confirmation card shown in the user's video."""
+        from bot.handlers import reconstruct_transaction_from_card
+
+        # Text format directly from receipt card in user's video
+        card_text = (
+            "🧾 <b>Payment detected</b>\n"
+            "━━━━━━━━━━━━━━\n"
+            "💸 <b>₹1</b> → <b>Narise Nagendra</b>\n"
+            "🏷 General   📅 23 Sep, 08:58 AM\n"
+            "🏦 Union Bank Of India · Ref …8233"
+        )
+        reconstructed = reconstruct_transaction_from_card(card_text)
+        self.assertIsNotNone(reconstructed)
+        self.assertEqual(reconstructed.amount, 1.0)
+        self.assertEqual(reconstructed.transaction_type, "SENT")
+        self.assertEqual(reconstructed.person_name, "Narise Nagendra")
+        self.assertEqual(reconstructed.category, "General")
+        self.assertEqual(reconstructed.bank_name, "Union Bank Of India")
+        self.assertEqual(reconstructed.reference_number, "8233")
+        self.assertEqual(reconstructed.transaction_time, "08:58 AM")
+
 if __name__ == "__main__":
     unittest.main()
