@@ -13,7 +13,7 @@ from bot.keyboards import (
     get_receipt_confirm_keyboard, get_receipt_edit_fields_keyboard,
     get_help_keyboard, get_balance_keyboard, get_stats_keyboard,
     get_budget_keyboard, get_insights_keyboard, get_digest_keyboard,
-    get_cafestats_keyboard, get_standard_nav_keyboard
+    get_cafestats_keyboard, get_standard_nav_keyboard, get_delete_confirmed_keyboard
 )
 from bot.commands import (
     render_home_menu_text, render_history_page, render_transaction_detail,
@@ -42,7 +42,8 @@ class TestUXAndNavigation(unittest.TestCase):
             get_insights_keyboard(),
             get_digest_keyboard(),
             get_cafestats_keyboard(),
-            get_standard_nav_keyboard()
+            get_standard_nav_keyboard(),
+            get_delete_confirmed_keyboard()
         ]
         
         for kb in keyboards:
@@ -332,5 +333,142 @@ class TestUXAndNavigation(unittest.TestCase):
         self.assertIn(f"force_save_p:{pid}", callbacks)
         self.assertIn(f"undo_tx:{tx.id}", callbacks)
 
+    def test_delete_confirm_flow_acknowledgement_and_text(self):
+        """Verify tapping Confirm Delete acknowledges immediately, edits text to 'Delete Confirmed!', and updates balance."""
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from bot.handlers import handle_callback_query
+        from config import TELEGRAM_USER_ID
+
+        tx = Transaction(
+            amount=1.0,
+            transaction_type="SENT",
+            person_name="Narise Nagendra",
+            transaction_date="2026-09-23",
+            category="General"
+        )
+        tx_id = insert_transaction_with_balance(tx)
+
+        update = MagicMock()
+        query = MagicMock()
+        query.data = f"delete_confirm:{tx_id}"
+        owner_id = int(TELEGRAM_USER_ID) if TELEGRAM_USER_ID else 12345
+        query.from_user.id = owner_id
+        update.effective_user.id = owner_id
+        update.effective_chat.id = owner_id
+        query.message.text = "Delete Transaction"
+        query.edit_message_text = AsyncMock()
+        query.answer = AsyncMock()
+        update.callback_query = query
+        context = MagicMock()
+
+        import asyncio
+        with patch('bot.handlers.is_owner', return_value=True), \
+             patch('bot.handlers.is_authorized_user', return_value=True), \
+             patch('bot.handlers.is_admin_user', return_value=True), \
+             patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
+             patch('bot.handlers.require_authorized', AsyncMock(return_value=True)), \
+             patch('services.backup_service.backup_to_telegram', AsyncMock(return_value=True)):
+            asyncio.run(handle_callback_query(update, context))
+
+        # 1. Immediate answer called with "✅ Delete Confirmed!"
+        query.answer.assert_called_with("✅ Delete Confirmed!", show_alert=False)
+
+        # 2. Text contains "Delete Confirmed!"
+        query.edit_message_text.assert_called_once()
+        call_text = query.edit_message_text.call_args[0][0]
+        call_markup = query.edit_message_text.call_args[1].get('reply_markup')
+
+        self.assertIn("Delete Confirmed!", call_text)
+        self.assertIn(f"Transaction #{tx_id} has been deleted", call_text)
+        self.assertIn("Narise Nagendra", call_text)
+        self.assertIn("Updated Current Balance", call_text)
+
+        # 3. Markup contains Undo Delete and Back to Menu
+        callbacks = [btn.callback_data for row in call_markup.inline_keyboard for btn in row]
+        self.assertIn("undo_action", callbacks)
+        self.assertIn("nav:home", callbacks)
+
+        # 4. Verify transaction is deleted in DB
+        self.assertIsNone(get_transaction_by_id(tx_id))
+
+    def test_delete_confirm_when_already_deleted(self):
+        """Verify tapping Confirm Delete on an already deleted record still shows Delete Confirmed clearly."""
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from bot.handlers import handle_callback_query
+        from database.queries import delete_transaction
+        from config import TELEGRAM_USER_ID
+
+        tx = Transaction(
+            amount=50.0,
+            transaction_type="SENT",
+            person_name="Ramesh",
+            transaction_date="2026-09-23",
+            category="Food"
+        )
+        tx_id = insert_transaction_with_balance(tx)
+        delete_transaction(tx_id) # Already deleted
+
+        update = MagicMock()
+        query = MagicMock()
+        query.data = f"delete_confirm:{tx_id}"
+        owner_id = int(TELEGRAM_USER_ID) if TELEGRAM_USER_ID else 12345
+        query.from_user.id = owner_id
+        update.effective_user.id = owner_id
+        update.effective_chat.id = owner_id
+        query.message.text = "Delete Transaction"
+        query.edit_message_text = AsyncMock()
+        query.answer = AsyncMock()
+        update.callback_query = query
+        context = MagicMock()
+
+        import asyncio
+        with patch('bot.handlers.is_owner', return_value=True), \
+             patch('bot.handlers.is_authorized_user', return_value=True), \
+             patch('bot.handlers.is_admin_user', return_value=True), \
+             patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
+             patch('bot.handlers.require_authorized', AsyncMock(return_value=True)):
+            asyncio.run(handle_callback_query(update, context))
+
+        query.answer.assert_called_with("✅ Delete Confirmed!", show_alert=False)
+        query.edit_message_text.assert_called_once()
+        call_text = query.edit_message_text.call_args[0][0]
+        self.assertIn("Delete Confirmed!", call_text)
+        self.assertIn(f"Transaction #{tx_id} is already deleted", call_text)
+
+    def test_delete_cancel_flow(self):
+        """Verify tapping Cancel on delete prompt dismisses spinner and edits message cleanly."""
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from bot.handlers import handle_callback_query
+        from config import TELEGRAM_USER_ID
+
+        update = MagicMock()
+        query = MagicMock()
+        query.data = "delete_cancel:999"
+        owner_id = int(TELEGRAM_USER_ID) if TELEGRAM_USER_ID else 12345
+        query.from_user.id = owner_id
+        update.effective_user.id = owner_id
+        update.effective_chat.id = owner_id
+        query.message.text = "Delete Transaction"
+        query.edit_message_text = AsyncMock()
+        query.answer = AsyncMock()
+        update.callback_query = query
+        context = MagicMock()
+        context.user_data = {'action': 'waiting_delete_id'}
+
+        import asyncio
+        with patch('bot.handlers.is_owner', return_value=True), \
+             patch('bot.handlers.is_authorized_user', return_value=True), \
+             patch('bot.handlers.is_admin_user', return_value=True), \
+             patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
+             patch('bot.handlers.require_authorized', AsyncMock(return_value=True)):
+            asyncio.run(handle_callback_query(update, context))
+
+        query.answer.assert_called_with("❌ Deletion cancelled.", show_alert=False)
+        query.edit_message_text.assert_called_once()
+        call_text = query.edit_message_text.call_args[0][0]
+        self.assertIn("Deletion Cancelled", call_text)
+        self.assertNotIn('action', context.user_data)
+
 if __name__ == "__main__":
     unittest.main()
+
