@@ -52,6 +52,148 @@ def is_gemini_available() -> bool:
     return bool(get_effective_gemini_api_key())
 
 
+_last_extraction_error: Optional[str] = None
+
+
+def get_last_extraction_error() -> Optional[str]:
+    """Returns the last failure code from Gemini extraction (e.g. 'RATE_LIMIT', 'CREDENTIAL_ERROR', None)."""
+    global _last_extraction_error
+    return _last_extraction_error
+
+
+def set_last_extraction_error(err: Optional[str]) -> None:
+    """Sets the last Gemini extraction error code (useful for testing and reset)."""
+    global _last_extraction_error
+    _last_extraction_error = err
+
+
+async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = None) -> dict:
+    """
+    Checks live Gemini API key and quota status without leaking secrets.
+    """
+    api_key = get_effective_gemini_api_key()
+    if not api_key:
+        return {
+            "configured": False,
+            "available": False,
+            "status": "NOT_CONFIGURED",
+            "http_code": None,
+            "model": GEMINI_MODELS[0] if GEMINI_MODELS else "gemini-flash-latest",
+            "message": "GEMINI_API_KEY is not configured or is disabled.",
+            "masked_key": ""
+        }
+
+    masked_key = f"…{api_key[-4:]}" if len(api_key) >= 4 else "Configured"
+    target_model = GEMINI_MODELS[0] if GEMINI_MODELS else "gemini-flash-latest"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+    payload = {
+        "contents": [{"parts": [{"text": "ping"}]}],
+        "generationConfig": {"maxOutputTokens": 2}
+    }
+
+    should_close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=5.0))
+        should_close_client = True
+
+    try:
+        resp = await client.post(url, headers=headers, json=payload)
+        code = resp.status_code
+        if code == 200:
+            return {
+                "configured": True,
+                "available": True,
+                "status": "OK",
+                "http_code": 200,
+                "model": target_model,
+                "message": "Gemini API is active and quota is available.",
+                "masked_key": masked_key
+            }
+        elif code == 429:
+            data = {}
+            try:
+                data = resp.json()
+            except Exception:
+                pass
+            err_msg = ""
+            if isinstance(data, dict):
+                err_msg = data.get("error", {}).get("message", "")
+            return {
+                "configured": True,
+                "available": False,
+                "status": "QUOTA_EXCEEDED",
+                "http_code": 429,
+                "model": target_model,
+                "message": err_msg or "Daily free-tier quota exceeded (limit: 20 requests/day).",
+                "masked_key": masked_key,
+                "daily_limit": 20
+            }
+        elif code in (401, 403):
+            return {
+                "configured": True,
+                "available": False,
+                "status": "CREDENTIAL_ERROR",
+                "http_code": code,
+                "model": target_model,
+                "message": "Gemini API key was rejected as invalid or unauthorized.",
+                "masked_key": masked_key
+            }
+        else:
+            return {
+                "configured": True,
+                "available": False,
+                "status": f"HTTP_{code}",
+                "http_code": code,
+                "model": target_model,
+                "message": f"Gemini API returned status code {code}.",
+                "masked_key": masked_key
+            }
+    except Exception as e:
+        sanitized = _sanitize_error_message(e, api_key)
+        return {
+            "configured": True,
+            "available": False,
+            "status": "NETWORK_ERROR",
+            "http_code": None,
+            "model": target_model,
+            "message": f"Network error connecting to Gemini API: {sanitized}",
+            "masked_key": masked_key
+        }
+    finally:
+        if should_close_client:
+            await client.aclose()
+
+
+def check_gemini_api_status() -> dict:
+    """Synchronous wrapper for check_gemini_api_status_async."""
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, check_gemini_api_status_async()).result()
+        else:
+            return asyncio.run(check_gemini_api_status_async())
+    except Exception as e:
+        return {
+            "configured": is_gemini_available(),
+            "available": False,
+            "status": "ERROR",
+            "http_code": None,
+            "model": GEMINI_MODELS[0] if GEMINI_MODELS else "gemini-flash-latest",
+            "message": str(e),
+            "masked_key": ""
+        }
+
+
 def _sanitize_error_message(err: Exception, api_key: str = "") -> str:
     """Sanitizes error messages to remove API keys and raw local file system paths."""
     msg = str(err)
@@ -260,6 +402,9 @@ async def extract_transaction_with_gemini_async(
             client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=20.0, write=20.0, connect=10.0))
             should_close_client = True
 
+        global _last_extraction_error
+        _last_extraction_error = None
+
         try:
             for model_name in models_to_try:
                 logger.info(f"Invoking Gemini Vision API ({model_name})...")
@@ -268,8 +413,12 @@ async def extract_transaction_with_gemini_async(
                 )
 
                 if err_type == "CREDENTIAL_ERROR":
+                    _last_extraction_error = "CREDENTIAL_ERROR"
                     logger.error("Gemini API key rejected (401/403). Halting further attempts.")
                     return None, 0
+
+                if err_type == "RATE_LIMIT" or (response is not None and response.status_code == 429):
+                    _last_extraction_error = "RATE_LIMIT"
 
                 if response is None or response.status_code != 200:
                     continue
@@ -358,12 +507,15 @@ async def extract_transaction_with_gemini_async(
                     payment_status="SUCCESS"
                 )
 
+                _last_extraction_error = None
                 logger.info(f"Gemini Vision ({model_name}) parsed receipt: {tx_type} Rs. {amount} to/from {person} (Computed Confidence: {confidence}%)")
                 return transaction, confidence
         finally:
             if should_close_client:
                 await client.aclose()
 
+        if _last_extraction_error is None:
+            _last_extraction_error = "PARSING_FAILED"
         logger.warning("All Gemini Vision models failed or produced unusable output.")
         return None, 0
 
