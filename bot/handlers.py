@@ -1408,15 +1408,17 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         deleted = delete_transaction(tx_id)
         if deleted:
             new_bal = recalculate_all_balances()
-            from services.backup_service import backup_to_telegram
-            backed_up = await backup_to_telegram(context.bot)
-            status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
-            await query.edit_message_text(
+            try:
+                from services.backup_service import export_database_to_json
+                export_database_to_json()
+            except Exception as bkp_err:
+                logger.warning(f"Could not update local JSON backup on undo: {bkp_err}")
+            await safe_edit_callback_message(
+                query,
                 f"↩️ <b>Transaction #{tx_id} Undone!</b>\n"
                 "━━━━━━━━━━━━━━\n"
-                f"Payment reverted from your ledger.\n"
-                f"💼 <b>Current Balance:</b> <b>{format_currency(new_bal)}</b>\n\n"
-                f"<b>Status:</b> {status_line}",
+                f"Payment reverted from your ledger.\n\n"
+                f"💼 <b>Current Balance:</b> <b>{format_currency(new_bal)}</b>",
                 reply_markup=get_back_to_menu_keyboard(),
                 parse_mode='HTML'
             )
@@ -1625,9 +1627,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         success = delete_transaction(tx_id)
         if success:
             new_bal = recalculate_all_balances()
-            from services.backup_service import backup_to_telegram
-            backed_up = await backup_to_telegram(context.bot)
-            status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
+            try:
+                from services.backup_service import export_database_to_json
+                export_database_to_json()
+            except Exception as bkp_err:
+                logger.warning(f"Could not update local JSON backup on delete: {bkp_err}")
 
             if is_gdrive_available():
                 from config import DATA_DIR
@@ -1636,23 +1640,21 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 if os.path.exists(bkp):
                     create_tracked_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)), name="gdrive_backup_upload")
             
-            await query.edit_message_text(
+            await safe_edit_callback_message(
+                query,
                 f"✅ <b>Delete Confirmed!</b>\n"
                 f"━━━━━━━━━━━━━━\n"
                 f"🗑️ <b>Transaction #{tx_id} has been deleted.</b>\n\n"
                 f"• <b>Type:</b> {html.escape(str(tx_type))}\n"
                 f"• <b>Amount:</b> {html.escape(amt_str)}\n"
                 f"• <b>Person:</b> {html.escape(str(person))}\n\n"
-                f"💰 <b>Updated Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>\n\n"
-                f"<b>Status:</b> {status_line}",
+                f"💰 <b>Updated Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>",
                 reply_markup=get_delete_confirmed_keyboard(),
                 parse_mode='HTML'
             )
-            from services.task_manager import schedule_debounced_backup
-            schedule_debounced_backup(context.bot)
         else:
             from bot.keyboards import get_back_to_menu_keyboard
-            await query.edit_message_text("❌ Nothing was saved: Failed to delete transaction.", reply_markup=get_back_to_menu_keyboard())
+            await safe_edit_callback_message(query, "❌ Nothing was saved: Failed to delete transaction.", reply_markup=get_back_to_menu_keyboard())
 
     elif action in ("delete_cancel", "select_delete_cancel"):
         if not is_admin_user(update):
@@ -1661,7 +1663,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer("❌ Deletion cancelled.", show_alert=False)
         context.user_data.pop('action', None)
         from bot.keyboards import get_back_to_menu_keyboard
-        await query.edit_message_text(
+        await safe_edit_callback_message(
+            query,
             "❌ <b>Deletion Cancelled</b>\n\nNo changes were made to your ledger.",
             reply_markup=get_back_to_menu_keyboard(),
             parse_mode='HTML'
@@ -1678,12 +1681,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         success, msg = perform_undo(chat_id=chat_id, user_id=user_id)
         from bot.keyboards import get_back_to_menu_keyboard
         if success:
-            from services.backup_service import backup_to_telegram
-            backed_up = await backup_to_telegram(context.bot)
-            status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
-            await query.edit_message_text(f"{msg}\n\n<b>Status:</b> {status_line}", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+            try:
+                from services.backup_service import export_database_to_json
+                export_database_to_json()
+            except Exception as bkp_err:
+                logger.warning(f"Could not update local JSON backup on undo: {bkp_err}")
+            await safe_edit_callback_message(query, msg, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         else:
-            await query.edit_message_text(f"❌ Nothing was saved: {msg}", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+            await safe_edit_callback_message(query, f"❌ Nothing was saved: {msg}", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
 
     elif action == "undo_confirm":
         if not is_admin_user(update):
@@ -1709,19 +1714,20 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if success:
             from database.queries import get_balance_setting
             bal = get_balance_setting()
-            from services.backup_service import backup_to_telegram
-            backed_up = await backup_to_telegram(context.bot)
-            status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
+            try:
+                from services.backup_service import export_database_to_json
+                export_database_to_json()
+            except Exception as bkp_err:
+                logger.warning(f"Could not update local JSON backup on undo: {bkp_err}")
             text = (
                 "✅ <b>Undo Confirmed & Applied!</b>\n"
                 "━━━━━━━━━━━━━━\n"
                 f"{msg}\n\n"
-                f"💰 <b>Current Balance:</b> <b>{html.escape(format_currency(bal))}</b>\n"
-                f"<b>Status:</b> {status_line}"
+                f"💰 <b>Current Balance:</b> <b>{html.escape(format_currency(bal))}</b>"
             )
-            await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+            await safe_edit_callback_message(query, text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         else:
-            await query.edit_message_text(f"❌ <b>Undo Failed:</b> {msg}", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+            await safe_edit_callback_message(query, f"❌ <b>Undo Failed:</b> {msg}", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         return
 
     elif action == "undo_cancel":
