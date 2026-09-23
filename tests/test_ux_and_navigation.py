@@ -618,7 +618,103 @@ class TestUXAndNavigation(unittest.TestCase):
             mock_edit.assert_called_once()
             self.assertEqual(context.args, ['42'])
 
+    def test_save_p_on_image_receipt_shows_saved_card_and_real_balance(self):
+        """Verify saving an image receipt properly updates the message with 'Payment Saved!', real balance, and undo entry."""
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from bot.handlers import handle_callback_query, set_pending_transaction
+        from database.queries import update_balance_setting
+        from services.undo_service import get_last_action
+        import uuid
+        import asyncio
+
+        update_balance_setting(50000.0)
+
+        ref_no = f"IMG_REF_{uuid.uuid4().hex[:6]}"
+        tx_receipt = Transaction(
+            amount=250.0,
+            transaction_type="SENT",
+            person_name="Chai Point",
+            category="Food & Dining",
+            transaction_date="2026-09-23",
+            transaction_time="11:30 AM",
+            reference_number=ref_no
+        )
+        pid = f"pid_{uuid.uuid4().hex[:6]}"
+        set_pending_transaction(pid, tx_receipt)
+
+        update = MagicMock()
+        query = MagicMock()
+        query.data = f"save_p:{pid}"
+        owner_id = 998877
+        query.from_user.id = owner_id
+        update.effective_user.id = owner_id
+        update.effective_chat.id = owner_id
+        query.message = MagicMock()
+        query.message.chat_id = owner_id
+        query.message.text = "Detected Receipt"
+        query.message.caption = None
+        query.message.photo = None
+        query.edit_message_text = AsyncMock()
+        query.answer = AsyncMock()
+        update.callback_query = query
+        context = MagicMock()
+
+        with patch('bot.handlers.is_owner', return_value=True), \
+             patch('bot.handlers.is_authorized_user', return_value=True), \
+             patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
+             patch('bot.handlers.require_authorized', AsyncMock(return_value=True)), \
+             patch('services.task_manager.schedule_debounced_backup'):
+            asyncio.run(handle_callback_query(update, context))
+
+        query.edit_message_text.assert_called_once()
+        saved_text = query.edit_message_text.call_args[0][0]
+        self.assertIn("Payment Saved!", saved_text)
+        self.assertIn("Chai Point", saved_text)
+        self.assertIn("₹250", saved_text)
+        # Verify balance is not missing or hardcoded, but matches real recalculated balance
+        from database.queries import get_transaction_by_reference
+        saved_db_tx = get_transaction_by_reference(ref_no)
+        self.assertIsNotNone(saved_db_tx)
+        self.assertIn("Current Balance:", saved_text)
+        self.assertIn(format_currency(saved_db_tx['balance_after']), saved_text)
+
+        # Verify undo record exists
+        undo_act = get_last_action(chat_id=owner_id, user_id=owner_id)
+        self.assertIsNotNone(undo_act)
+        self.assertEqual(undo_act.get('action'), 'insert')
+        self.assertIsNotNone(undo_act.get('uid'))
+
+    def test_safe_edit_callback_message_caption_and_fallback(self):
+        """Verify safe_edit_callback_message routes to edit_message_caption for media and falls back to plain text."""
+        from unittest.mock import MagicMock, AsyncMock
+        from bot.handlers import safe_edit_callback_message
+        import asyncio
+
+        # Case 1: Media message with caption
+        query_media = MagicMock()
+        query_media.message.text = None
+        query_media.message.caption = "Original Caption"
+        query_media.edit_message_caption = AsyncMock()
+        query_media.edit_message_text = AsyncMock()
+
+        asyncio.run(safe_edit_callback_message(query_media, "<b>Saved!</b>"))
+        query_media.edit_message_caption.assert_called_once()
+        self.assertEqual(query_media.edit_message_caption.call_args[1]['caption'], "<b>Saved!</b>")
+        query_media.edit_message_text.assert_not_called()
+
+        # Case 2: Parse error on text edit retries with stripped plain text
+        query_text = MagicMock()
+        query_text.message.text = "Some text"
+        query_text.message.caption = None
+        # First call fails (simulating Bad Request: Can't parse entities), second call succeeds
+        query_text.edit_message_text = AsyncMock(side_effect=[Exception("Can't parse entities"), None])
+        asyncio.run(safe_edit_callback_message(query_text, "<b>Broken Tag"))
+        self.assertEqual(query_text.edit_message_text.call_count, 2)
+        # The retry call should have stripped HTML tags
+        self.assertEqual(query_text.edit_message_text.call_args_list[1][0][0], "Broken Tag")
+
 if __name__ == "__main__":
     unittest.main()
+
 
 
