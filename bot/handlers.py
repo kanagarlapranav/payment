@@ -994,8 +994,32 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif action == "delete_tx":
         tx_id = int(parts[1])
+        tx = get_transaction_by_id(tx_id)
+        if not tx:
+            await query.edit_message_text(
+                f"❌ <b>Transaction Not Found</b>\nTransaction #{tx_id} could not be found.",
+                reply_markup=get_back_to_menu_keyboard(),
+                parse_mode='HTML'
+            )
+            return
+
+        amt_str = format_currency(tx['amount'])
+        person = tx['person_name'] or "Unknown"
+        tx_type = tx.get('transaction_type', 'TRANSACTION')
+        sign = "-" if tx_type == 'SENT' else "+"
+        tx_date = tx.get('transaction_date') or "Today"
+
+        prompt = (
+            f"🗑️ <b>Delete Transaction #{tx_id}?</b>\n"
+            "━━━━━━━━━━━━━━\n"
+            f"• <b>Person:</b> <b>{html.escape(str(person))}</b>\n"
+            f"• <b>Amount:</b> <b>{sign}{html.escape(amt_str)}</b> ({html.escape(str(tx_type))})\n"
+            f"• <b>Date:</b> {html.escape(str(tx_date))}\n"
+            "━━━━━━━━━━━━━━\n"
+            "⚠️ <i>Are you sure you want to delete this transaction from your ledger?</i>"
+        )
         await query.edit_message_text(
-            f"🗑️ <b>Delete Transaction #{tx_id}?</b>\nAre you sure you want to delete this transaction?",
+            prompt,
             reply_markup=get_delete_confirm_keyboard(tx_id),
             parse_mode='HTML'
         )
@@ -1041,6 +1065,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             if transaction:
                 logger.info(f"Reconstructed transaction from receipt card text: {transaction}")
         if not transaction:
+            try:
+                ans = query.answer("❌ Receipt confirmation expired.", show_alert=True)
+                if asyncio.iscoroutine(ans):
+                    await ans
+            except Exception:
+                pass
             await query.edit_message_text("❌ Receipt confirmation expired.", reply_markup=get_back_to_menu_keyboard())
             return
 
@@ -1061,6 +1091,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
         if existing and not is_force:
             # IT IS ALREADY SAVED! Keep pending so user can force-save if desired
+            try:
+                ans = query.answer("ℹ️ Already Saved!", show_alert=False)
+                if asyncio.iscoroutine(ans):
+                    await ans
+            except Exception:
+                pass
             set_pending_transaction(pending_id, transaction)
             date_display = existing.get('transaction_date') or "Today"
             if existing.get('transaction_time'):
@@ -1096,6 +1132,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             
         success = commit_transaction(transaction, allow_duplicate=is_force)
         if success:
+            try:
+                ans = query.answer("✅ Payment Saved!", show_alert=False)
+                if asyncio.iscoroutine(ans):
+                    await ans
+            except Exception:
+                pass
             # Check budget alerts (Requirement 5: After saving a transaction, add a one-line alert if a budget crosses 80% or 100%)
             from services.budget_service import get_budget_info
             now = get_current_time_in_tz()
@@ -1120,7 +1162,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 "━━━━━━━━━━━━━━\n"
                 f"💸 <b>{format_currency(transaction.amount)}</b> {arrow} <b>{html.escape(transaction.person_name or 'Unknown')}</b>\n"
                 f"🏷 {html.escape(transaction.category or 'General')}   📅 {html.escape(date_display)}\n"
-                f"💼 <b>Balance:</b> <b>{format_currency(transaction.balance_after)}</b>"
+                f"💼 <b>Current Balance:</b> <b>{format_currency(transaction.balance_after)}</b>\n\n"
+                f"✅ <i>Saved to your database and backed up to cloud.</i>"
                 f"{budget_alert}"
             )
             await query.edit_message_text(saved_text, reply_markup=get_quick_undo_keyboard(transaction.id), parse_mode='HTML')
@@ -1129,6 +1172,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             existing = get_transaction_by_reference(transaction.reference_number) if transaction.reference_number else None
             if existing:
+                try:
+                    ans = query.answer("ℹ️ Already Saved!", show_alert=False)
+                    if asyncio.iscoroutine(ans):
+                        await ans
+                except Exception:
+                    pass
                 date_display = existing.get('transaction_date') or "Today"
                 if existing.get('transaction_time'):
                     date_display += f", {existing['transaction_time']}"
@@ -1154,6 +1203,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 set_pending_transaction(pending_id, transaction)
                 await query.edit_message_text(already_saved_text, reply_markup=kb, parse_mode='HTML')
             else:
+                try:
+                    ans = query.answer("⚠️ Save Failed", show_alert=True)
+                    if asyncio.iscoroutine(ans):
+                        await ans
+                except Exception:
+                    pass
                 await query.edit_message_text("⚠️ Transaction could not be saved. Please verify the amount and details or enter manually.", reply_markup=get_back_to_menu_keyboard())
         return
 
@@ -1242,6 +1297,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     elif action == "cancel_p":
+        await query.answer("❌ Receipt discarded.", show_alert=False)
         pending_id = parts[1]
         pop_pending_transaction(pending_id)
         await query.edit_message_text("❌ Receipt discarded.", reply_markup=get_back_to_menu_keyboard())
@@ -1533,6 +1589,68 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text(f"{msg}\n\n<b>Status:</b> {status_line}", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         else:
             await query.edit_message_text(f"❌ Nothing was saved: {msg}", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+
+    elif action == "undo_confirm":
+        if not is_admin_user(update):
+            try:
+                ans = query.answer("❌ Only the bot owner can undo changes.", show_alert=True)
+                if asyncio.iscoroutine(ans):
+                    await ans
+            except Exception:
+                pass
+            return
+        try:
+            ans = query.answer("↩️ Processing Undo...", show_alert=False)
+            if asyncio.iscoroutine(ans):
+                await ans
+        except Exception:
+            pass
+        from services.undo_service import perform_undo
+        import asyncio
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        user_id = update.effective_user.id if update.effective_user else None
+        success, msg = await asyncio.to_thread(perform_undo, chat_id=chat_id, user_id=user_id)
+        from bot.keyboards import get_back_to_menu_keyboard
+        if success:
+            from database.queries import get_balance_setting
+            bal = get_balance_setting()
+            from services.backup_service import backup_to_telegram
+            backed_up = await backup_to_telegram(context.bot)
+            status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
+            text = (
+                "✅ <b>Undo Confirmed & Applied!</b>\n"
+                "━━━━━━━━━━━━━━\n"
+                f"{msg}\n\n"
+                f"💰 <b>Current Balance:</b> <b>{html.escape(format_currency(bal))}</b>\n"
+                f"<b>Status:</b> {status_line}"
+            )
+            await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+        else:
+            await query.edit_message_text(f"❌ <b>Undo Failed:</b> {msg}", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+        return
+
+    elif action == "undo_cancel":
+        if not is_admin_user(update):
+            try:
+                ans = query.answer("❌ Only the bot owner can cancel.", show_alert=True)
+                if asyncio.iscoroutine(ans):
+                    await ans
+            except Exception:
+                pass
+            return
+        try:
+            ans = query.answer("Undo cancelled.", show_alert=False)
+            if asyncio.iscoroutine(ans):
+                await ans
+        except Exception:
+            pass
+        from bot.keyboards import get_back_to_menu_keyboard
+        await query.edit_message_text(
+            "❌ <b>Undo Cancelled</b>\n━━━━━━━━━━━━━━\nNo changes were made to your ledger.",
+            reply_markup=get_back_to_menu_keyboard(),
+            parse_mode='HTML'
+        )
+        return
 
 
     # 4b. Correct Amount for Existing Transaction
@@ -2084,14 +2202,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     cmd_lower = text.lower()
     
-    if cmd_lower in (r'\undo', 'undo', '/undo', 'revert', '/revert'):
+    if cmd_lower in (r'\undo', 'undo', '/undo', 'revert', '/revert', r'\revert'):
         await undo_command(update, context)
         return
-    elif cmd_lower in (r'\edit', 'edit', '/edit'):
-        await edit_command(update, context)
+    elif cmd_lower in (r'\backup', 'backup', '/backup', r'\backupnow', 'backupnow', '/backupnow'):
+        from bot.commands import backup_command
+        await backup_command(update, context)
         return
-    elif cmd_lower in (r'\delete', 'delete', '/delete'):
+    elif cmd_lower.startswith((r'\delete', 'delete', '/delete')):
+        parts = text.split(maxsplit=1)
+        context.args = parts[1].split() if len(parts) > 1 else []
         await delete_command(update, context)
+        return
+    elif cmd_lower.startswith((r'\edit', 'edit', '/edit')):
+        parts = text.split(maxsplit=1)
+        context.args = parts[1].split() if len(parts) > 1 else []
+        await edit_command(update, context)
         return
     elif cmd_lower in (r'\history', 'history', '/history'):
         await history_command(update, context)
@@ -2218,7 +2344,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             num = int(clean_id_str)
             recent_ids = context.user_data.get('recent_edit_ids') or [t['id'] for t in get_recent_transactions(limit=10)]
             tx = None
-            if 1 <= num <= len(recent_ids):
+            if num in recent_ids:
+                tx = get_transaction_by_id(num)
+            elif 1 <= num <= len(recent_ids):
                 tx = get_transaction_by_id(recent_ids[num - 1])
             if not tx:
                 tx = get_transaction_by_id(num)
@@ -2248,7 +2376,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             num = int(clean_id_str)
             recent_ids = context.user_data.get('recent_delete_ids') or [t['id'] for t in get_recent_transactions(limit=10)]
             tx = None
-            if 1 <= num <= len(recent_ids):
+            if num in recent_ids:
+                tx = get_transaction_by_id(num)
+            elif 1 <= num <= len(recent_ids):
                 tx = get_transaction_by_id(recent_ids[num - 1])
             if not tx:
                 tx = get_transaction_by_id(num)

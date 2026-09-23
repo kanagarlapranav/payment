@@ -469,6 +469,156 @@ class TestUXAndNavigation(unittest.TestCase):
         self.assertIn("Deletion Cancelled", call_text)
         self.assertNotIn('action', context.user_data)
 
+    def test_backup_command(self):
+        """Verify /backup displays status and Backup Now / Restore options."""
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from bot.commands import backup_command
+        import asyncio
+
+        update = MagicMock()
+        update.message.reply_text = AsyncMock()
+        context = MagicMock()
+
+        with patch('bot.commands.require_admin', AsyncMock(return_value=True)):
+            asyncio.run(backup_command(update, context))
+
+        update.message.reply_text.assert_called_once()
+        reply_text = update.message.reply_text.call_args[0][0]
+        markup = update.message.reply_text.call_args[1]['reply_markup']
+        self.assertIn("Backup & Disaster Recovery Status", reply_text)
+        callbacks = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+        self.assertIn("backup_now", callbacks)
+        self.assertIn("nav:restore_info", callbacks)
+
+    def test_undo_command_prompt_with_details(self):
+        """Verify /undo asks confirmation with transaction details when action is pending."""
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from bot.commands import undo_command
+        import asyncio
+
+        update = MagicMock()
+        update.effective_chat.id = 123
+        update.effective_user.id = 456
+        update.message.reply_text = AsyncMock()
+        context = MagicMock()
+
+        dummy_action = {'action': 'delete', 'uid': 'test-uid-123'}
+        dummy_tx = {'id': 99, 'person_name': 'Ramesh', 'amount': 150.0, 'transaction_date': '2026-09-23', 'transaction_type': 'SENT'}
+
+        with patch('bot.commands.require_admin', AsyncMock(return_value=True)), \
+             patch('services.undo_service.get_last_action', return_value=dummy_action), \
+             patch('database.db.get_db_connection') as mock_conn:
+            cursor = MagicMock()
+            cursor.fetchone.return_value = dummy_tx
+            mock_conn.return_value.__enter__.return_value.cursor.return_value = cursor
+            asyncio.run(undo_command(update, context))
+
+        update.message.reply_text.assert_called_once()
+        prompt_text = update.message.reply_text.call_args[0][0]
+        markup = update.message.reply_text.call_args[1]['reply_markup']
+        self.assertIn("Undo Delete Transaction?", prompt_text)
+        self.assertIn("Ramesh", prompt_text)
+        callbacks = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+        self.assertIn("undo_confirm", callbacks)
+        self.assertIn("undo_cancel", callbacks)
+
+    def test_undo_confirm_callback(self):
+        """Verify tapping Confirm Undo executes perform_undo and updates card."""
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from bot.handlers import handle_callback_query
+        import asyncio
+
+        update = MagicMock()
+        query = MagicMock()
+        query.data = "undo_confirm"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update.callback_query = query
+        context = MagicMock()
+
+        with patch('bot.handlers.is_admin_user', return_value=True), \
+             patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
+             patch('services.undo_service.perform_undo', return_value=(True, "Restored transaction #99")), \
+             patch('database.queries.get_balance_setting', return_value=5000.0), \
+             patch('services.backup_service.backup_to_telegram', AsyncMock(return_value=True)):
+            asyncio.run(handle_callback_query(update, context))
+
+        query.answer.assert_called_with("↩️ Processing Undo...", show_alert=False)
+        query.edit_message_text.assert_called_once()
+        text = query.edit_message_text.call_args[0][0]
+        self.assertIn("Undo Confirmed & Applied!", text)
+        self.assertIn("Restored transaction #99", text)
+
+    def test_delete_tx_detail_preview(self):
+        """Verify tapping Delete on transaction detail card formats full preview."""
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from bot.handlers import handle_callback_query
+        import asyncio
+
+        update = MagicMock()
+        query = MagicMock()
+        query.data = "delete_tx:42"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update.callback_query = query
+        context = MagicMock()
+
+        dummy_tx = {'id': 42, 'person_name': 'Suresh', 'amount': 250.0, 'transaction_date': '2026-09-23', 'transaction_type': 'SENT'}
+
+        with patch('bot.handlers.is_admin_user', return_value=True), \
+             patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
+             patch('bot.handlers.get_transaction_by_id', return_value=dummy_tx):
+            asyncio.run(handle_callback_query(update, context))
+
+        query.edit_message_text.assert_called_once()
+        prompt_text = query.edit_message_text.call_args[0][0]
+        markup = query.edit_message_text.call_args[1]['reply_markup']
+        self.assertIn("Delete Transaction #42?", prompt_text)
+        self.assertIn("Suresh", prompt_text)
+        callbacks = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+        self.assertIn("delete_confirm:42", callbacks)
+        self.assertIn("delete_cancel:42", callbacks)
+
+    def test_handle_text_backup_undo_and_delete_routing(self):
+        """Verify handle_text properly routes '\\backup', 'undo', 'delete 42' and 'edit 42'."""
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from bot.handlers import handle_text
+        import asyncio
+
+        def make_update(text):
+            up = MagicMock()
+            up.message.text = text
+            up.message.chat_id = 123
+            up.message.message_id = 456
+            return up
+
+        context = MagicMock()
+
+        with patch('bot.handlers.require_authorized', AsyncMock(return_value=True)), \
+             patch('bot.commands.backup_command', AsyncMock()) as mock_backup, \
+             patch('bot.commands.undo_command', AsyncMock()) as mock_undo, \
+             patch('bot.commands.delete_command', AsyncMock()) as mock_delete, \
+             patch('bot.commands.edit_command', AsyncMock()) as mock_edit:
+
+            # Test backup variations
+            asyncio.run(handle_text(make_update(r"\backup"), context))
+            mock_backup.assert_called_once()
+
+            # Test undo variations
+            asyncio.run(handle_text(make_update("undo"), context))
+            mock_undo.assert_called_once()
+
+            # Test delete with args
+            asyncio.run(handle_text(make_update("delete 42"), context))
+            mock_delete.assert_called_once()
+            self.assertEqual(context.args, ['42'])
+
+            # Test edit with args
+            asyncio.run(handle_text(make_update("/edit 42"), context))
+            mock_edit.assert_called_once()
+            self.assertEqual(context.args, ['42'])
+
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -133,6 +133,8 @@ ALL_COMMAND_HANDLERS = {
     "delmenu": cmd_module.delmenu_command,
     "restore": cmd_module.restore_command,
     "importbackup": cmd_module.restore_command,
+    "backup": cmd_module.backup_command,
+    "backupnow": cmd_module.backup_command,
     "undo": cmd_module.undo_command,
     "revert": cmd_module.undo_command,
     "gemini": cmd_module.geministatus_command,
