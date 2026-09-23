@@ -97,72 +97,78 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
 
     should_close_client = False
     if client is None:
-        client = httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=5.0))
+        client = httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=10.0))
         should_close_client = True
 
-    try:
-        resp = await client.post(url, headers=headers, json=payload)
-        code = resp.status_code
-        if code == 200:
-            return {
-                "configured": True,
-                "available": True,
-                "status": "OK",
-                "http_code": 200,
-                "model": target_model,
-                "message": "Gemini API is active and quota is available.",
-                "masked_key": masked_key
-            }
-        elif code == 429:
-            data = {}
-            try:
-                data = resp.json()
-            except Exception:
-                pass
-            err_msg = ""
-            if isinstance(data, dict):
-                err_msg = data.get("error", {}).get("message", "")
+    last_err = None
+    for attempt in range(2):
+        try:
+            resp = await client.post(url, headers=headers, json=payload)
+            code = resp.status_code
+            if code == 200:
+                return {
+                    "configured": True,
+                    "available": True,
+                    "status": "OK",
+                    "http_code": 200,
+                    "model": target_model,
+                    "message": "Gemini API is active and quota is available.",
+                    "masked_key": masked_key
+                }
+            elif code == 429:
+                data = {}
+                try:
+                    data = resp.json()
+                except Exception:
+                    pass
+                err_msg = ""
+                if isinstance(data, dict):
+                    err_msg = data.get("error", {}).get("message", "")
+                return {
+                    "configured": True,
+                    "available": False,
+                    "status": "QUOTA_EXCEEDED",
+                    "http_code": 429,
+                    "model": target_model,
+                    "message": err_msg or "Daily free-tier quota exceeded (limit: 20 requests/day).",
+                    "masked_key": masked_key,
+                    "daily_limit": 20
+                }
+            elif code in (401, 403):
+                return {
+                    "configured": True,
+                    "available": False,
+                    "status": "CREDENTIAL_ERROR",
+                    "http_code": code,
+                    "model": target_model,
+                    "message": "Gemini API key was rejected as invalid or unauthorized.",
+                    "masked_key": masked_key
+                }
+            else:
+                return {
+                    "configured": True,
+                    "available": False,
+                    "status": f"HTTP_{code}",
+                    "http_code": code,
+                    "model": target_model,
+                    "message": f"Gemini API returned status code {code}.",
+                    "masked_key": masked_key
+                }
+        except Exception as e:
+            last_err = e
+            if attempt == 0:
+                await asyncio.sleep(1)
+                continue
+            sanitized = _sanitize_error_message(e, api_key)
             return {
                 "configured": True,
                 "available": False,
-                "status": "QUOTA_EXCEEDED",
-                "http_code": 429,
+                "status": "NETWORK_ERROR",
+                "http_code": None,
                 "model": target_model,
-                "message": err_msg or "Daily free-tier quota exceeded (limit: 20 requests/day).",
-                "masked_key": masked_key,
-                "daily_limit": 20
-            }
-        elif code in (401, 403):
-            return {
-                "configured": True,
-                "available": False,
-                "status": "CREDENTIAL_ERROR",
-                "http_code": code,
-                "model": target_model,
-                "message": "Gemini API key was rejected as invalid or unauthorized.",
+                "message": f"Network error connecting to Gemini API: {sanitized}",
                 "masked_key": masked_key
             }
-        else:
-            return {
-                "configured": True,
-                "available": False,
-                "status": f"HTTP_{code}",
-                "http_code": code,
-                "model": target_model,
-                "message": f"Gemini API returned status code {code}.",
-                "masked_key": masked_key
-            }
-    except Exception as e:
-        sanitized = _sanitize_error_message(e, api_key)
-        return {
-            "configured": True,
-            "available": False,
-            "status": "NETWORK_ERROR",
-            "http_code": None,
-            "model": target_model,
-            "message": f"Network error connecting to Gemini API: {sanitized}",
-            "masked_key": masked_key
-        }
     finally:
         if should_close_client:
             await client.aclose()
