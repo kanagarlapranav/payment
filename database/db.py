@@ -208,6 +208,15 @@ def setup_database():
                     )
                 ''')
 
+                # Pending Receipts table (persists pending transactions across bot reboots/restarts)
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS pending_receipts (
+                        pending_id TEXT PRIMARY KEY,
+                        data_json TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+
                 # Create indexes
                 cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_uid ON transactions(uid)')
                 cursor.execute('''
