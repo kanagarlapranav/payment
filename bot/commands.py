@@ -379,12 +379,93 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /setbudget &lt;amt&gt; — Set monthly spending target (e.g. <code>/setbudget 20000</code>)\n"
         "• /restore — Restore from cloud/JSON backup whenever needed on demand\n"
         "• /export (or /report, /statement) — Download official PDF Statement or Excel Sheet\n"
-        "• /dashboard — View interactive dark-mode charts & live web analytics\n\n"
+        "• /dashboard — View interactive dark-mode charts & live web analytics\n"
+        "• /gemini (or /quota, /status) — Check live Gemini AI quota & OCR engine status\n\n"
         "☁️ <b>Access Policy & Reliability:</b>\n"
         "• Owner has full administrative control; configured group has read-only access.\n"
         "• Every transaction, edit, and deletion is automatically backed up and synced 24/7."
     )
     await update.message.reply_text(help_text, parse_mode='HTML')
+
+async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Checks and reports the live Google Gemini Vision AI status and quota in Telegram chat."""
+    from bot.auth import require_authorized
+    if not await require_authorized(update):
+        return
+
+    from ocr.gemini_vision import check_gemini_api_status_async
+
+    status_msg = await update.message.reply_text("🤖 <i>Checking Gemini AI quota and status…</i>", parse_mode='HTML')
+
+    status_data = await check_gemini_api_status_async()
+    st = status_data.get('status')
+    model = status_data.get('model', 'gemini-flash-latest')
+    masked_key = status_data.get('masked_key', '')
+
+    if st == 'OK':
+        card = (
+            "🤖 <b>Gemini AI Engine & Quota Status</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔑 <b>API Key:</b> Configured ({masked_key})\n"
+            "🚦 <b>Status:</b> 🟢 <b>Operational (Quota Available)</b>\n"
+            f"⚡ <b>Active Model:</b> <code>{html.escape(model)}</code>\n"
+            "🔄 <b>Fallback:</b> RapidOCR (Standby)\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ Receipt scans prioritize Gemini Vision AI for maximum accuracy."
+        )
+    elif st == 'QUOTA_EXCEEDED':
+        limit_val = status_data.get('daily_limit', 20)
+        card = (
+            "🤖 <b>Gemini AI Engine & Quota Status</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔑 <b>API Key:</b> Configured ({masked_key})\n"
+            "🚦 <b>Status:</b> ⚠️ <b>Daily Quota Exceeded (Free Tier)</b>\n"
+            f"📊 <b>Daily Free Limit:</b> {limit_val} requests / day (Limit Reached)\n"
+            "⚠️ <b>HTTP Response:</b> 429 Resource Exhausted\n"
+            f"⚡ <b>Active Model:</b> <code>{html.escape(model)}</code>\n"
+            "🔄 <b>Fallback Engine:</b> 🟢 <b>RapidOCR (Active & Ready)</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "💡 <b>What this means:</b>\n"
+            "• All incoming receipts are automatically parsed by local RapidOCR without interruption.\n"
+            "• Free-tier daily quota resets every 24 hours (midnight Pacific / ~1:30 PM IST).\n"
+            "• To re-enable Gemini Vision immediately, update <code>GEMINI_API_KEY</code> with a new key from Google AI Studio."
+        )
+    elif st == 'CREDENTIAL_ERROR':
+        code = status_data.get('http_code', 403)
+        card = (
+            "🤖 <b>Gemini AI Engine & Quota Status</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔑 <b>API Key:</b> Rejected ({masked_key})\n"
+            f"🚦 <b>Status:</b> ❌ <b>Invalid Credentials (HTTP {code})</b>\n"
+            "🔄 <b>Fallback Engine:</b> 🟢 <b>RapidOCR (Active)</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ Please check or re-generate your API key in Google AI Studio."
+        )
+    elif st == 'NOT_CONFIGURED':
+        card = (
+            "🤖 <b>Gemini AI Engine & Quota Status</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🔑 <b>API Key:</b> ⚪ Not Configured\n"
+            "🚦 <b>Status:</b> Local OCR Mode\n"
+            "🔄 <b>Active Engine:</b> Local RapidOCR + Regex Parser\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "💡 Add <code>GEMINI_API_KEY</code> to enable Gemini Vision AI receipt scanning."
+        )
+    else:
+        err_msg = status_data.get('message', 'Unknown error')
+        card = (
+            "🤖 <b>Gemini AI Engine & Quota Status</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔑 <b>API Key:</b> Configured ({masked_key})\n"
+            f"🚦 <b>Status:</b> ⚠️ <b>{html.escape(str(st))}</b>\n"
+            f"📝 <b>Details:</b> {html.escape(str(err_msg)[:200])}\n"
+            "🔄 <b>Fallback Engine:</b> 🟢 <b>RapidOCR (Active)</b>"
+        )
+
+    try:
+        await status_msg.edit_text(card, parse_mode='HTML')
+    except Exception:
+        await update.message.reply_text(card, parse_mode='HTML')
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return

@@ -200,6 +200,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         transaction = None
         confidence = 0
+        gemini_rate_limited = False
 
         # Tier 1: Try Google Gemini Vision AI first (no OCR pre-processing needed)
         if is_gemini_available():
@@ -208,6 +209,10 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 g_tx, g_conf = await asyncio.to_thread(
                     extract_transaction_with_gemini, str(image_path), caption, None
                 )
+                from ocr.gemini_vision import get_last_extraction_error
+                if get_last_extraction_error() == "RATE_LIMIT":
+                    gemini_rate_limited = True
+
                 if g_tx and g_conf >= 40:
                     transaction = g_tx
                     confidence = g_conf
@@ -225,9 +230,15 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info("Gemini did not return a usable result — running RapidOCR fallback.")
             ocr_text = await perform_ocr_async(str(image_path))
             if not ocr_text or not ocr_text.strip():
+                quota_warning = ""
+                if gemini_rate_limited:
+                    quota_warning = (
+                        "⚠️ <b>Gemini Vision daily quota exceeded for today (429 Rate Limit).</b>\n"
+                        "Local RapidOCR fallback also could not read text from this image.\n\n"
+                    )
                 await deliver_response(
                     status_msg, message,
-                    "❌ Could not read text from this image.\n\n"
+                    f"{quota_warning}❌ Could not read text from this image.\n\n"
                     "💡 <b>Tip:</b> You can log it manually instead:\n"
                     "<code>Paid 2000 to Kanagarla Sai Akhil Amazon Pay</code>\n"
                     "or just <code>2000 sent Kanagarla</code>",
@@ -242,9 +253,15 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Basic validation
         if not transaction or not transaction.amount or transaction.amount <= 0:
+            quota_warning = ""
+            if gemini_rate_limited:
+                quota_warning = (
+                    "⚠️ <b>Gemini Vision daily quota exceeded for today (429 Rate Limit).</b>\n"
+                    "Local RapidOCR fallback could not detect a valid amount from the receipt.\n\n"
+                )
             await deliver_response(
                 status_msg, message,
-                "⚠️ Could not detect a valid amount from the receipt.\n\n💡 <b>Tip:</b> You can log it instantly by typing:\n<code>120 dosa</code> or <code>Paid 500 to Ramesh</code>",
+                f"{quota_warning}⚠️ Could not detect a valid amount from the receipt.\n\n💡 <b>Tip:</b> You can log it instantly by typing:\n<code>120 dosa</code> or <code>Paid 500 to Ramesh</code>",
                 parse_mode='HTML'
             )
             return
@@ -281,6 +298,8 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # 4. Render the polished Confirmation Card requested by user
         card_text = format_receipt_card(transaction, dup_warning)
+        if gemini_rate_limited:
+            card_text += "\n\nℹ️ <i>Extracted with local RapidOCR (Gemini daily quota reached).</i>"
         card_markup = get_confirmation_card_keyboard(pending_id, duplicate_warning=bool(dup))
 
         await deliver_response(status_msg, message, card_text, reply_markup=card_markup, parse_mode='HTML')
@@ -1741,6 +1760,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif cmd_lower in (r'\dashboard', 'dashboard', '/dashboard'):
         from bot.commands import dashboard_command
         await dashboard_command(update, context)
+        return
+    elif cmd_lower in (r'\gemini', 'gemini', '/gemini', r'\geministatus', 'geministatus', '/geministatus', r'\quota', 'quota', '/quota', r'\ai', 'ai', '/ai', r'\status', 'status', '/status'):
+        from bot.commands import geministatus_command
+        await geministatus_command(update, context)
         return
     elif cmd_lower.startswith((r'\digest', 'digest', '/digest')):
         parts = text.split(maxsplit=1)
