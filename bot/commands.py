@@ -1234,7 +1234,7 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update): return
     import os
     from services.dashboard_auth import create_one_time_code
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     
     from config import RENDER_EXTERNAL_URL
     render_url = RENDER_EXTERNAL_URL
@@ -1244,15 +1244,23 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         f"📊 <b>LIVE FINANCIAL DASHBOARD</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Tap <b>Open Dashboard</b> below to view interactive charts, month switcher, category donut breakdowns, top payees, and spending heatmaps right inside Telegram!\n\n"
-        f"🔒 <i>Single-use secure link valid for 60 seconds. Sets a 30-minute session cookie. Note: Server restarts require generating a fresh link with /dashboard.</i>\n\n"
+        f"Tap <b>Open Dashboard</b> below to view interactive charts, month switcher, category donut breakdowns, top payees, and spending heatmaps!\n\n"
+        f"🔒 <i>Single-use secure link valid for 60 seconds. Sets a 30-minute session cookie. Server restarts require a fresh link with /dashboard.</i>\n\n"
         f"🔗 <code>{auth_url}</code>"
     )
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Open Dashboard", web_app=WebAppInfo(url=auth_url))],
-        [InlineKeyboardButton("🌐 Open in Browser", url=auth_url)]
+        [InlineKeyboardButton("📊 Open Dashboard", url=auth_url)]
     ])
-    await update.message.reply_text(msg, reply_markup=markup, parse_mode='HTML')
+    try:
+        await update.message.reply_text(msg, reply_markup=markup, parse_mode='HTML')
+    except Exception as e:
+        logger.error(f"Dashboard command failed: {e}", exc_info=True)
+        # Fallback: send plain text link if button fails
+        await update.message.reply_text(
+            f"📊 <b>Dashboard Link:</b>\n\n{auth_url}\n\n"
+            f"🔒 <i>Valid for 60 seconds. Open in your browser.</i>",
+            parse_mode='HTML'
+        )
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the full vegetarian cafeteria menu with prices & add-ons."""
