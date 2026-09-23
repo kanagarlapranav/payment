@@ -536,14 +536,22 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 text = render_contacts_ledger_text()
                 await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
             elif nav_target == "dash_info":
-                from config import DASHBOARD_TOKEN, RENDER_EXTERNAL_URL
+                from config import RENDER_EXTERNAL_URL
+                from bot.auth import is_owner
+                from services.dashboard_auth import create_one_time_code
                 base_url = RENDER_EXTERNAL_URL
-                token_str = f"?token={DASHBOARD_TOKEN}" if DASHBOARD_TOKEN else ""
-                dash_link = f"{base_url}/dashboard{token_str}"
+                if is_owner(update):
+                    code = create_one_time_code()
+                    dash_link = f"{base_url}/auth?code={code}"
+                    note = "🔒 <i>Single-use login link generated (valid 60 seconds).</i>\n\n"
+                else:
+                    dash_link = f"{base_url}/dashboard"
+                    note = "🔒 <i>Requires owner login. Run /dashboard in private chat to log in.</i>\n\n"
                 text = (
                     "🌐 <b>Web Analytics Dashboard</b>\n"
                     "━━━━━━━━━━━━━━\n"
                     "Access real-time visual charts, month-over-month comparisons, category donut charts, daily spend bars, and CSV export:\n\n"
+                    f"{note}"
                     f"🔗 <a href='{dash_link}'>Open Live Dashboard</a>\n"
                     "━━━━━━━━━━━━━━"
                 )
