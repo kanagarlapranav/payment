@@ -14,11 +14,13 @@ from utils.dates import parse_date
 from utils.validation import parse_decimal_amount, validate_name, validate_reference
 
 # Prefer env-configured models; fallback to a single known-good model
+# Prefer env-configured models; fallback to models with active free-tier quota
+DEFAULT_GEMINI_MODELS = "gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-3.8-flash,gemini-flash-latest"
 GEMINI_MODELS = [
     m.strip()
-    for m in os.getenv("GEMINI_MODELS", "gemini-flash-latest").split(",")
+    for m in os.getenv("GEMINI_MODELS", DEFAULT_GEMINI_MODELS).split(",")
     if m.strip()
-] or ["gemini-flash-latest"]
+] or ["gemini-3.6-flash", "gemini-3.5-flash-lite"]
 
 GEMINI_API_KEY = None  # May be set or overridden in tests
 
@@ -69,7 +71,7 @@ def set_last_extraction_error(err: Optional[str]) -> None:
 
 async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = None) -> dict:
     """
-    Checks live Gemini API key and quota status without leaking secrets.
+    Checks live Gemini API key and quota status across available models without leaking secrets.
     """
     api_key = get_effective_gemini_api_key()
     if not api_key:
@@ -78,14 +80,18 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
             "available": False,
             "status": "NOT_CONFIGURED",
             "http_code": None,
-            "model": GEMINI_MODELS[0] if GEMINI_MODELS else "gemini-flash-latest",
+            "model": GEMINI_MODELS[0] if GEMINI_MODELS else "gemini-3.6-flash",
             "message": "GEMINI_API_KEY is not configured or is disabled.",
             "masked_key": ""
         }
 
     masked_key = f"…{api_key[-4:]}" if len(api_key) >= 4 else "Configured"
-    target_model = GEMINI_MODELS[0] if GEMINI_MODELS else "gemini-flash-latest"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent"
+
+    # Gather models to check
+    models_to_check = list(GEMINI_MODELS)
+    if GEMINI_MODEL and GEMINI_MODEL not in models_to_check:
+        models_to_check.insert(0, GEMINI_MODEL)
+
     headers = {
         "Content-Type": "application/json",
         "x-goog-api-key": api_key,
@@ -100,76 +106,92 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
         client = httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=10.0))
         should_close_client = True
 
+    last_429_msg = ""
     last_err = None
+
     try:
-        for attempt in range(2):
-            try:
-                resp = await client.post(url, headers=headers, json=payload)
-                code = resp.status_code
-                if code == 200:
-                    return {
-                        "configured": True,
-                        "available": True,
-                        "status": "OK",
-                        "http_code": 200,
-                        "model": target_model,
-                        "message": "Gemini API is active and quota is available.",
-                        "masked_key": masked_key
-                    }
-                elif code == 429:
-                    data = {}
-                    try:
-                        data = resp.json()
-                    except Exception:
-                        pass
-                    err_msg = ""
-                    if isinstance(data, dict):
-                        err_msg = data.get("error", {}).get("message", "")
-                    return {
-                        "configured": True,
-                        "available": False,
-                        "status": "QUOTA_EXCEEDED",
-                        "http_code": 429,
-                        "model": target_model,
-                        "message": err_msg or "Daily free-tier quota exceeded (limit: 20 requests/day).",
-                        "masked_key": masked_key,
-                        "daily_limit": 20
-                    }
-                elif code in (401, 403):
-                    return {
-                        "configured": True,
-                        "available": False,
-                        "status": "CREDENTIAL_ERROR",
-                        "http_code": code,
-                        "model": target_model,
-                        "message": "Gemini API key was rejected as invalid or unauthorized.",
-                        "masked_key": masked_key
-                    }
-                else:
-                    return {
-                        "configured": True,
-                        "available": False,
-                        "status": f"HTTP_{code}",
-                        "http_code": code,
-                        "model": target_model,
-                        "message": f"Gemini API returned status code {code}.",
-                        "masked_key": masked_key
-                    }
-            except Exception as e:
-                last_err = e
-                if attempt == 0:
-                    await asyncio.sleep(1)
-                    continue
-                sanitized = _sanitize_error_message(e, api_key)
-                return {
-                    "configured": True,
-                    "available": False,
-                    "status": "NETWORK_ERROR",
-                    "http_code": None,
-                    "model": target_model,
-                    "message": f"Network error connecting to Gemini API: {sanitized}",
-                    "masked_key": masked_key
-                }
+        for target_model in models_to_check:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent"
+            for attempt in range(2):
+                try:
+                    resp = await client.post(url, headers=headers, json=payload)
+                    code = resp.status_code
+                    if code == 200:
+                        return {
+                            "configured": True,
+                            "available": True,
+                            "status": "OK",
+                            "http_code": 200,
+                            "model": target_model,
+                            "message": f"Gemini API is active and quota is available on {target_model}.",
+                            "masked_key": masked_key
+                        }
+                    elif code == 429:
+                        data = {}
+                        try:
+                            data = resp.json()
+                        except Exception:
+                            pass
+                        err_msg = ""
+                        if isinstance(data, dict):
+                            err_msg = data.get("error", {}).get("message", "")
+                        last_429_msg = err_msg or "Daily free-tier quota exceeded."
+                        # Quota exceeded on this model; break to try next model in pool
+                        break
+                    elif code in (401, 403):
+                        return {
+                            "configured": True,
+                            "available": False,
+                            "status": "CREDENTIAL_ERROR",
+                            "http_code": code,
+                            "model": target_model,
+                            "message": "Gemini API key was rejected as invalid or unauthorized.",
+                            "masked_key": masked_key
+                        }
+                    else:
+                        # 404, 503, etc -> try next model
+                        break
+                except Exception as e:
+                    last_err = e
+                    if attempt == 0:
+                        await asyncio.sleep(1)
+                        continue
+                    break
+
+        # If all models returned 429 (or were exhausted)
+        if last_429_msg:
+            return {
+                "configured": True,
+                "available": False,
+                "status": "QUOTA_EXCEEDED",
+                "http_code": 429,
+                "model": models_to_check[0],
+                "message": last_429_msg or "Daily free-tier quota exceeded across all checked models.",
+                "masked_key": masked_key,
+                "daily_limit": 20
+            }
+
+        if last_err is not None:
+            sanitized = _sanitize_error_message(last_err, api_key)
+            return {
+                "configured": True,
+                "available": False,
+                "status": "NETWORK_ERROR",
+                "http_code": None,
+                "model": models_to_check[0],
+                "message": f"Network error connecting to Gemini API: {sanitized}",
+                "masked_key": masked_key
+            }
+
+        return {
+            "configured": True,
+            "available": False,
+            "status": "HTTP_ERROR",
+            "http_code": None,
+            "model": models_to_check[0],
+            "message": "All configured Gemini models were unavailable.",
+            "masked_key": masked_key
+        }
     finally:
         if should_close_client:
             await client.aclose()
