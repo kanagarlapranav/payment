@@ -173,6 +173,67 @@ class TestGeminiChatStatus(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_default_model_priority_order(self):
+        with patch("database.queries.get_model_setting", return_value="AUTO"), \
+             patch("ocr.gemini_vision.GEMINI_MODEL", ""):
+            models = gv.get_effective_model_list()
+            self.assertEqual(models[0], "gemini-3.8-flash")
+            self.assertEqual(models[1], "gemini-3.7-flash")
+            self.assertEqual(models[2], "gemini-3.6-flash")
+            self.assertEqual(models[3], "gemini-3.5-flash-lite")
+
+    def test_manual_model_priority_override(self):
+        with patch("database.queries.get_model_setting", return_value="gemini-3.6-flash"):
+            models = gv.get_effective_model_list()
+            self.assertEqual(models[0], "gemini-3.6-flash")
+            self.assertIn("gemini-3.8-flash", models)
+            self.assertIn("gemini-3.7-flash", models)
+            self.assertIn("gemini-3.5-flash-lite", models)
+
+    def test_set_and_get_model_setting_database(self):
+        from database.queries import set_model_setting, get_model_setting
+        set_model_setting("gemini-3.7-flash")
+        self.assertEqual(get_model_setting(), "gemini-3.7-flash")
+        set_model_setting("AUTO")
+        self.assertEqual(get_model_setting(), "AUTO")
+
+    def test_setmodel_command_admin_updates_setting(self):
+        from bot.commands import setmodel_command
+        from database.queries import get_model_setting
+
+        update = MagicMock()
+        update.effective_user.id = 123456
+        update.message = AsyncMock()
+        context = MagicMock()
+        context.args = ["3.8"]
+
+        with patch("bot.auth.require_admin", AsyncMock(return_value=True)):
+            asyncio.run(setmodel_command(update, context))
+            self.assertEqual(get_model_setting(), "gemini-3.8-flash")
+            update.message.reply_text.assert_called_once()
+            call_text = update.message.reply_text.call_args[0][0]
+            self.assertIn("Gemini Model Preference Updated", call_text)
+            self.assertIn("gemini-3.8-flash", call_text)
+
+    def test_set_model_callback_updates_setting_and_renders(self):
+        from bot.handlers import handle_callback_query
+        from database.queries import get_model_setting
+
+        update = MagicMock()
+        query = AsyncMock()
+        query.data = "set_model:gemini-3.5-flash-lite"
+        update.callback_query = query
+
+        with patch("bot.handlers.require_admin", AsyncMock(return_value=True)), \
+             patch("ocr.gemini_vision.check_gemini_api_status_async", AsyncMock(return_value={
+                 "status": "OK", "model": "gemini-3.5-flash-lite", "masked_key": "…1234", "preferred_setting": "gemini-3.5-flash-lite"
+             })):
+            asyncio.run(handle_callback_query(update, MagicMock()))
+            self.assertEqual(get_model_setting(), "gemini-3.5-flash-lite")
+            query.answer.assert_called()
+            query.edit_message_text.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
+

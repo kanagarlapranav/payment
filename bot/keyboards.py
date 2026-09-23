@@ -622,4 +622,30 @@ def get_menu_view_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 
+def get_model_selection_keyboard(current_model: str = "AUTO") -> InlineKeyboardMarkup:
+    """Returns an inline keyboard allowing the user to select the preferred Gemini model or Auto-Failover."""
+    curr = (current_model or "AUTO").strip()
+
+    auto_label = "✅ ⚡ Auto-Failover (3.8 ➔ 3.7 ➔ 3.6 ➔ 3.5)" if curr == "AUTO" else "⚡ Auto-Failover (3.8 ➔ 3.7 ➔ 3.6 ➔ 3.5)"
+    m38_label = "✅ 1️⃣ 3.8 Flash" if curr == "gemini-3.8-flash" else "1️⃣ 3.8 Flash"
+    m37_label = "✅ 2️⃣ 3.7 Flash" if curr == "gemini-3.7-flash" else "2️⃣ 3.7 Flash"
+    m36_label = "✅ 3️⃣ 3.6 Flash" if curr == "gemini-3.6-flash" else "3️⃣ 3.6 Flash"
+    m35_label = "✅ 4️⃣ 3.5 Flash Lite" if curr == "gemini-3.5-flash-lite" else "4️⃣ 3.5 Flash Lite"
+
+    keyboard = [
+        [InlineKeyboardButton(auto_label, callback_data="set_model:AUTO")],
+        [
+            InlineKeyboardButton(m38_label, callback_data="set_model:gemini-3.8-flash"),
+            InlineKeyboardButton(m37_label, callback_data="set_model:gemini-3.7-flash")
+        ],
+        [
+            InlineKeyboardButton(m36_label, callback_data="set_model:gemini-3.6-flash"),
+            InlineKeyboardButton(m35_label, callback_data="set_model:gemini-3.5-flash-lite")
+        ],
+        [InlineKeyboardButton("🔄 Refresh Quota & Pool Status", callback_data="refresh_gemini")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+
 

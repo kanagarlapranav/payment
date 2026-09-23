@@ -387,20 +387,16 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(help_text, parse_mode='HTML')
 
-async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Checks and reports the live Google Gemini Vision AI status and quota in Telegram chat."""
-    from bot.auth import require_authorized
-    if not await require_authorized(update):
-        return
-
+async def render_gemini_status_payload() -> tuple:
+    """Computes and formats the Gemini AI engine status, pool status, and selection keyboard."""
     from ocr.gemini_vision import check_gemini_api_status_async
-
-    status_msg = await update.message.reply_text("🤖 <i>Checking Gemini AI quota and status…</i>", parse_mode='HTML')
+    from bot.keyboards import get_model_selection_keyboard
 
     status_data = await check_gemini_api_status_async()
     st = status_data.get('status')
-    model = status_data.get('model', 'gemini-3.6-flash')
+    model = status_data.get('model', 'gemini-3.8-flash')
     masked_key = status_data.get('masked_key', '')
+    pref_setting = status_data.get('preferred_setting', 'AUTO')
 
     pool_status = status_data.get('pool_status', [])
     pool_section = ""
@@ -422,17 +418,20 @@ async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYP
                 pool_lines.append(f"• <code>{m_name}</code>: ⚪ <b>Unavailable</b>")
         pool_section = "\n".join(pool_lines) + "\n"
 
+    pref_display = "⚡ <b>Auto (3.8 ➔ 3.7 ➔ 3.6 ➔ 3.5 Lite)</b>" if pref_setting == "AUTO" else f"🎯 <b>Manual ({html.escape(pref_setting)})</b>"
+
     if st == 'OK':
         card = (
             "🤖 <b>Gemini AI Engine & Quota Status</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             f"🔑 <b>API Key:</b> Configured ({masked_key})\n"
             "🚦 <b>Status:</b> 🟢 <b>Operational (Quota Available)</b>\n"
+            f"🎯 <b>Priority Setting:</b> {pref_display}\n"
             f"⚡ <b>Active Model:</b> <code>{html.escape(model)}</code>\n"
             f"{pool_section}"
             "🔄 <b>Fallback:</b> RapidOCR (Standby)\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
-            "✅ Receipt scans prioritize Gemini Vision AI for maximum accuracy."
+            "💡 <i>Tap any button below to change model priority or refresh:</i>"
         )
     elif st == 'QUOTA_EXCEEDED':
         limit_val = status_data.get('daily_limit', 20)
@@ -441,16 +440,16 @@ async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYP
             "━━━━━━━━━━━━━━━━━━━━\n"
             f"🔑 <b>API Key:</b> Configured ({masked_key})\n"
             "🚦 <b>Status:</b> ⚠️ <b>Daily Quota Exceeded (Free Tier)</b>\n"
+            f"🎯 <b>Priority Setting:</b> {pref_display}\n"
             f"📊 <b>Daily Free Limit:</b> {limit_val} requests / day (Limit Reached)\n"
             "⚠️ <b>HTTP Response:</b> 429 Resource Exhausted\n"
-            f"⚡ <b>Active Model:</b> <code>{html.escape(model)}</code>\n"
+            f"⚡ <b>Attempted Model:</b> <code>{html.escape(model)}</code>\n"
             f"{pool_section}"
             "🔄 <b>Fallback Engine:</b> 🟢 <b>RapidOCR (Active & Ready)</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
-            "💡 <b>What this means:</b>\n"
-            "• All incoming receipts are automatically parsed by local RapidOCR without interruption.\n"
-            "• Free-tier daily quota resets every 24 hours (midnight Pacific / ~1:30 PM IST).\n"
-            "• To re-enable Gemini Vision immediately, update <code>GEMINI_API_KEY</code> with a new key from Google AI Studio."
+            "💡 <b>Failover Protection:</b>\n"
+            "• All incoming receipts are automatically parsed by local RapidOCR.\n"
+            "• Tap <b>3.5 Flash Lite</b> (500 req/day) below if you have remaining quota on it."
         )
     elif st == 'CREDENTIAL_ERROR':
         code = status_data.get('http_code', 403)
@@ -459,6 +458,7 @@ async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYP
             "━━━━━━━━━━━━━━━━━━━━\n"
             f"🔑 <b>API Key:</b> Rejected ({masked_key})\n"
             f"🚦 <b>Status:</b> ❌ <b>Invalid Credentials (HTTP {code})</b>\n"
+            f"🎯 <b>Priority Setting:</b> {pref_display}\n"
             "🔄 <b>Fallback Engine:</b> 🟢 <b>RapidOCR (Active)</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "⚠️ Please check or re-generate your API key in Google AI Studio."
@@ -469,6 +469,7 @@ async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYP
             "━━━━━━━━━━━━━━━━━━━━\n"
             "🔑 <b>API Key:</b> ⚪ Not Configured\n"
             "🚦 <b>Status:</b> Local OCR Mode\n"
+            f"🎯 <b>Priority Setting:</b> {pref_display}\n"
             "🔄 <b>Active Engine:</b> Local RapidOCR + Regex Parser\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "💡 Add <code>GEMINI_API_KEY</code> to enable Gemini Vision AI receipt scanning."
@@ -480,14 +481,91 @@ async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYP
             "━━━━━━━━━━━━━━━━━━━━\n"
             f"🔑 <b>API Key:</b> Configured ({masked_key})\n"
             f"🚦 <b>Status:</b> ⚠️ <b>{html.escape(str(st))}</b>\n"
+            f"🎯 <b>Priority Setting:</b> {pref_display}\n"
             f"📝 <b>Details:</b> {html.escape(str(err_msg)[:200])}\n"
             "🔄 <b>Fallback Engine:</b> 🟢 <b>RapidOCR (Active)</b>"
         )
 
+    keyboard = get_model_selection_keyboard(pref_setting)
+    return card, keyboard
+
+async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Checks and reports the live Google Gemini Vision AI status and quota in Telegram chat."""
+    from bot.auth import require_authorized
+    if not await require_authorized(update):
+        return
+
+    status_msg = await update.message.reply_text("🤖 <i>Checking Gemini AI quota and status…</i>", parse_mode='HTML')
+    card, keyboard = await render_gemini_status_payload()
     try:
-        await status_msg.edit_text(card, parse_mode='HTML')
+        await status_msg.edit_text(card, reply_markup=keyboard, parse_mode='HTML')
     except Exception:
-        await update.message.reply_text(card, parse_mode='HTML')
+        await update.message.reply_text(card, reply_markup=keyboard, parse_mode='HTML')
+
+async def setmodel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allows admin to set or inspect the active Gemini model preference."""
+    from bot.auth import require_admin
+    if not await require_admin(update):
+        return
+
+    from database.queries import set_model_setting
+
+    args = context.args if context and context.args else []
+    if not args:
+        card, keyboard = await render_gemini_status_payload()
+        await update.message.reply_text(
+            f"⚙️ <b>Gemini Model Configuration</b>\n"
+            f"Select your preferred priority below or use:\n"
+            f"• <code>/setmodel auto</code> (Default: 3.8 ➔ 3.7 ➔ 3.6 ➔ 3.5 Lite)\n"
+            f"• <code>/setmodel 3.8</code>\n"
+            f"• <code>/setmodel 3.7</code>\n"
+            f"• <code>/setmodel 3.6</code>\n"
+            f"• <code>/setmodel 3.5</code>\n\n"
+            f"{card}",
+            reply_markup=keyboard,
+            parse_mode='HTML'
+        )
+        return
+
+    arg = args[0].strip().lower()
+    model_mapping = {
+        "auto": "AUTO",
+        "default": "AUTO",
+        "3.8": "gemini-3.8-flash",
+        "3.8flash": "gemini-3.8-flash",
+        "gemini-3.8-flash": "gemini-3.8-flash",
+        "3.7": "gemini-3.7-flash",
+        "3.7flash": "gemini-3.7-flash",
+        "gemini-3.7-flash": "gemini-3.7-flash",
+        "3.6": "gemini-3.6-flash",
+        "3.6flash": "gemini-3.6-flash",
+        "gemini-3.6-flash": "gemini-3.6-flash",
+        "3.5": "gemini-3.5-flash-lite",
+        "3.5flash": "gemini-3.5-flash-lite",
+        "3.5lite": "gemini-3.5-flash-lite",
+        "gemini-3.5-flash-lite": "gemini-3.5-flash-lite"
+    }
+
+    if arg not in model_mapping:
+        valid_options = "<code>auto</code>, <code>3.8</code>, <code>3.7</code>, <code>3.6</code>, <code>3.5</code>"
+        await update.message.reply_text(
+            f"❌ Unknown model option: <code>{html.escape(arg)}</code>\n"
+            f"Valid options: {valid_options}\n\n"
+            f"Example: <code>/setmodel 3.7</code> or <code>/setmodel auto</code>",
+            parse_mode='HTML'
+        )
+        return
+
+    chosen_model = model_mapping[arg]
+    set_model_setting(chosen_model)
+
+    desc = "⚡ <b>Auto-Failover (Priority: 3.8 ➔ 3.7 ➔ 3.6 ➔ 3.5 Lite)</b>" if chosen_model == "AUTO" else f"🎯 <b>{chosen_model}</b> (1st priority with auto-failover)"
+    await update.message.reply_text(
+        f"✅ <b>Gemini Model Preference Updated!</b>\n\n"
+        f"Active Priority: {desc}\n\n"
+        f"Receipt scans will prioritize this model. If its quota runs out, the bot will automatically fall back to remaining standby models.",
+        parse_mode='HTML'
+    )
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
