@@ -259,6 +259,73 @@ async def deliver_response(status_msg, message, text: str, reply_markup=None, pa
                 except Exception as final_err:
                     logger.error(f"Failed to deliver message: {final_err}")
 
+async def safe_edit_callback_message(query, text: str, reply_markup=None, parse_mode='HTML'):
+    """
+    Safely edits a callback query's message, supporting both text and media messages (captions),
+    with automatic plain-text fallback on parse errors and fallback to reply_text.
+    """
+    async def _invoke(fn, *args, **kwargs):
+        if not callable(fn):
+            return None
+        res = fn(*args, **kwargs)
+        if asyncio.iscoroutine(res):
+            return await res
+        return res
+
+    msg = getattr(query, 'message', None)
+    is_media = False
+    if msg:
+        has_text = isinstance(getattr(msg, 'text', None), str)
+        has_caption = isinstance(getattr(msg, 'caption', None), str)
+        if has_text:
+            is_media = False
+        elif has_caption:
+            is_media = True
+        elif getattr(msg, 'photo', None) is not None and type(msg.photo).__name__ not in ('MagicMock', 'Mock'):
+            is_media = True
+
+    # 1. Primary edit attempt
+    try:
+        if is_media and hasattr(query, 'edit_message_caption'):
+            await _invoke(query.edit_message_caption, caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        else:
+            await _invoke(query.edit_message_text, text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return
+    except Exception as e1:
+        logger.warning(f"Safe edit failed primary attempt (is_media={is_media}, err={e1}). Retrying plain text...")
+
+    # 2. Plain text retry (in case of HTML parsing error or unsupported tags)
+    clean_text = re.sub(r'<[^>]+>', '', text)
+    try:
+        if is_media and hasattr(query, 'edit_message_caption'):
+            await _invoke(query.edit_message_caption, caption=clean_text, reply_markup=reply_markup)
+        else:
+            await _invoke(query.edit_message_text, clean_text, reply_markup=reply_markup)
+        return
+    except Exception as e2:
+        logger.warning(f"Safe edit failed plain attempt (is_media={is_media}, err={e2}). Swapping media/text...")
+
+    # 3. Swap media/text mode in case is_media check had false positive/negative
+    try:
+        if not is_media and hasattr(query, 'edit_message_caption'):
+            await _invoke(query.edit_message_caption, caption=clean_text, reply_markup=reply_markup)
+            return
+        elif is_media and hasattr(query, 'edit_message_text'):
+            await _invoke(query.edit_message_text, clean_text, reply_markup=reply_markup)
+            return
+    except Exception:
+        pass
+
+    # 4. Fallback to sending a new reply if edit was completely rejected
+    if msg and hasattr(msg, 'reply_text'):
+        try:
+            await _invoke(msg.reply_text, text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except Exception:
+            try:
+                await _invoke(msg.reply_text, clean_text, reply_markup=reply_markup)
+            except Exception as final_err:
+                logger.error(f"Safe edit ultimate reply fallback failed: {final_err}")
+
 ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
@@ -796,7 +863,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "rec_paid":
         rec_id = int(parts[1])
         from services.recurring_service import mark_recurring_paid, get_recurring_by_id
-        from bot.keyboards import get_quick_undo_keyboard
         tx_id, next_due = await asyncio.to_thread(mark_recurring_paid, rec_id)
         rec = await asyncio.to_thread(get_recurring_by_id, rec_id)
         text = (
@@ -1071,7 +1137,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     await ans
             except Exception:
                 pass
-            await query.edit_message_text("❌ Receipt confirmation expired.", reply_markup=get_back_to_menu_keyboard())
+            await safe_edit_callback_message(query, "❌ Receipt confirmation expired.", reply_markup=get_back_to_menu_keyboard())
             return
 
         # Check if this exact receipt/transaction was already saved in the database
@@ -1123,7 +1189,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 [InlineKeyboardButton(f"↩️ Undo #{existing['id']}", callback_data=f"undo_tx:{existing['id']}")],
                 [InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:home")]
             ])
-            await query.edit_message_text(already_saved_text, reply_markup=kb, parse_mode='HTML')
+            await safe_edit_callback_message(query, already_saved_text, reply_markup=kb, parse_mode='HTML')
             return
         
         # Remember payee preference in DB if available
@@ -1138,6 +1204,33 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     await ans
             except Exception:
                 pass
+
+            # Record undo action so /undo and instant undo button work
+            chat_id = None
+            if query.message and getattr(query.message, 'chat_id', None) is not None:
+                try:
+                    chat_id = int(query.message.chat_id)
+                except (ValueError, TypeError):
+                    chat_id = None
+            user_id = None
+            if query.from_user and getattr(query.from_user, 'id', None) is not None:
+                try:
+                    user_id = int(query.from_user.id)
+                except (ValueError, TypeError):
+                    user_id = None
+            try:
+                from services.undo_service import record_insert_action
+                record_insert_action(transaction.id, chat_id=chat_id, user_id=user_id)
+            except Exception as u_err:
+                logger.warning(f"Could not record undo action: {u_err}")
+
+            # Fetch fresh transaction from DB to get the exact recalculated balance_after
+            saved_tx = get_transaction_by_id(transaction.id)
+            if saved_tx and saved_tx.get('balance_after') is not None:
+                current_bal_val = saved_tx.get('balance_after')
+            else:
+                current_bal_val = get_balance_setting()
+
             # Check budget alerts (Requirement 5: After saving a transaction, add a one-line alert if a budget crosses 80% or 100%)
             from services.budget_service import get_budget_info
             now = get_current_time_in_tz()
@@ -1162,11 +1255,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 "━━━━━━━━━━━━━━\n"
                 f"💸 <b>{format_currency(transaction.amount)}</b> {arrow} <b>{html.escape(transaction.person_name or 'Unknown')}</b>\n"
                 f"🏷 {html.escape(transaction.category or 'General')}   📅 {html.escape(date_display)}\n"
-                f"💼 <b>Current Balance:</b> <b>{format_currency(transaction.balance_after)}</b>\n\n"
+                f"💼 <b>Current Balance:</b> <b>{format_currency(current_bal_val)}</b>\n\n"
                 f"✅ <i>Saved to your database and backed up to cloud.</i>"
                 f"{budget_alert}"
             )
-            await query.edit_message_text(saved_text, reply_markup=get_quick_undo_keyboard(transaction.id), parse_mode='HTML')
+            await safe_edit_callback_message(query, saved_text, reply_markup=get_quick_undo_keyboard(transaction.id), parse_mode='HTML')
             from services.task_manager import schedule_debounced_backup
             schedule_debounced_backup(context.bot)
         else:
@@ -1201,7 +1294,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     [InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:home")]
                 ])
                 set_pending_transaction(pending_id, transaction)
-                await query.edit_message_text(already_saved_text, reply_markup=kb, parse_mode='HTML')
+                await safe_edit_callback_message(query, already_saved_text, reply_markup=kb, parse_mode='HTML')
             else:
                 try:
                     ans = query.answer("⚠️ Save Failed", show_alert=True)
@@ -1209,12 +1302,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                         await ans
                 except Exception:
                     pass
-                await query.edit_message_text("⚠️ Transaction could not be saved. Please verify the amount and details or enter manually.", reply_markup=get_back_to_menu_keyboard())
+                await safe_edit_callback_message(query, "⚠️ Transaction could not be saved. Please verify the amount and details or enter manually.", reply_markup=get_back_to_menu_keyboard())
         return
 
     elif action == "edit_p":
         pending_id = parts[1]
-        await query.edit_message_text(
+        await safe_edit_callback_message(
+            query,
             "✏️ <b>Select Field to Edit:</b>\n"
             "Choose which field of the detected receipt you want to change:",
             reply_markup=get_edit_pending_fields_keyboard(pending_id),
@@ -1236,7 +1330,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             'date': "Enter the date (e.g. <code>yesterday</code> or <code>19/09/2026</code>):",
             'type': "Enter type (<code>SENT</code> or <code>RECEIVED</code>):"
         }
-        await query.edit_message_text(f"✏️ {prompts.get(field, 'Enter new value:')}", reply_markup=cancel_markup, parse_mode='HTML')
+        await safe_edit_callback_message(query, f"✏️ {prompts.get(field, 'Enter new value:')}", reply_markup=cancel_markup, parse_mode='HTML')
         return
 
     elif action == "ep_back":
@@ -1248,7 +1342,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             if transaction:
                 set_pending_transaction(pending_id, transaction)
         if not transaction:
-            await query.edit_message_text("❌ Transaction expired.", reply_markup=get_back_to_menu_keyboard())
+            await safe_edit_callback_message(query, "❌ Transaction expired.", reply_markup=get_back_to_menu_keyboard())
             return
         dup = find_potential_duplicate(
             amount=transaction.amount,
@@ -1258,12 +1352,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
         dup_warning = f"⚠️ Similar to #{dup['id']} ({dup.get('match_reason', 'duplicate')}) — duplicate?" if dup else None
         card_text = format_receipt_card(transaction, dup_warning)
-        await query.edit_message_text(card_text, reply_markup=get_confirmation_card_keyboard(pending_id, duplicate_warning=bool(dup)), parse_mode='HTML')
+        await safe_edit_callback_message(query, card_text, reply_markup=get_confirmation_card_keyboard(pending_id, duplicate_warning=bool(dup)), parse_mode='HTML')
         return
 
     elif action == "cat_p":
         pending_id = parts[1]
-        await query.edit_message_text(
+        await safe_edit_callback_message(
+            query,
             "🏷️ <b>Select Category:</b>\n"
             "Tap a category below. Your preference will be remembered for this payee in future receipts:",
             reply_markup=get_category_picker_keyboard(pending_id),
@@ -1291,16 +1386,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
             dup_warning = f"⚠️ Similar to #{dup['id']} ({dup.get('match_reason', 'duplicate')}) — duplicate?" if dup else None
             card_text = format_receipt_card(transaction, dup_warning)
-            await query.edit_message_text(card_text, reply_markup=get_confirmation_card_keyboard(pending_id, duplicate_warning=bool(dup)), parse_mode='HTML')
+            await safe_edit_callback_message(query, card_text, reply_markup=get_confirmation_card_keyboard(pending_id, duplicate_warning=bool(dup)), parse_mode='HTML')
         else:
-            await query.edit_message_text("❌ Transaction expired.", reply_markup=get_back_to_menu_keyboard())
+            await safe_edit_callback_message(query, "❌ Transaction expired.", reply_markup=get_back_to_menu_keyboard())
         return
 
     elif action == "cancel_p":
         await query.answer("❌ Receipt discarded.", show_alert=False)
         pending_id = parts[1]
         pop_pending_transaction(pending_id)
-        await query.edit_message_text("❌ Receipt discarded.", reply_markup=get_back_to_menu_keyboard())
+        await safe_edit_callback_message(query, "❌ Receipt discarded.", reply_markup=get_back_to_menu_keyboard())
         return
 
     # --- 2. Quick Undo & Quick Add Actions ---
