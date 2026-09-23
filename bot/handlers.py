@@ -1029,9 +1029,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     # --- 1. Redesigned Receipt Card Actions ---
-    elif action == "save_p":
+    elif action in ("save_p", "force_save_p"):
+        is_force = (action == "force_save_p")
         pending_id = parts[1]
-        transaction = pop_pending_transaction(pending_id)
+        transaction = pop_pending_transaction(pending_id) if not is_force else fetch_pending_transaction(pending_id)
+        if is_force:
+            pop_pending_transaction(pending_id)
+
         if not transaction:
             msg_text = (query.message.text if query.message else "") or (query.message.caption if query.message else "")
             transaction = reconstruct_transaction_from_card(msg_text)
@@ -1040,12 +1044,58 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if not transaction:
             await query.edit_message_text("❌ Receipt confirmation expired.", reply_markup=get_back_to_menu_keyboard())
             return
+
+        # Check if this exact receipt/transaction was already saved in the database
+        existing = None
+        if not is_force:
+            if transaction.reference_number:
+                existing = get_transaction_by_reference(transaction.reference_number)
+            if not existing:
+                pot_dup = find_potential_duplicate(
+                    amount=transaction.amount,
+                    reference_number=transaction.reference_number,
+                    person_name=transaction.person_name,
+                    tx_date=str(transaction.transaction_date) if transaction.transaction_date else None
+                )
+                if pot_dup and pot_dup.get('match_reason') and 'ref' in pot_dup.get('match_reason', ''):
+                    existing = pot_dup
+
+        if existing and not is_force:
+            # IT IS ALREADY SAVED! Keep pending so user can force-save if desired
+            set_pending_transaction(pending_id, transaction)
+            date_display = existing.get('transaction_date') or "Today"
+            if existing.get('transaction_time'):
+                date_display += f", {existing['transaction_time']}"
+            arrow = "←" if existing.get('transaction_type') == "RECEIVED" else "→"
+            ref_line = f"\n🔢 <b>Ref:</b> <code>{html.escape(str(existing.get('reference_number')))}</code>" if existing.get('reference_number') else ""
+            person = existing.get('person_name') or 'Unknown'
+            cat = existing.get('category') or 'General'
+            bal = format_currency(existing.get('balance_after') or 0.0)
+            amt = format_currency(existing.get('amount') or 0.0)
+
+            already_saved_text = (
+                f"ℹ️ <b>Already Saved! #{existing['id']}</b>\n"
+                "━━━━━━━━━━━━━━\n"
+                "This payment is already recorded in your ledger:\n\n"
+                f"💸 <b>{amt}</b> {arrow} <b>{html.escape(person)}</b>\n"
+                f"🏷 {html.escape(cat)}   📅 {html.escape(str(date_display))}\n"
+                f"💼 <b>Current Balance:</b> <b>{bal}</b>"
+                f"{ref_line}"
+            )
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ Save as New Entry", callback_data=f"force_save_p:{pending_id}")],
+                [InlineKeyboardButton(f"↩️ Undo #{existing['id']}", callback_data=f"undo_tx:{existing['id']}")],
+                [InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:home")]
+            ])
+            await query.edit_message_text(already_saved_text, reply_markup=kb, parse_mode='HTML')
+            return
         
         # Remember payee preference in DB if available
         if transaction.person_name and transaction.category:
             remember_payee_category(transaction.person_name, transaction.category)
             
-        success = commit_transaction(transaction)
+        success = commit_transaction(transaction, allow_duplicate=is_force)
         if success:
             # Check budget alerts (Requirement 5: After saving a transaction, add a one-line alert if a budget crosses 80% or 100%)
             from services.budget_service import get_budget_info
@@ -1078,7 +1128,34 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             from services.task_manager import schedule_debounced_backup
             schedule_debounced_backup(context.bot)
         else:
-            await query.edit_message_text("⚠️ Transaction could not be saved (possibly duplicate).", reply_markup=get_back_to_menu_keyboard())
+            existing = get_transaction_by_reference(transaction.reference_number) if transaction.reference_number else None
+            if existing:
+                date_display = existing.get('transaction_date') or "Today"
+                if existing.get('transaction_time'):
+                    date_display += f", {existing['transaction_time']}"
+                arrow = "←" if existing.get('transaction_type') == "RECEIVED" else "→"
+                person = existing.get('person_name') or 'Unknown'
+                cat = existing.get('category') or 'General'
+                bal = format_currency(existing.get('balance_after') or 0.0)
+                amt = format_currency(existing.get('amount') or 0.0)
+                already_saved_text = (
+                    f"ℹ️ <b>Already Saved! #{existing['id']}</b>\n"
+                    "━━━━━━━━━━━━━━\n"
+                    "This payment is already recorded in your ledger:\n\n"
+                    f"💸 <b>{amt}</b> {arrow} <b>{html.escape(person)}</b>\n"
+                    f"🏷 {html.escape(cat)}   📅 {html.escape(str(date_display))}\n"
+                    f"💼 <b>Current Balance:</b> <b>{bal}</b>"
+                )
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("➕ Save as New Entry", callback_data=f"force_save_p:{pending_id}")],
+                    [InlineKeyboardButton(f"↩️ Undo #{existing['id']}", callback_data=f"undo_tx:{existing['id']}")],
+                    [InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:home")]
+                ])
+                set_pending_transaction(pending_id, transaction)
+                await query.edit_message_text(already_saved_text, reply_markup=kb, parse_mode='HTML')
+            else:
+                await query.edit_message_text("⚠️ Transaction could not be saved. Please verify the amount and details or enter manually.", reply_markup=get_back_to_menu_keyboard())
         return
 
     elif action == "edit_p":

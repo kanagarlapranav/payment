@@ -260,5 +260,77 @@ class TestUXAndNavigation(unittest.TestCase):
         self.assertEqual(reconstructed.reference_number, "8233")
         self.assertEqual(reconstructed.transaction_time, "08:58 AM")
 
+    def test_already_saved_clear_message_and_force_save(self):
+        """Verify that attempting to save a duplicate transaction shows clear Already Saved details."""
+        from unittest.mock import AsyncMock, MagicMock
+        from bot.handlers import handle_callback_query, set_pending_transaction
+        import uuid
+        from datetime import date
+        from services.transaction_service import commit_transaction
+        from config import TELEGRAM_USER_ID
+
+        ref_no = f"DUP_REF_{uuid.uuid4().hex[:6]}"
+        tx = Transaction(
+            amount=1.0,
+            transaction_type="SENT",
+            person_name="Narise Nagendra",
+            category="General",
+            transaction_date=date(2026, 9, 23),
+            transaction_time="08:58 AM",
+            bank_name="Union Bank Of India",
+            reference_number=ref_no
+        )
+        saved = commit_transaction(tx)
+        self.assertTrue(saved)
+        self.assertIsNotNone(tx.id)
+
+        # Now simulate user tapping save_p again on a receipt card for this same transaction
+        pid = f"pid_{uuid.uuid4().hex[:6]}"
+        tx_duplicate = Transaction(
+            amount=1.0,
+            transaction_type="SENT",
+            person_name="Narise Nagendra",
+            category="General",
+            transaction_date=date(2026, 9, 23),
+            transaction_time="08:58 AM",
+            bank_name="Union Bank Of India",
+            reference_number=ref_no
+        )
+        set_pending_transaction(pid, tx_duplicate)
+
+        update = MagicMock()
+        query = MagicMock()
+        query.data = f"save_p:{pid}"
+        owner_id = int(TELEGRAM_USER_ID) if TELEGRAM_USER_ID else 12345
+        query.from_user.id = owner_id
+        update.effective_user.id = owner_id
+        update.effective_chat.id = owner_id
+        query.message.text = "Payment detected"
+        query.edit_message_text = AsyncMock()
+        update.callback_query = query
+        context = MagicMock()
+
+        import asyncio
+        from unittest.mock import patch
+        with patch('bot.handlers.is_owner', return_value=True), \
+             patch('bot.handlers.is_authorized_user', return_value=True), \
+             patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
+             patch('bot.handlers.require_authorized', AsyncMock(return_value=True)):
+            asyncio.run(handle_callback_query(update, context))
+
+        query.edit_message_text.assert_called_once()
+        call_text = query.edit_message_text.call_args[0][0]
+        call_markup = query.edit_message_text.call_args[1].get('reply_markup')
+        
+        # Verify it clearly states Already Saved with the ID and details
+        self.assertIn("Already Saved!", call_text)
+        self.assertIn(f"#{tx.id}", call_text)
+        self.assertIn("Narise Nagendra", call_text)
+
+        # Verify buttons include Save as New Entry and Undo
+        callbacks = [btn.callback_data for row in call_markup.inline_keyboard for btn in row]
+        self.assertIn(f"force_save_p:{pid}", callbacks)
+        self.assertIn(f"undo_tx:{tx.id}", callbacks)
+
 if __name__ == "__main__":
     unittest.main()

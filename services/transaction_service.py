@@ -88,7 +88,7 @@ def process_transaction(raw_text: str, image_path: str, message_id: str, chat_id
     return transaction, confidence
 
 
-def commit_transaction(transaction: Transaction) -> bool:
+def commit_transaction(transaction: Transaction, allow_duplicate: bool = False) -> bool:
     """
     Saves the transaction to DB and updates balance under LEDGER_LOCK with Decimal precision.
     Must be called only if confident or after user confirmation.
@@ -105,10 +105,16 @@ def commit_transaction(transaction: Transaction) -> bool:
             transaction.recipient_name = validate_string_length(transaction.recipient_name, max_length=120, field_name="Recipient name")
             transaction.reference_number = validate_string_length(transaction.reference_number, max_length=100, field_name="Reference number")
 
-            # Check duplicate
-            if is_duplicate(transaction):
+            # Check duplicate unless explicitly forced by user
+            if not allow_duplicate and is_duplicate(transaction):
                 logger.warning("Duplicate transaction detected during commit.")
                 return False
+
+            if allow_duplicate and transaction.reference_number:
+                from database.queries import get_transaction_by_reference
+                if get_transaction_by_reference(transaction.reference_number):
+                    import uuid
+                    transaction.reference_number = f"{transaction.reference_number}-dup-{uuid.uuid4().hex[:4]}"
                 
             # Ensure category is populated
             if not getattr(transaction, 'category', None) or transaction.category == 'General':

@@ -30,7 +30,7 @@ READ_ONLY_CALLBACK_ACTIONS = {
 
 ADMIN_CALLBACK_ACTIONS = {
     # Receipt Card Actions & Pending Edits
-    "save_p", "edit_p", "ep_field", "ep_back", "cat_p", "set_pcat", "cancel_p",
+    "save_p", "force_save_p", "edit_p", "ep_field", "ep_back", "cat_p", "set_pcat", "cancel_p",
     # Undo & Quick Add & Duplicate
     "undo_tx", "quick_add", "undo_action", "dup_tx", "qa_payee",
     # Legacy Confirm / Cancel
