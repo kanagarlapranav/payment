@@ -22,7 +22,7 @@ from bot.keyboards import (
     get_confirmation_card_keyboard, get_edit_pending_fields_keyboard, get_category_picker_keyboard,
     get_quick_undo_keyboard, get_quick_add_keyboard, get_history_paginated_keyboard,
     get_add_menu_keyboard, get_more_menu_keyboard, get_transaction_detail_keyboard,
-    get_backup_status_keyboard, get_json_import_confirm_keyboard
+    get_backup_status_keyboard, get_json_import_confirm_keyboard, get_delete_confirmed_keyboard
 )
 from ocr.extractor import perform_ocr, perform_ocr_async
 from ocr.gemini_vision import is_gemini_available, extract_transaction_with_gemini
@@ -887,7 +887,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text("⏳ <b>Importing backup into ledger…</b>", parse_mode='HTML')
         try:
             from services.backup_service import import_database_from_json, export_database_to_json, backup_to_telegram
-            from services.balance_service import recalculate_all_balances
             from database.queries import get_all_transactions, get_balance_setting
 
             # Step 1: Import (reads from temp file — never from BACKUP_JSON_PATH)
@@ -1357,10 +1356,33 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if not is_admin_user(update):
             await query.answer("❌ Only the bot owner can delete transactions.", show_alert=True)
             return
+        await query.answer()
         tx_id = int(parts[1])
         tx = get_transaction_by_id(tx_id)
         if not tx:
-            await query.edit_message_text("❌ Transaction not found.")
+            from database.db import get_db_connection
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,))
+                raw_row = cursor.fetchone()
+            from bot.keyboards import get_back_to_menu_keyboard
+            if raw_row and raw_row['deleted_at']:
+                from database.queries import get_balance_setting
+                cur_bal = get_balance_setting()
+                await query.edit_message_text(
+                    f"✅ <b>Delete Confirmed!</b>\n"
+                    f"━━━━━━━━━━━━━━\n"
+                    f"ℹ️ <b>Transaction #{tx_id} is already deleted from your ledger.</b>\n\n"
+                    f"💰 <b>Current Balance:</b> <b>{html.escape(format_currency(cur_bal))}</b>",
+                    reply_markup=get_back_to_menu_keyboard(),
+                    parse_mode='HTML'
+                )
+                return
+            await query.edit_message_text(
+                f"❌ <b>Transaction Not Found</b>\nTransaction #{tx_id} could not be found.",
+                reply_markup=get_back_to_menu_keyboard(),
+                parse_mode='HTML'
+            )
             return
         date_str = tx['transaction_date'] or "Today"
         person = tx['person_name'] or "Unknown"
@@ -1396,25 +1418,53 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode='HTML'
         )
         
-    elif action == "edit_cancel":
+    elif action in ("edit_cancel", "select_edit_cancel"):
+        if not is_admin_user(update):
+            await query.answer("❌ Only the bot owner can cancel editing.", show_alert=True)
+            return
+        await query.answer("❌ Editing cancelled.", show_alert=False)
         context.user_data.pop('action', None)
         context.user_data.pop('edit_tx_id', None)
         context.user_data.pop('edit_field', None)
-        await query.edit_message_text("❌ Editing cancelled.")
+        await query.edit_message_text("❌ <b>Editing Cancelled</b>\n\nNo changes were made.", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
 
     # 4. Delete Confirmation
     elif action == "delete_confirm":
         if not is_admin_user(update):
             await query.answer("❌ Only the bot owner can delete transactions.", show_alert=True)
             return
+        await query.answer("✅ Delete Confirmed!", show_alert=False)
         tx_id = int(parts[1])
         tx = get_transaction_by_id(tx_id)
         if not tx:
-            await query.edit_message_text("❌ Transaction not found.")
+            from database.db import get_db_connection
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,))
+                raw_row = cursor.fetchone()
+            from bot.keyboards import get_back_to_menu_keyboard
+            if raw_row and raw_row['deleted_at']:
+                from database.queries import get_balance_setting
+                cur_bal = get_balance_setting()
+                await query.edit_message_text(
+                    f"✅ <b>Delete Confirmed!</b>\n"
+                    f"━━━━━━━━━━━━━━\n"
+                    f"ℹ️ <b>Transaction #{tx_id} is already deleted from your ledger.</b>\n\n"
+                    f"💰 <b>Current Balance:</b> <b>{html.escape(format_currency(cur_bal))}</b>",
+                    reply_markup=get_back_to_menu_keyboard(),
+                    parse_mode='HTML'
+                )
+                return
+            await query.edit_message_text(
+                f"❌ <b>Transaction Not Found</b>\nTransaction #{tx_id} could not be found.",
+                reply_markup=get_back_to_menu_keyboard(),
+                parse_mode='HTML'
+            )
             return
 
         amt_str = format_currency(tx['amount'])
         person = tx['person_name'] or "Unknown"
+        tx_type = tx.get('transaction_type', 'TRANSACTION')
 
         from services.undo_service import record_delete_action
         chat_id = update.effective_chat.id if update.effective_chat else None
@@ -1434,41 +1484,55 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 bkp = DATA_DIR / 'backup_transactions.json'
                 if os.path.exists(bkp):
                     create_tracked_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)), name="gdrive_backup_upload")
-            from bot.keyboards import get_undo_keyboard
+            
             await query.edit_message_text(
-                f"🗑️ <b>Transaction #{tx_id} Deleted</b>\n\n"
+                f"✅ <b>Delete Confirmed!</b>\n"
+                f"━━━━━━━━━━━━━━\n"
+                f"🗑️ <b>Transaction #{tx_id} has been deleted.</b>\n\n"
+                f"• <b>Type:</b> {html.escape(str(tx_type))}\n"
                 f"• <b>Amount:</b> {html.escape(amt_str)}\n"
                 f"• <b>Person:</b> {html.escape(str(person))}\n\n"
                 f"💰 <b>Updated Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>\n\n"
                 f"<b>Status:</b> {status_line}",
-                reply_markup=get_undo_keyboard(),
+                reply_markup=get_delete_confirmed_keyboard(),
                 parse_mode='HTML'
             )
+            from services.task_manager import schedule_debounced_backup
+            schedule_debounced_backup(context.bot)
         else:
-            await query.edit_message_text("❌ Nothing was saved: Failed to delete transaction.")
+            from bot.keyboards import get_back_to_menu_keyboard
+            await query.edit_message_text("❌ Nothing was saved: Failed to delete transaction.", reply_markup=get_back_to_menu_keyboard())
 
-    elif action == "delete_cancel":
+    elif action in ("delete_cancel", "select_delete_cancel"):
         if not is_admin_user(update):
             await query.answer("❌ Only the bot owner can cancel deletions.", show_alert=True)
             return
+        await query.answer("❌ Deletion cancelled.", show_alert=False)
         context.user_data.pop('action', None)
-        await query.edit_message_text("❌ Deletion cancelled.")
+        from bot.keyboards import get_back_to_menu_keyboard
+        await query.edit_message_text(
+            "❌ <b>Deletion Cancelled</b>\n\nNo changes were made to your ledger.",
+            reply_markup=get_back_to_menu_keyboard(),
+            parse_mode='HTML'
+        )
 
     elif action == "undo_action":
         if not is_admin_user(update):
             await query.answer("❌ Only the bot owner can undo changes.", show_alert=True)
             return
+        await query.answer()
         from services.undo_service import perform_undo
         chat_id = update.effective_chat.id if update.effective_chat else None
         user_id = update.effective_user.id if update.effective_user else None
         success, msg = perform_undo(chat_id=chat_id, user_id=user_id)
+        from bot.keyboards import get_back_to_menu_keyboard
         if success:
             from services.backup_service import backup_to_telegram
             backed_up = await backup_to_telegram(context.bot)
             status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
-            await query.edit_message_text(f"{msg}\n\n<b>Status:</b> {status_line}", parse_mode='HTML')
+            await query.edit_message_text(f"{msg}\n\n<b>Status:</b> {status_line}", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         else:
-            await query.edit_message_text(f"❌ Nothing was saved: {msg}", parse_mode='HTML')
+            await query.edit_message_text(f"❌ Nothing was saved: {msg}", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
 
 
     # 4b. Correct Amount for Existing Transaction
