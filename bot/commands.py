@@ -1267,7 +1267,7 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 <b>LIVE FINANCIAL DASHBOARD</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"Tap <b>Open Dashboard</b> below to view interactive charts, month switcher, category donut breakdowns, top payees, and spending heatmaps!\n\n"
-        f"🔒 <i>Single-use secure link valid for 60 seconds. Sets a 30-minute session cookie. Server restarts require a fresh link with /dashboard.</i>\n\n"
+        f"🔒 <i>Single-use secure link valid for 5 minutes. Sets a 30-minute session. Server restarts require a fresh link with /dashboard.</i>\n\n"
         f"🔗 <code>{auth_url}</code>"
     )
     markup = InlineKeyboardMarkup([
@@ -1280,7 +1280,7 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Fallback: send plain text link if button fails
         await update.message.reply_text(
             f"📊 <b>Dashboard Link:</b>\n\n{auth_url}\n\n"
-            f"🔒 <i>Valid for 60 seconds. Open in your browser.</i>",
+            f"🔒 <i>Valid for 5 minutes. Open in your browser.</i>",
             parse_mode='HTML'
         )
 

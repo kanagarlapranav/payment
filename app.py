@@ -226,7 +226,10 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
             self._send_security_headers(404, 'text/plain; charset=utf-8')
 
     def do_GET(self):
-        from services.dashboard_auth import exchange_code_for_session, validate_session, is_rate_limited
+        from services.dashboard_auth import (
+            exchange_code_for_session, validate_session, validate_session_id,
+            is_rate_limited, SESSION_EXPIRY_SECONDS
+        )
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         query_params = urllib.parse.parse_qs(parsed.query)
@@ -247,9 +250,10 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
             success, result_msg, cookie_header = exchange_code_for_session(code, client_ip=client_ip, is_https=is_https)
 
             if success:
-                # Redirect to /dashboard with code removed from URL and HttpOnly session cookie set
+                session_id = result_msg
+                # Redirect to /dashboard with session param (as resilient fallback for mobile in-app browsers) and HttpOnly session cookie set
                 extra = {
-                    'Location': '/dashboard',
+                    'Location': f'/dashboard?session={session_id}',
                     'Set-Cookie': cookie_header
                 }
                 self._send_security_headers(303, 'text/html; charset=utf-8', extra_headers=extra)
@@ -265,14 +269,15 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                     f"<style>body{{font-family:sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:20px;text-align:center;}}"
                     f".card{{background:#1e293b;padding:30px;border-radius:12px;max-width:400px;border:1px solid #334155;}}"
                     f"h2{{color:#ef4444;margin-top:0;}}p{{color:#94a3b8;line-height:1.5;}}code{{background:#0f172a;padding:4px 8px;border-radius:4px;color:#38bdf8;}}</style></head>"
-                    f"<body><div class='card'><h2>🔒 Access Denied</h2><p>{html.escape(str(result_msg))}</p><p>Please run <code>/dashboard</code> in Telegram to generate a fresh 60-second login link.</p></div></body></html>"
+                    f"<body><div class='card'><h2>🔒 Access Denied</h2><p>{html.escape(str(result_msg))}</p><p>Please run <code>/dashboard</code> in Telegram to generate a fresh login link.</p></div></body></html>"
                 )
                 self.wfile.write(error_html.encode('utf-8'))
                 return
 
-        # Check session cookie for protected dashboard and API routes
+        # Check session cookie or query param for protected dashboard and API routes
         cookie_header = self.headers.get("Cookie", "")
-        has_session = validate_session(cookie_header)
+        session_from_param = query_params.get("session", [""])[0].strip()
+        has_session = validate_session(cookie_header) or (bool(session_from_param) and validate_session_id(session_from_param))
 
         # 3. Web dashboard frontend UI
         if path in ('/dashboard', '/'):
@@ -284,7 +289,7 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                     f"<style>body{{font-family:sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:20px;text-align:center;}}"
                     f".card{{background:#1e293b;padding:30px;border-radius:12px;max-width:400px;border:1px solid #334155;}}"
                     f"h2{{color:#f59e0b;margin-top:0;}}p{{color:#94a3b8;line-height:1.5;}}code{{background:#0f172a;padding:4px 8px;border-radius:4px;color:#38bdf8;}}</style></head>"
-                    f"<body><div class='card'><h2>🔒 Authentication Required</h2><p>Your session has expired or you are not logged in.</p><p>Please send <code>/dashboard</code> in Telegram to receive a secure single-use login link.</p></div></body></html>"
+                    f"<body><div class='card'><h2>🔒 Authentication Required</h2><p>Your session has expired or you are not logged in.</p><p>Please send <code>/dashboard</code> in Telegram to receive a secure login link.</p></div></body></html>"
                 )
                 self.wfile.write(unauth_html.encode('utf-8'))
                 return
@@ -293,7 +298,16 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
             if os.path.exists(template_path):
                 with open(template_path, 'r', encoding='utf-8') as f:
                     content = f.read()
-                self._send_security_headers(200, 'text/html; charset=utf-8')
+
+                # Re-issue cookie on 200 response if session_from_param was used
+                extra_dash_headers = None
+                if session_from_param and validate_session_id(session_from_param):
+                    secure_flag = "; Secure" if is_https or os.getenv("ENVIRONMENT") == "production" or os.getenv("RENDER") else ""
+                    extra_dash_headers = {
+                        'Set-Cookie': f"session_id={session_from_param}; Path=/; Max-Age={int(SESSION_EXPIRY_SECONDS)}; HttpOnly; SameSite=Lax{secure_flag}"
+                    }
+
+                self._send_security_headers(200, 'text/html; charset=utf-8', extra_headers=extra_dash_headers)
                 self.wfile.write(content.encode('utf-8'))
             else:
                 self._send_security_headers(200, 'text/plain')
