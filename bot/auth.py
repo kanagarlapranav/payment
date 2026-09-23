@@ -19,7 +19,7 @@ READ_ONLY_COMMANDS = {
 
 ADMIN_COMMANDS = {
     "edit", "delete", "setbalance", "export", "report", "statement",
-    "restore", "importbackup", "undo", "revert", "setbudget", "addmenu", "delmenu",
+    "restore", "importbackup", "backup", "backupnow", "undo", "revert", "setbudget", "addmenu", "delmenu",
     "cafeedit", "editcafe", "dashboard", "setmodel", "model"
 }
 
@@ -32,7 +32,7 @@ ADMIN_CALLBACK_ACTIONS = {
     # Receipt Card Actions & Pending Edits
     "save_p", "force_save_p", "edit_p", "ep_field", "ep_back", "cat_p", "set_pcat", "cancel_p",
     # Undo & Quick Add & Duplicate
-    "undo_tx", "quick_add", "undo_action", "dup_tx", "qa_payee",
+    "undo_tx", "quick_add", "undo_action", "undo_confirm", "undo_cancel", "dup_tx", "qa_payee",
     # Legacy Confirm / Cancel
     "confirm_tx", "cancel_tx",
     # Edit / Delete Selection & Prompts
