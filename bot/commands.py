@@ -1667,23 +1667,83 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
 
-async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Reverts the last delete, edit, or add action performed."""
+async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays backup status and options to backup or restore."""
     if not await require_admin(update): return
-    from services.undo_service import perform_undo
-    from services.backup_service import backup_to_telegram
-    import asyncio
+    from bot.keyboards import get_backup_status_keyboard
+    text = render_backup_status_text()
+    await update.message.reply_text(
+        text,
+        reply_markup=get_backup_status_keyboard(),
+        parse_mode='HTML'
+    )
+
+async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Interactive undo command: inspects last action, asks confirmation with details before reverting."""
+    if not await require_admin(update): return
+    from services.undo_service import get_last_action
+    from database.db import get_db_connection
+    from bot.keyboards import get_back_to_menu_keyboard
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     chat_id = update.effective_chat.id if update.effective_chat else None
     user_id = update.effective_user.id if update.effective_user else None
 
-    success, msg = await asyncio.to_thread(perform_undo, chat_id=chat_id, user_id=user_id)
-    if success:
-        backed_up = await backup_to_telegram(context.bot)
-        status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
-        await update.message.reply_text(f"{msg}\n{status_line}", parse_mode='HTML')
+    last_action = get_last_action(chat_id=chat_id, user_id=user_id)
+    if not last_action:
+        await update.message.reply_text(
+            "ℹ️ <b>Nothing to Undo</b>\n━━━━━━━━━━━━━━\nThere are no recent actions available to revert.",
+            reply_markup=get_back_to_menu_keyboard(),
+            parse_mode='HTML'
+        )
+        return
+
+    act = last_action.get('action')
+    uid = last_action.get('uid')
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, person_name, amount, transaction_date, transaction_type FROM transactions WHERE uid = ?", (uid,))
+        tx = cursor.fetchone()
+
+    tx_info = ""
+    if tx:
+        sign = "-" if tx['transaction_type'] == 'SENT' else "+"
+        amt_fmt = format_currency(tx['amount'])
+        p_name = tx['person_name'] or "Unknown"
+        d_val = tx['transaction_date'] or "Today"
+        tx_info = (
+            f"• <b>Transaction:</b> #{tx['id']}\n"
+            f"• <b>Person:</b> {html.escape(p_name)}\n"
+            f"• <b>Amount:</b> {sign}{amt_fmt} ({html.escape(tx['transaction_type'])})\n"
+            f"• <b>Date:</b> {html.escape(str(d_val))}\n"
+        )
+
+    if act == 'delete':
+        prompt = (
+            "↩️ <b>Undo Delete Transaction?</b>\n"
+            "━━━━━━━━━━━━━━\n"
+            f"{tx_info}\n"
+            "This will restore this deleted transaction back into your active ledger.\n\n"
+            "Do you want to confirm?"
+        )
     else:
-        await update.message.reply_text(f"❌ Nothing was saved: {msg}", parse_mode='HTML')
+        prompt = (
+            "↩️ <b>Undo Saved Transaction?</b>\n"
+            "━━━━━━━━━━━━━━\n"
+            f"{tx_info}\n"
+            "This will remove this newly added transaction from your active ledger.\n\n"
+            "Do you want to confirm?"
+        )
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("↩️ Confirm Undo", callback_data="undo_confirm"),
+            InlineKeyboardButton("❌ Cancel", callback_data="undo_cancel")
+        ]
+    ])
+    await update.message.reply_text(prompt, reply_markup=keyboard, parse_mode='HTML')
+
 
 
 
