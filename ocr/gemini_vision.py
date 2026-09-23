@@ -4,6 +4,7 @@ import json
 import asyncio
 import io
 import re
+import time
 from typing import Optional, Tuple
 from PIL import Image
 import httpx
@@ -114,10 +115,26 @@ def set_last_extraction_error(err: Optional[str]) -> None:
     _last_extraction_error = err
 
 
-async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = None) -> dict:
+_status_cache: Optional[dict] = None
+_status_cache_time: float = 0.0
+
+
+def clear_status_cache() -> None:
+    """Clears the cached Gemini API status."""
+    global _status_cache, _status_cache_time
+    _status_cache = None
+    _status_cache_time = 0.0
+
+
+async def check_gemini_api_status_async(
+    client: Optional[httpx.AsyncClient] = None,
+    force_refresh: bool = False
+) -> dict:
     """
     Checks live Gemini API key and quota status across available models without leaking secrets.
+    Caches results for 30s to make model button clicks in Telegram instantaneous.
     """
+    global _status_cache, _status_cache_time
     try:
         from database.queries import get_model_setting
         pref_setting = get_model_setting()
@@ -136,6 +153,11 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
             "message": "GEMINI_API_KEY is not configured or is disabled.",
             "masked_key": ""
         }
+
+    if not force_refresh and client is None and _status_cache is not None and (time.time() - _status_cache_time < 30.0) and _status_cache.get("_api_key") == api_key:
+        cached = {k: v for k, v in _status_cache.items() if k != "_api_key"}
+        cached["preferred_setting"] = pref_setting
+        return cached
 
     masked_key = f"…{api_key[-4:]}" if len(api_key) >= 4 else "Configured"
 
@@ -202,8 +224,9 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
                     last_net_err = resp_or_err
                 pool_status.append({"model": m, "status": "UNAVAILABLE", "code": code or 0})
 
+        res_data = None
         if active_model is not None:
-            return {
+            res_data = {
                 "configured": True,
                 "available": True,
                 "status": "OK",
@@ -214,9 +237,8 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
                 "masked_key": masked_key,
                 "pool_status": pool_status
             }
-
-        if has_credential_error:
-            return {
+        elif has_credential_error:
+            res_data = {
                 "configured": True,
                 "available": False,
                 "status": "CREDENTIAL_ERROR",
@@ -227,9 +249,8 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
                 "masked_key": masked_key,
                 "pool_status": pool_status
             }
-
-        if first_429_err:
-            return {
+        elif first_429_err:
+            res_data = {
                 "configured": True,
                 "available": False,
                 "status": "QUOTA_EXCEEDED",
@@ -241,10 +262,9 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
                 "daily_limit": 20,
                 "pool_status": pool_status
             }
-
-        if last_net_err is not None:
+        elif last_net_err is not None:
             sanitized = _sanitize_error_message(last_net_err, api_key)
-            return {
+            res_data = {
                 "configured": True,
                 "available": False,
                 "status": "NETWORK_ERROR",
@@ -255,18 +275,24 @@ async def check_gemini_api_status_async(client: Optional[httpx.AsyncClient] = No
                 "masked_key": masked_key,
                 "pool_status": pool_status
             }
+        else:
+            res_data = {
+                "configured": True,
+                "available": False,
+                "status": "HTTP_ERROR",
+                "http_code": None,
+                "model": unique_models[0],
+                "preferred_setting": pref_setting,
+                "message": "All configured Gemini models were unavailable.",
+                "masked_key": masked_key,
+                "pool_status": pool_status
+            }
 
-        return {
-            "configured": True,
-            "available": False,
-            "status": "HTTP_ERROR",
-            "http_code": None,
-            "model": unique_models[0],
-            "preferred_setting": pref_setting,
-            "message": "All configured Gemini models were unavailable.",
-            "masked_key": masked_key,
-            "pool_status": pool_status
-        }
+        res_to_cache = dict(res_data)
+        res_to_cache["_api_key"] = api_key
+        _status_cache = res_to_cache
+        _status_cache_time = time.time()
+        return res_data
     finally:
         if should_close_client:
             await client.aclose()

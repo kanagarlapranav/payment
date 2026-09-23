@@ -647,5 +647,131 @@ def get_model_selection_keyboard(current_model: str = "AUTO") -> InlineKeyboardM
     return InlineKeyboardMarkup(keyboard)
 
 
+def get_help_keyboard() -> InlineKeyboardMarkup:
+    """Returns interactive navigation buttons for /help command."""
+    keyboard = [
+        [
+            InlineKeyboardButton("🏠 Home Menu", callback_data="nav:home"),
+            InlineKeyboardButton("🧾 Full History", callback_data="nav:history:1:ALL")
+        ],
+        [
+            InlineKeyboardButton("💰 Live Balance", callback_data="nav:balance"),
+            InlineKeyboardButton("📅 Today's Flow", callback_data="nav:today")
+        ],
+        [
+            InlineKeyboardButton("📊 Monthly Stats", callback_data="nav:stats"),
+            InlineKeyboardButton("🎯 Budget Progress", callback_data="nav:budget")
+        ],
+        [
+            InlineKeyboardButton("🤖 Gemini AI Quota", callback_data="nav:gemini"),
+            InlineKeyboardButton("🌐 Web Dashboard", callback_data="nav:dash_info")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_balance_keyboard() -> InlineKeyboardMarkup:
+    """Returns action buttons for /balance and /today commands."""
+    keyboard = [
+        [
+            InlineKeyboardButton("📅 Today's Flow", callback_data="nav:today"),
+            InlineKeyboardButton("🧾 History", callback_data="nav:history:1:ALL")
+        ],
+        [
+            InlineKeyboardButton("📊 Monthly Stats", callback_data="nav:stats"),
+            InlineKeyboardButton("➕ Quick Add", callback_data="nav:quickadd")
+        ],
+        [
+            InlineKeyboardButton("🏠 Home Menu", callback_data="nav:home")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_stats_keyboard() -> InlineKeyboardMarkup:
+    """Returns action buttons for /monthly and /stats commands."""
+    keyboard = [
+        [
+            InlineKeyboardButton("🎯 Budget Progress", callback_data="nav:budget"),
+            InlineKeyboardButton("💡 AI Insights", callback_data="nav:insights")
+        ],
+        [
+            InlineKeyboardButton("🧾 History", callback_data="nav:history:1:ALL"),
+            InlineKeyboardButton("🏠 Home Menu", callback_data="nav:home")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_budget_keyboard() -> InlineKeyboardMarkup:
+    """Returns action buttons for /budget command."""
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 Monthly Stats", callback_data="nav:stats"),
+            InlineKeyboardButton("💡 AI Insights", callback_data="nav:insights")
+        ],
+        [
+            InlineKeyboardButton("🧾 History", callback_data="nav:history:1:ALL"),
+            InlineKeyboardButton("🏠 Home Menu", callback_data="nav:home")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_insights_keyboard() -> InlineKeyboardMarkup:
+    """Returns action buttons for /insights command."""
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 Monthly Stats", callback_data="nav:stats"),
+            InlineKeyboardButton("🎯 Budget Progress", callback_data="nav:budget")
+        ],
+        [
+            InlineKeyboardButton("🧾 History", callback_data="nav:history:1:ALL"),
+            InlineKeyboardButton("🏠 Home Menu", callback_data="nav:home")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_digest_keyboard() -> InlineKeyboardMarkup:
+    """Returns action buttons for /digest command."""
+    keyboard = [
+        [
+            InlineKeyboardButton("📅 Today's Flow", callback_data="nav:today"),
+            InlineKeyboardButton("📊 Monthly Stats", callback_data="nav:stats")
+        ],
+        [
+            InlineKeyboardButton("🧾 History", callback_data="nav:history:1:ALL"),
+            InlineKeyboardButton("🏠 Home Menu", callback_data="nav:home")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_cafestats_keyboard() -> InlineKeyboardMarkup:
+    """Returns action buttons for /cafestats command."""
+    keyboard = [
+        [
+            InlineKeyboardButton("📋 View Cafeteria Menu", callback_data="cafe_view_menu"),
+            InlineKeyboardButton("✏️ Edit Last Order", callback_data="cafe_edit_last")
+        ],
+        [
+            InlineKeyboardButton("🏠 Home Menu", callback_data="nav:home")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_standard_nav_keyboard() -> InlineKeyboardMarkup:
+    """Returns standard back-to-history and home navigation buttons."""
+    keyboard = [
+        [
+            InlineKeyboardButton("🧾 Full History", callback_data="nav:history:1:ALL"),
+            InlineKeyboardButton("🏠 Home Menu", callback_data="nav:home")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 
 

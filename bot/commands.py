@@ -385,14 +385,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Owner has full administrative control; configured group has read-only access.\n"
         "• Every transaction, edit, and deletion is automatically backed up and synced 24/7."
     )
-    await update.message.reply_text(help_text, parse_mode='HTML')
+    from bot.keyboards import get_help_keyboard
+    await update.message.reply_text(help_text, reply_markup=get_help_keyboard(), parse_mode='HTML')
 
-async def render_gemini_status_payload() -> tuple:
+async def render_gemini_status_payload(force_refresh: bool = False) -> tuple:
     """Computes and formats the Gemini AI engine status, pool status, and selection keyboard."""
     from ocr.gemini_vision import check_gemini_api_status_async
     from bot.keyboards import get_model_selection_keyboard
 
-    status_data = await check_gemini_api_status_async()
+    status_data = await check_gemini_api_status_async(force_refresh=force_refresh)
     st = status_data.get('status')
     model = status_data.get('model', 'gemini-3.8-flash')
     masked_key = status_data.get('masked_key', '')
@@ -560,10 +561,12 @@ async def setmodel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_model_setting(chosen_model)
 
     desc = "⚡ <b>Auto-Failover (Priority: 3.8 ➔ 3.7 ➔ 3.6 ➔ 3.5 Lite)</b>" if chosen_model == "AUTO" else f"🎯 <b>{chosen_model}</b> (1st priority with auto-failover)"
+    _, keyboard = await render_gemini_status_payload(force_refresh=False)
     await update.message.reply_text(
         f"✅ <b>Gemini Model Preference Updated!</b>\n\n"
         f"Active Priority: {desc}\n\n"
         f"Receipt scans will prioritize this model. If its quota runs out, the bot will automatically fall back to remaining standby models.",
+        reply_markup=keyboard,
         parse_mode='HTML'
     )
 
@@ -588,7 +591,8 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• 🔴 Sent: {format_currency(today.total_sent)}\n"
         f"• 📈 Net: {format_currency(today.net_change)} ({today.transaction_count} transactions)"
     )
-    await update.message.reply_text(text, parse_mode='Markdown')
+    from bot.keyboards import get_balance_keyboard
+    await update.message.reply_text(text, reply_markup=get_balance_keyboard(), parse_mode='Markdown')
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
@@ -678,9 +682,10 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays transactions WITH IDs and full technical details on demand."""
     if not await require_authorized(update): return
     
+    from bot.keyboards import get_standard_nav_keyboard
     transactions = get_all_transactions_asc()
     if not transactions:
-        await update.message.reply_text("No recent transactions found.")
+        await update.message.reply_text("No recent transactions found.", reply_markup=get_standard_nav_keyboard())
         return
         
     text = "🔍 *Detailed Transactions (With IDs)*\n\n"
@@ -714,14 +719,16 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 current += "\n" + line if current else line
         if current:
             parts.append(current)
-        for part in parts:
-            await update.message.reply_text(part, parse_mode='Markdown')
+        for i, part in enumerate(parts):
+            markup = get_standard_nav_keyboard() if i == len(parts) - 1 else None
+            await update.message.reply_text(part, reply_markup=markup, parse_mode='Markdown')
     else:
-        await update.message.reply_text(text, parse_mode='Markdown')
+        await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
 
 async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows transactions for a specific date e.g. /date 05/09/2026 or /date yesterday."""
     if not await require_authorized(update): return
+    from bot.keyboards import get_standard_nav_keyboard
     
     if not context.args:
         await update.message.reply_text(
@@ -732,6 +739,7 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• `/date today`\n"
             "• `/date 05/09/2026`\n"
             "• `/date 31 Aug 2026`",
+            reply_markup=get_standard_nav_keyboard(),
             parse_mode='Markdown'
         )
         return
@@ -739,12 +747,12 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_date = " ".join(context.args).strip()
     target_d = parse_date(raw_date)
     if not target_d:
-        await update.message.reply_text("❌ Could not parse date. Example: `/date 05/09/2026` or `/date yesterday`", parse_mode='Markdown')
+        await update.message.reply_text("❌ Could not parse date. Example: `/date 05/09/2026` or `/date yesterday`", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
         return
         
     txs = search_transactions(target_date=target_d, sort_by="date_desc")
     if not txs:
-        await update.message.reply_text(f"No transactions found on *{target_d.strftime('%d %b %Y')}*.", parse_mode='Markdown')
+        await update.message.reply_text(f"No transactions found on *{target_d.strftime('%d %b %Y')}*.", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
         return
         
     total_sent = sum(t['amount'] for t in txs if t['transaction_type'] == 'SENT')
@@ -766,11 +774,12 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Balance: {format_currency(t['balance_after'])}\n\n"
         )
         
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Searches transactions by person name, reference, or keyword."""
     if not await require_authorized(update): return
+    from bot.keyboards import get_standard_nav_keyboard
     
     if not context.args:
         await update.message.reply_text(
@@ -780,6 +789,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• `/search Balaji`\n"
             "• `/search ICICI`\n"
             "• `/search 61322762`",
+            reply_markup=get_standard_nav_keyboard(),
             parse_mode='Markdown'
         )
         return
@@ -788,7 +798,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txs = search_transactions(query_text=query_text, limit=15)
     
     if not txs:
-        await update.message.reply_text(f"🔍 No transactions found matching *'{query_text}'*.", parse_mode='Markdown')
+        await update.message.reply_text(f"🔍 No transactions found matching *'{query_text}'*.", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
         return
         
     total_amount = sum(t['amount'] for t in txs)
@@ -805,11 +815,12 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💵 {format_currency(t['amount'])}\n"
             f"Balance: {format_currency(t['balance_after'])}\n\n"
         )
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
 
 async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Searches all transactions with the specified amount."""
     if not await require_authorized(update): return
+    from bot.keyboards import get_standard_nav_keyboard
     
     if not context.args:
         await update.message.reply_text(
@@ -820,6 +831,7 @@ async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• `/amount 5000`\n"
             "• `/amount 6200`\n"
             "• `30700`",
+            reply_markup=get_standard_nav_keyboard(),
             parse_mode='Markdown'
         )
         return
@@ -828,12 +840,12 @@ async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         amt = float(raw_amt)
     except ValueError:
-        await update.message.reply_text("❌ Invalid amount. Example: `/amount 500` or `/amount 5000`", parse_mode='Markdown')
+        await update.message.reply_text("❌ Invalid amount. Example: `/amount 500` or `/amount 5000`", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
         return
         
     txs = search_transactions(exact_amount=amt, sort_by="date_desc")
     if not txs:
-        await update.message.reply_text(f"💵 No transactions found with amount *{format_currency(amt)}*.", parse_mode='Markdown')
+        await update.message.reply_text(f"💵 No transactions found with amount *{format_currency(amt)}*.", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
         return
         
     total_val = sum(t['amount'] for t in txs)
@@ -849,7 +861,7 @@ async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💵 {format_currency(t['amount'])}\n"
             f"Balance: {format_currency(t['balance_after'])}\n\n"
         )
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
 
 
 
@@ -885,7 +897,8 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔢 Total Transactions: {stats['tx_count']}\n"
         f"🏆 Top Recipient: {top_p_text}"
     )
-    await update.message.reply_text(text, parse_mode='Markdown')
+    from bot.keyboards import get_stats_keyboard
+    await update.message.reply_text(text, reply_markup=get_stats_keyboard(), parse_mode='Markdown')
 
 async def filter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Opens the interactive filter menu."""
@@ -1154,7 +1167,8 @@ async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         final_bal = set_explicit_balance(new_balance)
         backed_up = await backup_to_telegram(context.bot)
         status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
-        await update.message.reply_text(f"✅ Balance set to {format_currency(final_bal)}\n{status_line}")
+        from bot.keyboards import get_balance_keyboard
+        await update.message.reply_text(f"✅ Balance set to {format_currency(final_bal)}\n{status_line}", reply_markup=get_balance_keyboard())
     except Exception as val_err:
         await update.message.reply_text(f"❌ Nothing was saved: {val_err}")
 
@@ -1247,6 +1261,7 @@ async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates AI spending insights and category analytics."""
     if not await require_authorized(update): return
     from services.category_service import format_spending_insights
+    from bot.keyboards import get_insights_keyboard
     from datetime import datetime
     
     now = datetime.now()
@@ -1261,12 +1276,13 @@ async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             year = int(context.args[1])
             
     text = format_spending_insights(year, month)
-    await update.message.reply_text(text, parse_mode='HTML')
+    await update.message.reply_text(text, reply_markup=get_insights_keyboard(), parse_mode='HTML')
 
 async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the monthly budget status and progress bar."""
     if not await require_authorized(update): return
     from services.budget_service import format_budget_status
+    from bot.keyboards import get_budget_keyboard
     from datetime import datetime
     
     now = datetime.now()
@@ -1281,13 +1297,14 @@ async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             year = int(context.args[1])
             
     text = format_budget_status(year, month)
-    await update.message.reply_text(text, parse_mode='HTML')
+    await update.message.reply_text(text, reply_markup=get_budget_keyboard(), parse_mode='HTML')
 
 async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sets the monthly spending budget target."""
     if not await require_admin(update): return
     from services.budget_service import set_budget
     from services.backup_service import backup_to_telegram
+    from bot.keyboards import get_budget_keyboard
     import asyncio
     
     if not context.args:
@@ -1298,6 +1315,7 @@ async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• <code>/setbudget 15000</code>\n"
             "• <code>/setbudget 25000</code>\n"
             "• <code>/setbudget 0</code> <i>(to disable budget)</i>",
+            reply_markup=get_budget_keyboard(),
             parse_mode='HTML'
         )
         return
@@ -1309,14 +1327,15 @@ async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = set_budget(amt)
         from services.task_manager import schedule_debounced_backup
         schedule_debounced_backup(context.bot)
-        await update.message.reply_text(msg, parse_mode='HTML')
+        await update.message.reply_text(msg, reply_markup=get_budget_keyboard(), parse_mode='HTML')
     except ValueError as val_err:
-        await update.message.reply_text(f"❌ Invalid amount format: {val_err}. Example: <code>/setbudget 20000</code>", parse_mode='HTML')
+        await update.message.reply_text(f"❌ Invalid amount format: {val_err}. Example: <code>/setbudget 20000</code>", reply_markup=get_budget_keyboard(), parse_mode='HTML')
 
 async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates the daily financial closing digest on demand."""
     if not await require_authorized(update): return
     from services.scheduler_service import format_daily_digest
+    from bot.keyboards import get_digest_keyboard
     
     target_date = None
     if context.args:
@@ -1327,7 +1346,7 @@ async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target_date = parsed.strftime("%Y-%m-%d")
             
     digest_text = format_daily_digest(target_date)
-    await update.message.reply_text(digest_text, parse_mode='HTML')
+    await update.message.reply_text(digest_text, reply_markup=get_digest_keyboard(), parse_mode='HTML')
 
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Provides a live link to the interactive web dashboard & visual charts with a 60-second one-time login code."""
@@ -1374,8 +1393,9 @@ async def cafestats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays monthly spending insights and top ordered veg items at the cafeteria."""
     if not await require_authorized(update): return
     from services.cafeteria_service import format_cafeteria_stats
+    from bot.keyboards import get_cafestats_keyboard
     stats_text = format_cafeteria_stats()
-    await update.message.reply_text(stats_text, parse_mode='HTML')
+    await update.message.reply_text(stats_text, reply_markup=get_cafestats_keyboard(), parse_mode='HTML')
 
 async def cafeedit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Opens the interactive cafeteria item selector for the most recent or specified cafeteria payment."""

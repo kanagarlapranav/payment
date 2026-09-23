@@ -11,6 +11,9 @@ from database.models import Transaction
 
 
 class TestGeminiChatStatus(unittest.TestCase):
+    def setUp(self):
+        gv.clear_status_cache()
+
     def test_check_gemini_api_status_not_configured(self):
         with patch.object(gv, "get_effective_gemini_api_key", return_value=""):
             res = asyncio.run(gv.check_gemini_api_status_async())
@@ -66,6 +69,31 @@ class TestGeminiChatStatus(unittest.TestCase):
             self.assertFalse(res["available"])
             self.assertEqual(res["status"], "CREDENTIAL_ERROR")
             self.assertEqual(res["http_code"], 403)
+
+    def test_check_gemini_api_status_cache(self):
+        gv.clear_status_cache()
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+
+        with patch.object(gv, "get_effective_gemini_api_key", return_value="AIzaSy1234567890"), \
+             patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+
+            # 1st call: performs network call
+            res1 = asyncio.run(gv.check_gemini_api_status_async())
+            self.assertEqual(res1["status"], "OK")
+            initial_call_count = mock_post.call_count
+            self.assertGreater(initial_call_count, 0)
+
+            # 2nd call with force_refresh=False: uses cache, no additional network call
+            res2 = asyncio.run(gv.check_gemini_api_status_async(force_refresh=False))
+            self.assertEqual(res2["status"], "OK")
+            self.assertEqual(mock_post.call_count, initial_call_count)
+
+            # 3rd call with force_refresh=True: bypasses cache and re-probes
+            res3 = asyncio.run(gv.check_gemini_api_status_async(force_refresh=True))
+            self.assertEqual(res3["status"], "OK")
+            self.assertGreater(mock_post.call_count, initial_call_count)
 
     def test_geministatus_command_outputs_quota_card(self):
         update = MagicMock()
