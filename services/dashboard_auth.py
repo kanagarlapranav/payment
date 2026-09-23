@@ -37,7 +37,7 @@ _SESSIONS: Dict[str, Dict[str, Any]] = {}
 _FAILED_LOGINS: Dict[str, list[float]] = {}
 
 # Expiry Constants
-CODE_EXPIRY_SECONDS = 60.0        # 1 minute single-use validity
+CODE_EXPIRY_SECONDS = 60.0        # 60s single-use validity
 SESSION_EXPIRY_SECONDS = 1800.0    # 30 minutes session lifetime
 MAX_FAILED_ATTEMPTS = 5
 RATE_LIMIT_WINDOW_SECONDS = 300.0  # 5 minutes window
@@ -56,8 +56,8 @@ def cleanup_expired():
     """Prunes expired auth codes, expired sessions, and old rate limit timestamps."""
     now = time.time()
     
-    # Prune auth codes older than 5 minutes
-    expired_codes = [c for c, data in _AUTH_CODES.items() if now - data.get("created_at", 0) > 300.0]
+    # Prune auth codes older than 10 minutes
+    expired_codes = [c for c, data in _AUTH_CODES.items() if now - data.get("created_at", 0) > 600.0]
     for c in expired_codes:
         _AUTH_CODES.pop(c, None)
 
@@ -76,7 +76,7 @@ def cleanup_expired():
 def create_one_time_code() -> str:
     """
     Generates a cryptographically secure 32-character one-time login code.
-    Valid for 60 seconds, single-use only.
+    Valid for 5 minutes, single-use only.
     """
     cleanup_expired()
     code = secrets.token_urlsafe(32)
@@ -84,7 +84,7 @@ def create_one_time_code() -> str:
         "created_at": time.time(),
         "used": False
     }
-    logger.info("Generated new single-use 60s dashboard auth code.")
+    logger.info("Generated new single-use 5m dashboard auth code.")
     return code
 
 
@@ -154,12 +154,35 @@ def exchange_code_for_session(code: str, client_ip: str = "", is_https: bool = F
     if client_ip in _FAILED_LOGINS:
         _FAILED_LOGINS.pop(client_ip, None)
 
-    # Build HttpOnly, SameSite=Strict session cookie
+    # Build HttpOnly, SameSite=Lax session cookie (Lax is required so browsers send it following external redirects from Telegram/WhatsApp)
     secure_flag = "; Secure" if is_https or os.getenv("ENVIRONMENT") == "production" or os.getenv("RENDER") else ""
-    cookie_header = f"session_id={session_id}; Path=/; Max-Age={int(SESSION_EXPIRY_SECONDS)}; HttpOnly; SameSite=Strict{secure_flag}"
+    cookie_header = f"session_id={session_id}; Path=/; Max-Age={int(SESSION_EXPIRY_SECONDS)}; HttpOnly; SameSite=Lax{secure_flag}"
     
     logger.info("Successfully exchanged one-time code for 30-minute session cookie.")
     return True, session_id, cookie_header
+
+
+def validate_session_id(session_id: Optional[str]) -> bool:
+    """
+    Validates a raw session_id string.
+    Returns True if the session exists and has not expired.
+    """
+    cleanup_expired()
+    if not session_id:
+        return False
+
+    try:
+        for active_sid, data in list(_SESSIONS.items()):
+            if compare_secrets(active_sid, session_id):
+                if time.time() < data.get("expires_at", 0):
+                    return True
+                else:
+                    _SESSIONS.pop(active_sid, None)
+                    return False
+        return False
+    except Exception as e:
+        logger.debug(f"Session ID validation notice: {e}")
+        return False
 
 
 def validate_session(cookie_header: Optional[str]) -> bool:
@@ -167,7 +190,6 @@ def validate_session(cookie_header: Optional[str]) -> bool:
     Validates the session_id from the incoming HTTP request's Cookie header.
     Returns True if the session exists and has not expired.
     """
-    cleanup_expired()
     if not cookie_header:
         return False
 
@@ -178,18 +200,7 @@ def validate_session(cookie_header: Optional[str]) -> bool:
             return False
 
         supplied_session = cookie["session_id"].value
-        if not supplied_session:
-            return False
-
-        # Match against active sessions
-        for active_sid, data in list(_SESSIONS.items()):
-            if compare_secrets(active_sid, supplied_session):
-                if time.time() < data.get("expires_at", 0):
-                    return True
-                else:
-                    _SESSIONS.pop(active_sid, None)
-                    return False
-        return False
+        return validate_session_id(supplied_session)
     except Exception as e:
         logger.debug(f"Session validation notice: {e}")
         return False

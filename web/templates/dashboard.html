@@ -736,6 +736,20 @@
         let allCurrentTransactions = [];
         let currentTypeFilter = 'ALL';
 
+        // Capture session fallback from URL if cookie was dropped by mobile WebView/Intent
+        const _urlParams = new URLSearchParams(window.location.search);
+        let activeSessionId = _urlParams.get('session') || '';
+        if (activeSessionId) {
+            try { sessionStorage.setItem('dash_session_token', activeSessionId); } catch(e) {}
+            // Clean URL in address bar without reloading the page
+            _urlParams.delete('session');
+            const cleanQuery = _urlParams.toString();
+            const cleanUrl = window.location.pathname + (cleanQuery ? '?' + cleanQuery : '');
+            window.history.replaceState({}, document.title, cleanUrl);
+        } else {
+            try { activeSessionId = sessionStorage.getItem('dash_session_token') || ''; } catch(e) {}
+        }
+
         function formatINR(num) {
             return '₹' + Number(num || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         }
@@ -746,7 +760,10 @@
 
         async function fetchDashboardData() {
             try {
-                const endpoint = `/api/data?year=${currentYear}&month=${currentMonth}`;
+                let endpoint = `/api/data?year=${currentYear}&month=${currentMonth}`;
+                if (activeSessionId) {
+                    endpoint += `&session=${encodeURIComponent(activeSessionId)}`;
+                }
                 const res = await fetch(endpoint, {
                     headers: { 'Accept': 'application/json' },
                     credentials: 'same-origin'
@@ -1180,7 +1197,11 @@
         }
 
         function downloadCSV() {
-            window.open('/api/export.csv', '_blank');
+            let exportUrl = '/api/export.csv';
+            if (activeSessionId) {
+                exportUrl += `?session=${encodeURIComponent(activeSessionId)}`;
+            }
+            window.open(exportUrl, '_blank');
         }
 
         // Initial Load & Auto-Refresh every 60s
