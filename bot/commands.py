@@ -399,8 +399,28 @@ async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
     status_data = await check_gemini_api_status_async()
     st = status_data.get('status')
-    model = status_data.get('model', 'gemini-flash-latest')
+    model = status_data.get('model', 'gemini-3.6-flash')
     masked_key = status_data.get('masked_key', '')
+
+    pool_status = status_data.get('pool_status', [])
+    pool_section = ""
+    if pool_status:
+        pool_lines = ["\n📊 <b>Model Quota & Failover Pool:</b>"]
+        for p in pool_status:
+            m_name = html.escape(p.get('model', ''))
+            m_stat = p.get('status', '')
+            if m_stat == 'ACTIVE':
+                pool_lines.append(f"• <code>{m_name}</code>: 🟢 <b>Active (Currently Processing)</b>")
+            elif m_stat == 'STANDBY':
+                desc = "🟢 <b>Standby (500 req/day Ready)</b>" if "lite" in m_name else "🟢 <b>Standby (Ready)</b>"
+                pool_lines.append(f"• <code>{m_name}</code>: {desc}")
+            elif m_stat == 'QUOTA_EXHAUSTED':
+                pool_lines.append(f"• <code>{m_name}</code>: 🔴 <b>Quota Completed (Limit Reached)</b>")
+            elif m_stat == 'CREDENTIAL_ERROR':
+                pool_lines.append(f"• <code>{m_name}</code>: ❌ <b>Rejected</b>")
+            else:
+                pool_lines.append(f"• <code>{m_name}</code>: ⚪ <b>Unavailable</b>")
+        pool_section = "\n".join(pool_lines) + "\n"
 
     if st == 'OK':
         card = (
@@ -409,6 +429,7 @@ async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYP
             f"🔑 <b>API Key:</b> Configured ({masked_key})\n"
             "🚦 <b>Status:</b> 🟢 <b>Operational (Quota Available)</b>\n"
             f"⚡ <b>Active Model:</b> <code>{html.escape(model)}</code>\n"
+            f"{pool_section}"
             "🔄 <b>Fallback:</b> RapidOCR (Standby)\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "✅ Receipt scans prioritize Gemini Vision AI for maximum accuracy."
@@ -423,6 +444,7 @@ async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYP
             f"📊 <b>Daily Free Limit:</b> {limit_val} requests / day (Limit Reached)\n"
             "⚠️ <b>HTTP Response:</b> 429 Resource Exhausted\n"
             f"⚡ <b>Active Model:</b> <code>{html.escape(model)}</code>\n"
+            f"{pool_section}"
             "🔄 <b>Fallback Engine:</b> 🟢 <b>RapidOCR (Active & Ready)</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "💡 <b>What this means:</b>\n"
