@@ -720,6 +720,10 @@ async def parse_text_with_gemini_async(
             res, err = await _call_gemini_api_async(client, model_name, api_key, payload, timeout=TEXT_REQUEST_TIMEOUT)
             if err == "CREDENTIAL_ERROR":
                 return None, 0
+            if err == "RATE_LIMIT":
+                _last_extraction_error = "RATE_LIMIT"
+                logger.warning("Gemini text parsing rate limited (429). Falling back immediately.")
+                return None, 0
             if not res or res.status_code != 200:
                 continue
 

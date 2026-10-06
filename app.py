@@ -20,9 +20,9 @@ from bot.commands import (
     setbalance_command, export_command, help_command, chatid_command, amount_command,
     insights_command, budget_command, setbudget_command, digest_command, dashboard_command, menu_command,
     cafestats_command, cafeedit_command, addmenu_command, delmenu_command, restore_command, undo_command,
-    geministatus_command, setmodel_command, backup_command
+    geministatus_command, setmodel_command, backup_command, workspace_command, members_command, setrole_command
 )
-from bot.handlers import handle_image, handle_callback_query, handle_text, handle_document
+from bot.handlers import handle_image, handle_callback_query, handle_text, handle_document, handle_chat_migration
 from services.scheduler_service import register_scheduler_jobs
 
 async def on_startup(app):
@@ -190,6 +190,9 @@ def build_application():
     app.add_handler(CommandHandler(["backup", "backupnow"], backup_command))
     app.add_handler(CommandHandler("undo", undo_command))
     app.add_handler(CommandHandler("revert", undo_command))
+    app.add_handler(CommandHandler(["workspace", "workspaces"], workspace_command))
+    app.add_handler(CommandHandler(["members", "team"], members_command))
+    app.add_handler(CommandHandler("setrole", setrole_command))
 
     # Image handler (photos and documents)
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
@@ -199,6 +202,9 @@ def build_application():
 
     # Text message handler (non-command messages)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    # Group migration handler (group -> supergroup)
+    app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, handle_chat_migration))
 
     # Callback query handler for inline keyboards (Confirm / Cancel)
     app.add_handler(CallbackQueryHandler(handle_callback_query))
@@ -230,7 +236,7 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         from services.dashboard_auth import (
             exchange_code_for_session, validate_session, validate_session_id,
-            is_rate_limited, SESSION_EXPIRY_SECONDS
+            is_rate_limited, SESSION_EXPIRY_SECONDS, get_session_info_from_cookie
         )
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -279,7 +285,9 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
         # Check session cookie or query param for protected dashboard and API routes
         cookie_header = self.headers.get("Cookie", "")
         session_from_param = query_params.get("session", [""])[0].strip()
-        has_session = validate_session(cookie_header) or (bool(session_from_param) and validate_session_id(session_from_param))
+        session_info = get_session_info_from_cookie(cookie_header, session_from_param)
+        has_session = (session_info is not None) or validate_session(cookie_header) or (bool(session_from_param) and validate_session_id(session_from_param))
+        ws_id = session_info.get("workspace_id") if session_info else None
 
         # 3. Web dashboard frontend UI
         if path in ('/dashboard', '/'):
@@ -323,6 +331,13 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": "Unauthorized. Valid session required. Run /dashboard in Telegram."}).encode('utf-8'))
                 return
 
+            from services.dashboard_auth import validate_dashboard_action
+            auth_ok, auth_err = validate_dashboard_action(session_info, required_role='viewer')
+            if not auth_ok:
+                self._send_security_headers(403, 'application/json', is_api=True)
+                self.wfile.write(json.dumps({"error": auth_err}).encode('utf-8'))
+                return
+
             from database.queries import (
                 get_balance_setting, get_monthly_summary, get_category_summary,
                 get_recent_transactions, get_all_transactions, get_month_comparison_stats,
@@ -355,15 +370,15 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
             else:
                 month = now.month
 
-            balance = get_balance_setting()
-            monthly = get_monthly_summary(year, month)
-            cat_summary = get_category_summary(year, month)
-            budget_data = get_budget_info(year, month)
-            comp_stats = get_month_comparison_stats(year, month)
-            daily_series = get_daily_spend_series(year, month)
-            top_payees = get_top_payees(limit=5, year=year, month=month)
-            txs_data = get_transactions_paginated(page=1, page_size=100, year=year, month=month)
-            all_txs = get_all_transactions()
+            balance = get_balance_setting(workspace_id=ws_id)
+            monthly = get_monthly_summary(year, month, workspace_id=ws_id)
+            cat_summary = get_category_summary(year, month, workspace_id=ws_id)
+            budget_data = get_budget_info(year, month, workspace_id=ws_id)
+            comp_stats = get_month_comparison_stats(year, month, workspace_id=ws_id)
+            daily_series = get_daily_spend_series(year, month, workspace_id=ws_id)
+            top_payees = get_top_payees(limit=5, year=year, month=month, workspace_id=ws_id)
+            txs_data = get_transactions_paginated(page=1, page_size=100, year=year, month=month, workspace_id=ws_id)
+            all_txs = get_all_transactions(workspace_id=ws_id)
 
             month_names = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
             period_str = f"{month_names[month]} {year}"
@@ -425,6 +440,13 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": "Unauthorized. Valid session required. Run /dashboard in Telegram."}).encode('utf-8'))
                 return
 
+            from services.dashboard_auth import validate_dashboard_action
+            auth_ok, auth_err = validate_dashboard_action(session_info, required_role='viewer')
+            if not auth_ok:
+                self._send_security_headers(403, 'application/json', is_api=True)
+                self.wfile.write(json.dumps({"error": auth_err}).encode('utf-8'))
+                return
+
             from database.queries import get_transactions_paginated
 
             try:
@@ -476,7 +498,7 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                data = get_transactions_paginated(page=page, page_size=page_size, search=search, tx_type=tx_type, year=year, month=month)
+                data = get_transactions_paginated(page=page, page_size=page_size, search=search, tx_type=tx_type, year=year, month=month, workspace_id=ws_id)
                 self._send_security_headers(200, 'application/json', is_api=True)
                 self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
             except Exception as query_err:
@@ -492,11 +514,18 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                 self.wfile.write(b"Unauthorized. Valid session required.")
                 return
 
+            from services.dashboard_auth import validate_dashboard_action
+            auth_ok, auth_err = validate_dashboard_action(session_info, required_role='viewer')
+            if not auth_ok:
+                self._send_security_headers(403, 'text/plain; charset=utf-8', is_api=True)
+                self.wfile.write(auth_err.encode('utf-8'))
+                return
+
             from database.queries import get_all_transactions_asc
             import csv
             import io
 
-            txs = get_all_transactions_asc()
+            txs = get_all_transactions_asc(workspace_id=ws_id)
             output = io.StringIO()
             writer = csv.writer(output)
             writer.writerow(['ID', 'Date', 'Time', 'Type', 'Amount (INR)', 'Payee / Person', 'Category', 'Bank / App', 'Reference / UTR', 'Balance After'])
@@ -522,6 +551,23 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
 
         else:
             self._send_security_headers(404, 'text/plain; charset=utf-8')
+
+    def do_POST(self):
+        """Protected POST handler enforcing CSRF tokens and role permissions."""
+        from services.dashboard_auth import get_session_info_from_cookie, validate_dashboard_action
+        cookie_header = self.headers.get('Cookie')
+        session_info = get_session_info_from_cookie(cookie_header)
+        csrf_header = self.headers.get('X-CSRF-Token')
+        auth_ok, auth_err = validate_dashboard_action(
+            session_info, required_role='member',
+            csrf_token_header=csrf_header, is_mutation=True
+        )
+        if not auth_ok:
+            self._send_security_headers(403, 'application/json', is_api=True)
+            self.wfile.write(json.dumps({"error": auth_err}).encode('utf-8'))
+            return
+        self._send_security_headers(200, 'application/json', is_api=True)
+        self.wfile.write(json.dumps({"status": "ok"}).encode('utf-8'))
 
     def log_message(self, format, *args):
         pass # Suppress HTTP access logs

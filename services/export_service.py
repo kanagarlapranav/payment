@@ -3,9 +3,9 @@ from openpyxl.styles import Font, PatternFill
 from database.queries import get_all_transactions
 import os
 
-def generate_excel_report(output_path: str):
-    """Generates an Excel report of all transactions."""
-    transactions = get_all_transactions()
+def generate_excel_report(output_path: str, workspace_id: str = None):
+    """Generates an Excel report of all transactions for a workspace."""
+    transactions = get_all_transactions(workspace_id=workspace_id)
     
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -79,7 +79,7 @@ def generate_excel_report(output_path: str):
     wb.save(output_path)
 
 
-def generate_pdf_statement(output_path: str):
+def generate_pdf_statement(output_path: str, workspace_id: str = None):
     """Generates a professional PDF statement of all transactions."""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
@@ -90,8 +90,8 @@ def generate_pdf_statement(output_path: str):
     from utils.currency import format_currency
     from utils.dates import get_current_time_in_tz, format_display_date
 
-    transactions = get_all_transactions()
-    current_balance = get_balance_setting()
+    transactions = get_all_transactions(workspace_id=workspace_id)
+    current_balance = get_balance_setting(workspace_id=workspace_id)
 
     total_sent = sum(t['amount'] for t in transactions if t['transaction_type'] == 'SENT')
     total_received = sum(t['amount'] for t in transactions if t['transaction_type'] == 'RECEIVED')

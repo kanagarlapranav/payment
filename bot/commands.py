@@ -19,15 +19,15 @@ from bot.keyboards import (
     get_quick_add_keyboard, get_settings_menu_keyboard
 )
 
-def render_home_menu_text() -> str:
+def render_home_menu_text(workspace_id: str = None) -> str:
     """Generates the main Home Menu dashboard card."""
     now = datetime.now()
-    balance = get_balance_setting()
-    today_stats = get_today_summary()
-    monthly = get_monthly_summary(now.year, now.month)
+    balance = get_balance_setting(workspace_id=workspace_id)
+    today_stats = get_today_summary(workspace_id=workspace_id)
+    monthly = get_monthly_summary(now.year, now.month, workspace_id=workspace_id)
     
     from services.budget_service import get_budget_info
-    b_info = get_budget_info(now.year, now.month)
+    b_info = get_budget_info(now.year, now.month, workspace_id=workspace_id)
     
     month_names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     m_name = month_names[now.month]
@@ -50,12 +50,12 @@ def render_home_menu_text() -> str:
         f"<i>Select an option or send a receipt screenshot:</i>"
     )
 
-def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int = 5, sort_by: str = "date_desc"):
+def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int = 5, sort_by: str = "date_desc", workspace_id: str = None):
     """Renders a formatted page of transactions with navigation keyboard and sort order control."""
     from database.queries import get_transactions_paginated
     sort_by = sort_by or "date_desc"
     tx_filter = filter_type if filter_type in ('SENT', 'RECEIVED', 'TRANSFER') else None
-    data = get_transactions_paginated(page=page, page_size=page_size, tx_type=tx_filter, sort_by=sort_by)
+    data = get_transactions_paginated(page=page, page_size=page_size, tx_type=tx_filter, sort_by=sort_by, workspace_id=workspace_id)
     
     items = data['transactions']
     total_pages = data['total_pages']
@@ -115,12 +115,12 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
     lines.append("━━━━━━━━━━━━━━━━━━━━\n<i>💡 Tap a transaction # button below to view details, edit, or delete:</i>")
     return "\n".join(lines), get_history_paginated_keyboard(page, total_pages, filter_type, tx_rows=items, sort_by=sort_by)
 
-def render_transaction_detail(tx_id: int):
+def render_transaction_detail(tx_id: int, workspace_id: str = None):
     """Renders the detailed view of a single transaction."""
     from database.queries import get_transaction_by_id
     from bot.keyboards import get_transaction_detail_keyboard
     tx = get_transaction_by_id(tx_id)
-    if not tx:
+    if not tx or (workspace_id and tx.get('workspace_id') and tx.get('workspace_id') != workspace_id):
         return "❌ <b>Transaction not found or deleted.</b>", get_back_to_menu_keyboard()
         
     ttype = tx.get('transaction_type')
@@ -283,10 +283,10 @@ def render_monthly_closing_summary_text(year: int, month: int) -> str:
     )
     return text
 
-def render_contacts_ledger_text() -> str:
-    """Generates the Contact Ledger overview."""
+def render_contacts_ledger_text(workspace_id: str = None) -> str:
+    """Generates the Contact Ledger overview with workspace isolation."""
     from database.queries import get_contact_ledger
-    contacts = get_contact_ledger()
+    contacts = get_contact_ledger(workspace_id=workspace_id)
     if not contacts:
         return "👥 <b>Contact Ledger</b>\n━━━━━━━━━━━━━━\nNo contact transactions recorded yet."
         
@@ -311,7 +311,7 @@ def render_contacts_ledger_text() -> str:
     lines.append("━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
-from bot.auth import require_authorized, require_admin, is_owner, is_authorized_user
+from bot.auth import require_authorized, require_admin, is_owner, is_authorized_user, require_member
 
 def is_admin_user(update: Update) -> bool:
     """Checks if the user is the primary bot owner (TELEGRAM_USER_ID)."""
@@ -324,7 +324,10 @@ async def is_authorized(update: Update) -> bool:
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sends the interactive Home Menu card and button grid."""
     if not await require_authorized(update): return
-    menu_text = render_home_menu_text()
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
+    menu_text = render_home_menu_text(workspace_id=ws_id)
     await update.message.reply_text(menu_text, reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
 
 async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -572,11 +575,14 @@ async def setmodel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
 
-    recalculate_all_balances()
-    balance = get_balance_setting()
-    overall = get_overall_summary()
-    today = get_today_summary()
+    recalculate_all_balances(workspace_id=ws_id)
+    balance = get_balance_setting(workspace_id=ws_id)
+    overall = get_overall_summary(workspace_id=ws_id)
+    today = get_today_summary(workspace_id=ws_id)
 
     text = (
         f"💰 *Current Balance*\n"
@@ -601,8 +607,11 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
 
-    recalculate_all_balances()
+    recalculate_all_balances(workspace_id=ws_id)
 
     sort_by = "date_desc"
     if context.args:
@@ -620,11 +629,11 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sort_by = "date_desc"
 
     if not context.args or context.args[0].lower() not in ('full', 'all'):
-        text, markup = render_history_page(page=1, filter_type="ALL", page_size=5, sort_by=sort_by)
+        text, markup = render_history_page(page=1, filter_type="ALL", page_size=5, sort_by=sort_by, workspace_id=ws_id)
         await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
         return
 
-    transactions = get_all_transactions_asc()
+    transactions = get_all_transactions_asc(workspace_id=ws_id)
     if not transactions:
 
         await update.message.reply_text("ℹ️ No transactions recorded yet.")
@@ -633,7 +642,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Calculate summary
     total_sent = sum(t['amount'] for t in transactions if t['transaction_type'] == 'SENT')
     total_received = sum(t['amount'] for t in transactions if t['transaction_type'] == 'RECEIVED')
-    curr_balance = get_balance_setting()
+    curr_balance = get_balance_setting(workspace_id=ws_id)
 
     lines_list = ["📜 *Payment History*\n"]
     for idx, t in enumerate(transactions, 1):
@@ -674,16 +683,22 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def last5_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the latest 5 transactions immediately without pagination confusion."""
     if not await require_authorized(update): return
-    recalculate_all_balances()
-    text, markup = render_history_page(page=1, filter_type="ALL", page_size=5)
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
+    recalculate_all_balances(workspace_id=ws_id)
+    text, markup = render_history_page(page=1, filter_type="ALL", page_size=5, workspace_id=ws_id)
     await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
 
 async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays transactions WITH IDs and full technical details on demand."""
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
     
     from bot.keyboards import get_standard_nav_keyboard
-    transactions = get_all_transactions_asc()
+    transactions = get_all_transactions_asc(workspace_id=ws_id)
     if not transactions:
         await update.message.reply_text("No recent transactions found.", reply_markup=get_standard_nav_keyboard())
         return
@@ -728,6 +743,9 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows transactions for a specific date e.g. /date 05/09/2026 or /date yesterday."""
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
     from bot.keyboards import get_standard_nav_keyboard
     
     if not context.args:
@@ -750,7 +768,7 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Could not parse date. Example: `/date 05/09/2026` or `/date yesterday`", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
         return
         
-    txs = search_transactions(target_date=target_d, sort_by="date_desc")
+    txs = search_transactions(target_date=target_d, sort_by="date_desc", workspace_id=ws_id)
     if not txs:
         await update.message.reply_text(f"No transactions found on *{target_d.strftime('%d %b %Y')}*.", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
         return
@@ -779,6 +797,9 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Searches transactions by person name, reference, or keyword."""
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
     from bot.keyboards import get_standard_nav_keyboard
     
     if not context.args:
@@ -795,7 +816,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     query_text = " ".join(context.args).strip()
-    txs = search_transactions(query_text=query_text, limit=15)
+    txs = search_transactions(query_text=query_text, limit=15, workspace_id=ws_id)
     
     if not txs:
         await update.message.reply_text(f"🔍 No transactions found matching *'{query_text}'*.", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
@@ -820,6 +841,9 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Searches all transactions with the specified amount."""
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
     from bot.keyboards import get_standard_nav_keyboard
     
     if not context.args:
@@ -843,7 +867,7 @@ async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid amount. Example: `/amount 500` or `/amount 5000`", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
         return
         
-    txs = search_transactions(exact_amount=amt, sort_by="date_desc")
+    txs = search_transactions(exact_amount=amt, sort_by="date_desc", workspace_id=ws_id)
     if not txs:
         await update.message.reply_text(f"💵 No transactions found with amount *{format_currency(amt)}*.", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
         return
@@ -868,6 +892,9 @@ async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows analytics and spending summary for the current or specified month."""
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
     
     now = get_current_time_in_tz()
     year = now.year
@@ -881,7 +908,7 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(context.args) > 1 and context.args[1].isdigit():
             year = int(context.args[1])
             
-    stats = get_monthly_summary(year, month)
+    stats = get_monthly_summary(year, month, workspace_id=ws_id)
     from datetime import date
     month_name = date(year, month, 1).strftime("%B %Y")
     
@@ -952,14 +979,30 @@ async def sort_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Initiates interactive editing or applies direct edit command."""
-    if not await require_admin(update): return
+    from bot.auth import get_workspace_context
+    if not await require_admin(update, silent=True):
+        if not await require_member(update):
+            return
     from bot.keyboards import get_edit_fields_keyboard, get_transaction_selection_keyboard
+    from database.queries import (
+        get_recent_transactions, get_user_recent_transactions,
+        get_transaction_by_id, can_user_modify_transaction
+    )
+
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
+    user_id = ctx.user_id if ctx else None
+    role = ctx.role if ctx else 'member'
 
     # 1. No arguments: show list of recent transactions to tap on
     if not context.args:
-        transactions = get_recent_transactions(limit=6)
+        if role in ('owner', 'admin'):
+            transactions = get_recent_transactions(limit=6, workspace_id=ws_id)
+        else:
+            transactions = get_user_recent_transactions(user_id=user_id, workspace_id=ws_id, limit=6)
         if not transactions:
-            await update.message.reply_text("No transactions found to edit.")
+            msg = "No transactions found to edit." if role in ('owner', 'admin') else "No transactions recorded by you found to edit."
+            await update.message.reply_text(msg)
             return
         context.user_data['action'] = 'waiting_edit_id'
         context.user_data['recent_edit_ids'] = [t['id'] for t in transactions]
@@ -971,8 +1014,9 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tx_list_lines.append(f"*{t['id']}.* {badge} {t['person_name'] or 'Unknown'} — *{format_currency(t['amount'])}* ({date_s})")
 
         list_text = "\n".join(tx_list_lines)
+        header_text = "✏️ *Edit Transaction*" if role in ('owner', 'admin') else "✏️ *Edit Your Transaction*"
         await update.message.reply_text(
-            "✏️ *Edit Transaction*\n\n"
+            f"{header_text}\n\n"
             f"Tap a button below, or reply with the transaction ID (e.g. `1`):\n\n"
             f"{list_text}",
             reply_markup=get_transaction_selection_keyboard(transactions, 'select_edit'),
@@ -989,11 +1033,20 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import asyncio
     from services.backup_service import backup_to_telegram
 
-    tx = get_transaction_by_id(raw_num)
+    tx = get_transaction_by_id(raw_num, workspace_id=ws_id)
     if not tx:
         await update.message.reply_text("❌ Transaction not found.", parse_mode='Markdown')
         return
     tx_id = tx['id']
+
+    # Role & Ownership check
+    if not can_user_modify_transaction(tx_id, user_id=user_id, user_role=role):
+        await update.message.reply_text(
+            "⛔ <b>Permission Denied:</b> You can only edit payments that you recorded. "
+            "Admin role is required to edit other members' payments.",
+            parse_mode='HTML'
+        )
+        return
 
     # 2. Only ID provided: show edit field buttons
     if len(context.args) == 1:
@@ -1098,14 +1151,30 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Initiates interactive deletion or prompts for ID."""
-    if not await require_admin(update): return
+    from bot.auth import get_workspace_context
+    if not await require_admin(update, silent=True):
+        if not await require_member(update):
+            return
     from bot.keyboards import get_delete_confirm_keyboard, get_transaction_selection_keyboard
+    from database.queries import (
+        get_recent_transactions, get_user_recent_transactions,
+        get_transaction_by_id, can_user_modify_transaction
+    )
+
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
+    user_id = ctx.user_id if ctx else None
+    role = ctx.role if ctx else 'member'
 
     # 1. No arguments: show list of recent transactions to tap on
     if not context.args:
-        transactions = get_recent_transactions(limit=6)
+        if role in ('owner', 'admin'):
+            transactions = get_recent_transactions(limit=6, workspace_id=ws_id)
+        else:
+            transactions = get_user_recent_transactions(user_id=user_id, workspace_id=ws_id, limit=6)
         if not transactions:
-            await update.message.reply_text("No transactions found to delete.")
+            msg = "No transactions found to delete." if role in ('owner', 'admin') else "No transactions recorded by you found to delete."
+            await update.message.reply_text(msg)
             return
         context.user_data['action'] = 'waiting_delete_id'
         context.user_data['recent_delete_ids'] = [t['id'] for t in transactions]
@@ -1117,8 +1186,9 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tx_list_lines.append(f"*{t['id']}.* {badge} {t['person_name'] or 'Unknown'} — *{format_currency(t['amount'])}* ({date_s})")
 
         list_text = "\n".join(tx_list_lines)
+        header_text = "🗑️ *Delete Transaction*" if role in ('owner', 'admin') else "🗑️ *Delete Your Transaction*"
         await update.message.reply_text(
-            "🗑️ *Delete Transaction*\n\n"
+            f"{header_text}\n\n"
             f"Tap a button below, or reply with the transaction ID (e.g. `1`):\n\n"
             f"{list_text}",
             reply_markup=get_transaction_selection_keyboard(transactions, 'select_delete'),
@@ -1132,11 +1202,20 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid ID format. Example: `/delete 3` or `/delete 1`", parse_mode='Markdown')
         return
 
-    tx = get_transaction_by_id(raw_num)
+    tx = get_transaction_by_id(raw_num, workspace_id=ws_id)
     if not tx:
         await update.message.reply_text("❌ Transaction not found.", parse_mode='Markdown')
         return
     tx_id = tx['id']
+
+    # Role & Ownership check
+    if not can_user_modify_transaction(tx_id, user_id=user_id, user_role=role):
+        await update.message.reply_text(
+            "⛔ <b>Permission Denied:</b> You can only delete payments that you recorded. "
+            "Admin role is required to delete other members' payments.",
+            parse_mode='HTML'
+        )
+        return
 
     # Show confirmation keyboard
     date_str = format_display_date(tx['transaction_date'])
@@ -1156,6 +1235,9 @@ async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     import asyncio
     from services.balance_service import set_explicit_balance
     from services.backup_service import backup_to_telegram
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
     
     if not context.args:
         await update.message.reply_text("Usage: /setbalance <amount>")
@@ -1164,7 +1246,7 @@ async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         from utils.validation import parse_decimal_amount
         new_balance = float(parse_decimal_amount(context.args[0], allow_zero=True))
-        final_bal = set_explicit_balance(new_balance)
+        final_bal = set_explicit_balance(new_balance, workspace_id=ws_id)
         backed_up = await backup_to_telegram(context.bot)
         status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"
         from bot.keyboards import get_balance_keyboard
@@ -1173,13 +1255,13 @@ async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(f"❌ Nothing was saved: {val_err}")
 
 
-async def send_pdf_report(chat, bot):
+async def send_pdf_report(chat, bot, workspace_id: str = None):
     from services.export_service import generate_pdf_statement
     from services.gdrive_service import is_gdrive_available, upload_statement_to_drive
     from services.task_manager import create_tracked_task
-    export_path = DATA_DIR / "Payment_Tracker_Statement.pdf"
+    export_path = DATA_DIR / f"Payment_Tracker_Statement_{chat.id}.pdf"
     try:
-        await asyncio.to_thread(generate_pdf_statement, str(export_path))
+        await asyncio.to_thread(generate_pdf_statement, str(export_path), workspace_id=workspace_id)
         if is_gdrive_available():
             create_tracked_task(
                 asyncio.to_thread(upload_statement_to_drive, str(export_path)),
@@ -1201,12 +1283,13 @@ async def send_pdf_report(chat, bot):
             try: os.remove(export_path)
             except OSError: pass
 
-async def send_excel_report(chat, bot):
+async def send_excel_report(chat, bot, workspace_id: str = None):
+    from services.export_service import generate_excel_report
     from services.gdrive_service import is_gdrive_available, upload_statement_to_drive
     from services.task_manager import create_tracked_task
-    export_path = DATA_DIR / "transactions_export.xlsx"
+    export_path = DATA_DIR / f"transactions_export_{chat.id}.xlsx"
     try:
-        await asyncio.to_thread(generate_excel_report, str(export_path))
+        await asyncio.to_thread(generate_excel_report, str(export_path), workspace_id=workspace_id)
         if is_gdrive_available():
             create_tracked_task(
                 asyncio.to_thread(upload_statement_to_drive, str(export_path)),
@@ -1232,16 +1315,19 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Exports transactions as a PDF Statement or Excel spreadsheet."""
     if not await require_admin(update): return
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
 
     arg = (context.args[0].lower() if context.args else "")
 
     if arg in ('pdf', 'statement', 'doc'):
         await update.message.reply_text("⏳ Generating PDF statement...")
-        await send_pdf_report(update.effective_chat, context.bot)
+        await send_pdf_report(update.effective_chat, context.bot, workspace_id=ws_id)
         return
     elif arg in ('excel', 'xlsx', 'sheet'):
         await update.message.reply_text("⏳ Generating Excel spreadsheet...")
-        await send_excel_report(update.effective_chat, context.bot)
+        await send_excel_report(update.effective_chat, context.bot, workspace_id=ws_id)
         return
 
     # Interactive format selection
@@ -1281,6 +1367,9 @@ async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the monthly budget status and progress bar."""
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
     from services.budget_service import format_budget_status
     from bot.keyboards import get_budget_keyboard
     from datetime import datetime
@@ -1296,12 +1385,15 @@ async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(context.args) > 1 and context.args[1].isdigit():
             year = int(context.args[1])
             
-    text = format_budget_status(year, month)
+    text = format_budget_status(year, month, workspace_id=ws_id)
     await update.message.reply_text(text, reply_markup=get_budget_keyboard(), parse_mode='HTML')
 
 async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sets the monthly spending budget target."""
     if not await require_admin(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
     from services.budget_service import set_budget
     from services.backup_service import backup_to_telegram
     from bot.keyboards import get_budget_keyboard
@@ -1324,7 +1416,7 @@ async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from utils.validation import parse_decimal_amount
         raw_amt = "".join(context.args)
         amt = float(parse_decimal_amount(raw_amt, allow_zero=True))
-        msg = set_budget(amt)
+        msg = set_budget(amt, workspace_id=ws_id)
         from services.task_manager import schedule_debounced_backup
         schedule_debounced_backup(context.bot)
         await update.message.reply_text(msg, reply_markup=get_budget_keyboard(), parse_mode='HTML')
@@ -1353,11 +1445,16 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update): return
     import os
     from services.dashboard_auth import create_one_time_code
+    from bot.auth import get_workspace_context
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     
     from config import RENDER_EXTERNAL_URL
     render_url = RENDER_EXTERNAL_URL
-    code = create_one_time_code()
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
+    user_id = ctx.user_id if ctx else None
+    role = ctx.role if ctx else 'member'
+    code = create_one_time_code(user_id=user_id, workspace_id=ws_id, role=role)
     auth_url = f"{render_url}/auth?code={code}"
     
     msg = (
@@ -1384,17 +1481,23 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the full vegetarian cafeteria menu with prices & add-ons."""
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
     from services.cafeteria_service import format_full_menu
     from bot.keyboards import get_menu_view_keyboard
-    menu_text = format_full_menu()
+    menu_text = format_full_menu(workspace_id=ws_id)
     await update.message.reply_text(menu_text, reply_markup=get_menu_view_keyboard(), parse_mode='HTML')
 
 async def cafestats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays monthly spending insights and top ordered veg items at the cafeteria."""
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
     from services.cafeteria_service import format_cafeteria_stats
     from bot.keyboards import get_cafestats_keyboard
-    stats_text = format_cafeteria_stats()
+    stats_text = format_cafeteria_stats(workspace_id=ws_id)
     await update.message.reply_text(stats_text, reply_markup=get_cafestats_keyboard(), parse_mode='HTML')
 
 async def cafeedit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1495,7 +1598,11 @@ async def addmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    success, msg = add_custom_menu_item(name, price, category, is_veg=True)
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
+
+    success, msg = add_custom_menu_item(name, price, category, is_veg=True, workspace_id=ws_id)
     if success:
         await update.message.reply_text(
             f"✅ <b>Custom Menu Item Added!</b>\n\n"
@@ -1516,10 +1623,14 @@ async def delmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from services.cafeteria_service import delete_custom_menu_item
     from database.db import get_custom_menu_items
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    from bot.auth import get_workspace_context
     import html
 
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
+
     args = context.args
-    custom_items = get_custom_menu_items()
+    custom_items = get_custom_menu_items(workspace_id=ws_id)
 
     if not custom_items:
         await update.message.reply_text("ℹ️ No custom menu items found to delete. Standard predefined menu items cannot be deleted.", parse_mode='HTML')
@@ -1538,7 +1649,7 @@ async def delmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     name_query = " ".join(args).strip()
-    success, msg = delete_custom_menu_item(name_query)
+    success, msg = delete_custom_menu_item(name_query, workspace_id=ws_id)
     if success:
         await update.message.reply_text(f"✅ {html.escape(msg)}", parse_mode='HTML')
     else:
@@ -1680,7 +1791,9 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Interactive undo command: inspects last action, asks confirmation with details before reverting."""
-    if not await require_admin(update): return
+    if not await require_admin(update, silent=True):
+        if not await require_member(update):
+            return
     from services.undo_service import get_last_action
     from database.db import get_db_connection
     from bot.keyboards import get_back_to_menu_keyboard
@@ -1743,6 +1856,167 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ])
     await update.message.reply_text(prompt, reply_markup=keyboard, parse_mode='HTML')
+
+
+async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays information about the current chat's workspace and allows switching active workspace."""
+    if not await require_authorized(update): return
+    from bot.auth import get_workspace_context, is_owner, is_super_admin, get_effective_user_id, set_user_active_workspace
+    from database.queries import get_all_active_workspaces, get_user_workspaces, get_workspace_by_id
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+
+    ctx = get_workspace_context(update)
+    if not ctx or not ctx.workspace:
+        await update.message.reply_text("❌ No active workspace found for this chat.")
+        return
+
+    user_id = get_effective_user_id(update)
+    is_admin_mode = is_owner(update) or is_super_admin(user_id)
+
+    # Direct switch argument: /workspace <id> or /workspace switch <id>
+    if context.args:
+        target_id = context.args[-1].strip()
+        target_ws = get_workspace_by_id(target_id)
+        if target_ws:
+            set_user_active_workspace(user_id, target_ws.id)
+            await update.message.reply_text(
+                f"✅ Switched active workspace to: <b>{html.escape(target_ws.title or 'Workspace')}</b>\n"
+                f"🆔 <code>{target_ws.id}</code>\n\n"
+                f"Commands (/balance, /history, /last5, /edit, /delete, /report) will now operate on this workspace.",
+                parse_mode='HTML'
+            )
+            return
+
+    # Fetch available workspaces
+    if is_admin_mode:
+        available_workspaces = get_all_active_workspaces()
+    else:
+        available_workspaces = get_user_workspaces(user_id)
+        if not available_workspaces and ctx.workspace:
+            available_workspaces = [ctx.workspace]
+
+    ws_lines = []
+    keyboard_rows = []
+
+    for idx, ws in enumerate(available_workspaces, 1):
+        is_curr = (ws.id == ctx.workspace_id)
+        type_badge = "👤 DM" if ws.chat_type == 'dm' else "👥 Group"
+        check = "👉 " if is_curr else "• "
+        curr_label = " <i>[Active]</i>" if is_curr else ""
+        ws_lines.append(f"{check}<b>{idx}. {html.escape(ws.title or 'Workspace')}</b> ({type_badge}){curr_label}\n   <code>{ws.id}</code>")
+
+        btn_icon = "✅ " if is_curr else ("👤 " if ws.chat_type == 'dm' else "👥 ")
+        btn_text = f"{btn_icon}{ws.title or 'Workspace'}"[:30]
+        keyboard_rows.append([InlineKeyboardButton(btn_text, callback_data=f"ws_switch:{ws.id}")])
+
+    keyboard_rows.append([InlineKeyboardButton("🔄 Reset to Current Chat Default", callback_data="ws_reset")])
+
+    text = (
+        f"🏢 <b>Workspace Information & Switcher</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🏷 <b>Currently Active:</b> <b>{html.escape(ctx.workspace.title or 'N/A')}</b>\n"
+        f"🆔 <b>Workspace ID:</b> <code>{ctx.workspace.id}</code>\n"
+        f"💬 <b>Chat Type:</b> {ctx.chat_type.title()} (<code>{ctx.chat_id}</code>)\n"
+        f"👤 <b>Your Role:</b> <b>{ctx.role.title()}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>Available Workspaces:</b>\n" + "\n".join(ws_lines) + "\n\n"
+        f"<i>Tap a workspace below to switch your active view:</i>"
+    )
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard_rows), parse_mode='HTML')
+
+workspaces_command = workspace_command
+
+
+async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lists all registered members of the current workspace with their assigned roles."""
+    if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    from database.queries import get_all_workspace_members
+    ctx = get_workspace_context(update)
+    if not ctx:
+        await update.message.reply_text("❌ No active workspace found.")
+        return
+
+    members = get_all_workspace_members(ctx.workspace_id)
+    if not members:
+        await update.message.reply_text("No members registered in this workspace.")
+        return
+
+    role_emojis = {'owner': '👑', 'admin': '🛡️', 'member': '👤', 'viewer': '👁️'}
+    ws_title = ctx.workspace.title if ctx.workspace else "Current Group"
+    lines = [
+        f"👥 <b>Workspace Members — {html.escape(ws_title)}</b>",
+        "━━━━━━━━━━━━━━━━━━━━"
+    ]
+    for idx, m in enumerate(members, 1):
+        emoji = role_emojis.get(m.role, '👤')
+        name_str = f"@{m.username}" if m.username else (m.display_name or f"User {m.telegram_user_id}")
+        lines.append(f"{idx}. {emoji} <b>{html.escape(name_str)}</b> (<code>{m.role.title()}</code>) — <code>{m.telegram_user_id}</code>")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"<i>Total: {len(members)} active members</i>")
+    await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+
+
+async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sets a workspace member's role (Owner only). Usage: /setrole <user_id_or_@username> <role>"""
+    if not await require_admin(update): return
+    from bot.auth import get_workspace_context
+    from database.queries import get_all_workspace_members, update_workspace_member_role
+    ctx = get_workspace_context(update)
+    if not ctx:
+        await update.message.reply_text("❌ Workspace not found.")
+        return
+
+    if ctx.role != 'owner' and not is_owner(update):
+        await update.message.reply_text("⛔ Only the workspace owner can change member roles.", parse_mode='HTML')
+        return
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "<b>Usage:</b> <code>/setrole &lt;user_id or @username&gt; &lt;role&gt;</code>\n\n"
+            "Valid roles: <code>owner</code>, <code>admin</code>, <code>member</code>, <code>viewer</code>",
+            parse_mode='HTML'
+        )
+        return
+
+    target_identifier = context.args[0].strip()
+    new_role = context.args[1].strip().lower()
+    valid_roles = ('owner', 'admin', 'member', 'viewer')
+    if new_role not in valid_roles:
+        await update.message.reply_text(f"❌ Invalid role. Choose one of: {', '.join(valid_roles)}")
+        return
+
+    members = get_all_workspace_members(ctx.workspace_id)
+    target_member = None
+    target_uid = None
+    if target_identifier.lstrip('-').isdigit():
+        target_uid = int(target_identifier)
+        for m in members:
+            if m.telegram_user_id == target_uid:
+                target_member = m
+                break
+    else:
+        uname = target_identifier.lstrip('@').lower()
+        for m in members:
+            if m.username and m.username.lower() == uname:
+                target_member = m
+                target_uid = m.telegram_user_id
+                break
+
+    if not target_member or not target_uid:
+        await update.message.reply_text(f"❌ Member '{target_identifier}' not found in this workspace.")
+        return
+
+    success = update_workspace_member_role(ctx.workspace_id, target_uid, new_role)
+    if success:
+        target_display = f"@{target_member.username}" if target_member.username else (target_member.display_name or str(target_uid))
+        await update.message.reply_text(
+            f"✅ Role updated: <b>{html.escape(target_display)}</b> is now <b>{new_role.upper()}</b> in this workspace.",
+            parse_mode='HTML'
+        )
+    else:
+        await update.message.reply_text("❌ Failed to update member role.")
 
 
 
