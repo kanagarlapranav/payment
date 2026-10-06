@@ -96,7 +96,7 @@ SUPER_ADMIN_USER_IDS = [
 
 # Multi-tenant workspace auto-provisioning: allows users/groups to create their own isolated workspace
 ALLOW_PUBLIC_WORKSPACES = (
-    os.getenv('ALLOW_PUBLIC_WORKSPACES', 'false' if IS_TEST_ENV else 'true').strip().lower() in ('1', 'true', 'yes')
+    os.getenv('ALLOW_PUBLIC_WORKSPACES', 'false').strip().lower() in ('1', 'true', 'yes')
 )
 
 # OCR Configuration: avoid Windows path default on Linux/Render

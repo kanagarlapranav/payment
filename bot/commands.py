@@ -1886,12 +1886,122 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(prompt, reply_markup=keyboard, parse_mode='HTML')
 
 
+def render_workspaces_view(update: Update) -> tuple[str, Any]:
+    """Helper that computes the text and inline markup for the workspace switcher view."""
+    from bot.auth import get_workspace_context, is_owner, is_super_admin, get_effective_user_id
+    from database.queries import (
+        ensure_all_user_workspaces, get_all_active_workspaces,
+        get_user_workspaces
+    )
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+
+    chat = update.effective_chat
+    chat_title = getattr(chat, 'title', None) or getattr(chat, 'first_name', None) or "This Chat"
+    chat_id = getattr(chat, 'id', None)
+
+    try:
+        ensure_all_user_workspaces(current_chat_title=chat_title, current_chat_id=chat_id)
+    except Exception as e:
+        logger.warning(f"ensure_all_user_workspaces failed: {e}")
+
+    ctx = get_workspace_context(update)
+    user_id = get_effective_user_id(update)
+    is_admin_mode = is_owner(update) or is_super_admin(user_id)
+
+    if is_admin_mode:
+        available_workspaces = get_all_active_workspaces()
+    else:
+        available_workspaces = get_user_workspaces(user_id)
+        if not available_workspaces and ctx and ctx.workspace:
+            available_workspaces = [ctx.workspace]
+
+    seen = set()
+    unique_workspaces = []
+    for w in available_workspaces:
+        if w.id not in seen:
+            seen.add(w.id)
+            unique_workspaces.append(w)
+
+    group_workspaces = [w for w in unique_workspaces if w.chat_type != 'dm']
+    dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm']
+
+    curr_ws_id = ctx.workspace_id if ctx else ""
+    curr_title = ctx.workspace.title if (ctx and ctx.workspace and ctx.workspace.title) else "Workspace"
+    is_switched = bool(ctx and ctx.chat_id != ctx.workspace.chat_id)
+    role_name = ctx.role.title() if ctx else "Member"
+
+    lines = [
+        "🏢 <b>Workspace Information & Ledger Switcher</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"📍 <b>Current Chat:</b> <b>{html.escape(chat_title)}</b>",
+        f"🎯 <b>Active Ledger:</b> <b>{html.escape(curr_title)}</b>" + (" <i>[Switched]</i>" if is_switched else " <i>[Active]</i>"),
+        f"👤 <b>Your Role:</b> <b>{role_name}</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "📂 <b>Available Ledgers:</b>\n"
+    ]
+
+    if group_workspaces:
+        lines.append("👥 <b>Group Ledgers:</b>")
+        for ws in group_workspaces:
+            is_curr = (ws.id == curr_ws_id)
+            check = "👉 " if is_curr else "• "
+            badge = " ✅ <i>[Active]</i>" if is_curr else ""
+            lines.append(f"{check}<b>{html.escape(ws.title or 'Group Workspace')}</b>{badge}")
+        lines.append("")
+
+    if dm_workspaces:
+        lines.append("👤 <b>Personal Ledgers:</b>")
+        for ws in dm_workspaces:
+            is_curr = (ws.id == curr_ws_id)
+            check = "👉 " if is_curr else "• "
+            badge = " ✅ <i>[Active]</i>" if is_curr else ""
+            lines.append(f"{check}<b>{html.escape(ws.title or 'Personal Ledger')}</b>{badge}")
+        lines.append("")
+
+    lines.append("<i>Tap any ledger below to switch your active view:</i>")
+
+    keyboard_rows = []
+    for ws in group_workspaces:
+        is_curr = (ws.id == curr_ws_id)
+        icon = "✅ " if is_curr else "👥 "
+        keyboard_rows.append([InlineKeyboardButton(f"{icon}{ws.title or 'Group'}"[:32], callback_data=f"ws_switch:{ws.id}")])
+
+    dm_buttons = []
+    for ws in dm_workspaces:
+        is_curr = (ws.id == curr_ws_id)
+        icon = "✅ " if is_curr else "👤 "
+        dm_buttons.append(InlineKeyboardButton(f"{icon}{ws.title or 'Personal'}"[:28], callback_data=f"ws_switch:{ws.id}"))
+        if len(dm_buttons) == 2:
+            keyboard_rows.append(dm_buttons)
+            dm_buttons = []
+    if dm_buttons:
+        keyboard_rows.append(dm_buttons)
+
+    action_row = [
+        InlineKeyboardButton("🔄 Reset to Chat Default", callback_data="ws_reset"),
+        InlineKeyboardButton("➕ New Ledger", callback_data="ws_new_prompt")
+    ]
+    keyboard_rows.append(action_row)
+
+    return "\n".join(lines), InlineKeyboardMarkup(keyboard_rows)
+
+
 async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays information about the current chat's workspace and allows switching active workspace."""
     if not await require_authorized(update): return
-    from bot.auth import get_workspace_context, is_owner, is_super_admin, get_effective_user_id, set_user_active_workspace
-    from database.queries import get_all_active_workspaces, get_user_workspaces, get_workspace_by_id
-    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    from bot.auth import get_workspace_context, get_effective_user_id, set_user_active_workspace
+    from database.queries import (
+        get_workspace_by_id, create_custom_workspace, ensure_all_user_workspaces
+    )
+
+    chat = update.effective_chat
+    chat_title = getattr(chat, 'title', None) or getattr(chat, 'first_name', None) or "This Chat"
+    chat_id = getattr(chat, 'id', None)
+
+    try:
+        ensure_all_user_workspaces(current_chat_title=chat_title, current_chat_id=chat_id)
+    except Exception as e:
+        logger.warning(f"ensure_all_user_workspaces failed: {e}")
 
     ctx = get_workspace_context(update)
     if not ctx or not ctx.workspace:
@@ -1899,58 +2009,62 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = get_effective_user_id(update)
-    is_admin_mode = is_owner(update) or is_super_admin(user_id)
 
-    # Direct switch argument: /workspace <id> or /workspace switch <id>
+    # Subcommand: /workspace create <name> or /workspace new <name>
+    if context.args and context.args[0].lower() in ('create', 'new', 'add'):
+        new_title = " ".join(context.args[1:]).strip()
+        if not new_title:
+            await update.message.reply_text(
+                "💡 <b>Usage:</b> <code>/workspace create &lt;Name&gt;</code>\n\n"
+                "<i>Example:</i> <code>/workspace create Goa Trip</code>",
+                parse_mode='HTML'
+            )
+            return
+        uname = getattr(update.effective_user, 'username', '') or ''
+        dname = getattr(update.effective_user, 'full_name', '') or str(user_id)
+        new_ws = create_custom_workspace(
+            title=new_title,
+            creator_user_id=user_id,
+            username=uname,
+            display_name=dname
+        )
+        set_user_active_workspace(user_id, new_ws.id)
+        await update.message.reply_text(
+            f"✨ <b>New Workspace Created!</b>\n\n"
+            f"📁 <b>Title:</b> <b>{html.escape(new_ws.title)}</b>\n"
+            f"👑 <b>Owner:</b> <b>{html.escape(dname)}</b>\n\n"
+            f"🎯 Active workspace automatically switched to <b>{html.escape(new_ws.title)}</b>.\n"
+            f"Commands (/balance, /history, /last5, /report) will now log and track here.\n\n"
+            f"Type /workspaces to switch or reset anytime.",
+            parse_mode='HTML'
+        )
+        return
+
+    # Subcommand: /workspace reset or /workspace clear
+    if context.args and context.args[0].lower() in ('reset', 'clear', 'default'):
+        set_user_active_workspace(user_id, None)
+        await update.message.reply_text(
+            "🔄 <b>Active workspace reset to default for this chat.</b>\n\n"
+            "You are back to your standard chat view.",
+            parse_mode='HTML'
+        )
+        return
+
+    # Subcommand: direct switch by ID (/workspace <id> or /workspace switch <id>)
     if context.args:
         target_id = context.args[-1].strip()
         target_ws = get_workspace_by_id(target_id)
         if target_ws:
             set_user_active_workspace(user_id, target_ws.id)
             await update.message.reply_text(
-                f"✅ Switched active workspace to: <b>{html.escape(target_ws.title or 'Workspace')}</b>\n"
-                f"🆔 <code>{target_ws.id}</code>\n\n"
+                f"✅ Switched active workspace to: <b>{html.escape(target_ws.title or 'Workspace')}</b>\n\n"
                 f"Commands (/balance, /history, /last5, /edit, /delete, /report) will now operate on this workspace.",
                 parse_mode='HTML'
             )
             return
 
-    # Fetch available workspaces
-    if is_admin_mode:
-        available_workspaces = get_all_active_workspaces()
-    else:
-        available_workspaces = get_user_workspaces(user_id)
-        if not available_workspaces and ctx.workspace:
-            available_workspaces = [ctx.workspace]
-
-    ws_lines = []
-    keyboard_rows = []
-
-    for idx, ws in enumerate(available_workspaces, 1):
-        is_curr = (ws.id == ctx.workspace_id)
-        type_badge = "👤 DM" if ws.chat_type == 'dm' else "👥 Group"
-        check = "👉 " if is_curr else "• "
-        curr_label = " <i>[Active]</i>" if is_curr else ""
-        ws_lines.append(f"{check}<b>{idx}. {html.escape(ws.title or 'Workspace')}</b> ({type_badge}){curr_label}\n   <code>{ws.id}</code>")
-
-        btn_icon = "✅ " if is_curr else ("👤 " if ws.chat_type == 'dm' else "👥 ")
-        btn_text = f"{btn_icon}{ws.title or 'Workspace'}"[:30]
-        keyboard_rows.append([InlineKeyboardButton(btn_text, callback_data=f"ws_switch:{ws.id}")])
-
-    keyboard_rows.append([InlineKeyboardButton("🔄 Reset to Current Chat Default", callback_data="ws_reset")])
-
-    text = (
-        f"🏢 <b>Workspace Information & Switcher</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🏷 <b>Currently Active:</b> <b>{html.escape(ctx.workspace.title or 'N/A')}</b>\n"
-        f"🆔 <b>Workspace ID:</b> <code>{ctx.workspace.id}</code>\n"
-        f"💬 <b>Chat Type:</b> {ctx.chat_type.title()} (<code>{ctx.chat_id}</code>)\n"
-        f"👤 <b>Your Role:</b> <b>{ctx.role.title()}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<b>Available Workspaces:</b>\n" + "\n".join(ws_lines) + "\n\n"
-        f"<i>Tap a workspace below to switch your active view:</i>"
-    )
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard_rows), parse_mode='HTML')
+    text, markup = render_workspaces_view(update)
+    await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
 
 workspaces_command = workspace_command
 
