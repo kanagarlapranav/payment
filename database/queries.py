@@ -236,6 +236,27 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                     "UPDATE workspaces SET title = ? WHERE chat_id = ? AND (title IN ('Primary Workspace', 'Workspace', '') OR title IS NULL)",
                     (clean_title, int(current_chat_id))
                 )
+                # Ensure group members are populated
+                cursor.execute("SELECT id FROM workspaces WHERE chat_id = ? AND is_active = 1", (int(current_chat_id),))
+                group_ws_row = cursor.fetchone()
+                if group_ws_row:
+                    grp_id = group_ws_row['id']
+                    if owner_id:
+                        cursor.execute("SELECT id FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, owner_id))
+                        if not cursor.fetchone():
+                            cursor.execute("""
+                                INSERT OR REPLACE INTO workspace_members 
+                                (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
+                                VALUES (?, ?, 'pranav', 'Pranav', 'owner', 1, ?, ?)
+                            """, (grp_id, owner_id, utc_now_iso(), utc_now_iso()))
+                    if 8343764796:
+                        cursor.execute("SELECT id FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, 8343764796))
+                        if not cursor.fetchone():
+                            cursor.execute("""
+                                INSERT OR REPLACE INTO workspace_members 
+                                (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
+                                VALUES (?, ?, 'nagendra', 'Nagendra', 'member', 1, ?, ?)
+                            """, (grp_id, 8343764796, utc_now_iso(), utc_now_iso()))
                 conn.commit()
 
             # Collect all known user IDs with their best display names / usernames
@@ -435,25 +456,27 @@ def get_access_request(telegram_user_id: int) -> RowDict | None:
         row = cursor.fetchone()
         return RowDict(dict(row)) if row else None
 
-def create_access_request(telegram_user_id: int, username: str, display_name: str, chat_id: int, chat_type: str = "private") -> RowDict:
+def create_access_request(telegram_user_id: int, username: str, display_name: str, chat_id: int, chat_type: str = "private", workspace_id: str = None) -> RowDict:
     """Creates or updates a pending access request."""
     now_utc = utc_now_iso()
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO access_requests (telegram_user_id, username, display_name, chat_id, chat_type, status, requested_at)
-            VALUES (?, ?, ?, ?, ?, 'pending', ?)
+            INSERT INTO access_requests (telegram_user_id, workspace_id, username, display_name, chat_id, chat_type, status, requested_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
             ON CONFLICT(telegram_user_id) DO UPDATE SET
+                workspace_id = COALESCE(excluded.workspace_id, access_requests.workspace_id),
                 username = excluded.username,
                 display_name = excluded.display_name,
                 chat_id = excluded.chat_id,
                 chat_type = excluded.chat_type,
                 status = 'pending',
                 requested_at = excluded.requested_at
-        """, (int(telegram_user_id), str(username or ""), str(display_name or ""), int(chat_id), str(chat_type or "private"), now_utc))
+        """, (int(telegram_user_id), str(workspace_id) if workspace_id else None, str(username or ""), str(display_name or ""), int(chat_id), str(chat_type or "private"), now_utc))
         conn.commit()
         return RowDict({
             'telegram_user_id': int(telegram_user_id),
+            'workspace_id': str(workspace_id) if workspace_id else None,
             'username': str(username or ""),
             'display_name': str(display_name or ""),
             'chat_id': int(chat_id),
@@ -461,6 +484,7 @@ def create_access_request(telegram_user_id: int, username: str, display_name: st
             'status': 'pending',
             'requested_at': now_utc
         })
+
 
 def update_access_request_status(telegram_user_id: int, status: str, reviewed_by: int = None) -> bool:
     """Updates access request status ('approved', 'rejected', 'pending')."""

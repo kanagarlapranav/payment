@@ -27,7 +27,7 @@ READ_ONLY_COMMANDS = {
     "start", "balance", "today", "history", "last5", "recent", "details", "ids",
     "date", "search", "find", "amount", "amt", "monthly", "stats", "filter",
     "sort", "chatid", "help", "menu", "cafeteria", "canteen", "cafestats",
-    "cafespends", "budget", "digest", "status", "workspace", "workspaces", "members"
+    "cafespends", "budget", "digest", "status"
 }
 
 ADMIN_COMMANDS = {
@@ -48,6 +48,7 @@ COMMAND_ROLE_POLICY = {
     "cafeteria": "viewer", "canteen": "viewer", "cafestats": "viewer",
     "cafespends": "viewer", "budget": "viewer", "digest": "viewer",
     "status": "viewer", "members": "viewer", "workspace": "viewer", "workspaces": "viewer",
+    "join": "viewer",
 
     # Member & above (Mutation: Logging Payments, Self-Edit/Delete, Self-Undo & Reports)
     "log_receipt": "member", "log_text": "member", "cafe_tag": "member",
@@ -60,6 +61,7 @@ COMMAND_ROLE_POLICY = {
     "setbudget": "admin", "addmenu": "admin",
     "delmenu": "admin", "cafeedit": "admin", "editcafe": "admin",
     "backup": "admin", "backupnow": "admin",
+    "invite": "admin", "invite_member": "admin", "audit": "admin",
     "setmodel": "admin", "model": "admin",
     "gemini": "admin", "geministatus": "admin", "quota": "admin", "ai": "admin", "insights": "admin",
 
@@ -72,7 +74,7 @@ COMMAND_ROLE_POLICY = {
 # Callback Action Prefix Policies
 READ_ONLY_CALLBACK_ACTIONS = {
     "nav", "filter", "sort", "cafe_stats", "cafe_view_menu", "tx_view",
-    "ws_switch", "ws_reset", "ws_reset_menu", "perm_view", "perm_list"
+    "ws_switch", "ws_reset", "ws_reset_menu", "ws_new_prompt", "perm_view", "perm_list"
 }
 
 ADMIN_CALLBACK_ACTIONS = {
@@ -113,6 +115,8 @@ CALLBACK_ROLE_POLICY = {
     "nav": "viewer", "filter": "viewer", "sort": "viewer",
     "cafe_stats": "viewer", "cafe_view_menu": "viewer", "tx_view": "viewer",
     "refresh_gemini": "viewer",
+    "ws_switch": "viewer", "ws_reset": "viewer", "ws_reset_menu": "viewer",
+    "ws_new_prompt": "viewer", "perm_view": "viewer", "perm_list": "viewer",
 
     # Member & above
     "save_p": "member", "force_save_p": "member", "edit_p": "member",
@@ -214,68 +218,79 @@ def is_super_admin(user_id: Optional[int]) -> bool:
 
 
 def is_owner(update: Update, workspace_id: Optional[str] = None) -> bool:
-    """Returns True if caller is primary bot owner (TELEGRAM_USER_ID), in SUPER_ADMIN_USER_IDS, OR owner of target/current workspace."""
+    """
+    Returns True if caller is emergency SUPER_ADMIN, owner of the workspace in workspace_members,
+    or legacy TELEGRAM_USER_ID if LEGACY_SINGLE_TENANT_MODE is True.
+    """
     user_id = get_effective_user_id(update)
     if user_id is None:
         return False
     if is_super_admin(user_id):
         return True
-    owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
-    if owner_id is not None:
-        try:
-            if user_id == int(owner_id):
-                return True
-        except (ValueError, TypeError):
-            pass
+
+    # Legacy mode gate
+    if getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False) or getattr(config, 'WORKSPACE_MIGRATION_COMPATIBILITY', False):
+        owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+        if owner_id is not None:
+            try:
+                return user_id == int(owner_id)
+            except (ValueError, TypeError):
+                return False
+        return False
 
     from database.queries import get_workspace_member, get_workspace_by_chat_id
     chat_id = get_effective_chat_id(update)
-    ws_id = workspace_id
+    ws_id = workspace_id or get_user_active_workspace(user_id)
     if not ws_id and chat_id is not None:
         ws = get_workspace_by_chat_id(chat_id)
         if ws:
             ws_id = ws.id
     if ws_id:
         member = get_workspace_member(ws_id, user_id)
-        if member and member.role == 'owner':
+        if member and member.role == 'owner' and member.is_active and getattr(member, 'status', 'active') == 'active':
             return True
     return False
 
 
 def is_authorized_user(update: Update, workspace_id: Optional[str] = None) -> bool:
     """
-    Returns True if caller is authorized:
-    - Primary bot owner
-    - Configured group chat member
-    - Registered workspace member with active status
+    Returns True if caller has active membership in the target/current workspace,
+    or is emergency SUPER_ADMIN. Group membership or chat_id alone does not grant access.
     """
-    if is_owner(update, workspace_id=workspace_id):
-        return True
-    chat_id = get_effective_chat_id(update)
-    group_id = getattr(config, 'TELEGRAM_GROUP_ID', None)
-    if chat_id is not None and group_id is not None:
-        try:
-            if chat_id == int(group_id):
-                return True
-        except (ValueError, TypeError):
-            pass
-
     user_id = get_effective_user_id(update)
+    chat_id = get_effective_chat_id(update)
     if user_id is None or chat_id is None:
         return False
 
-    from database.queries import get_workspace_by_chat_id, get_workspace_member
-    ws = get_workspace_by_chat_id(chat_id)
-    if ws:
-        member = get_workspace_member(ws.id, user_id)
-        if member and member.is_active:
-            return True
-        return False
-
-    if getattr(config, 'ALLOW_PUBLIC_WORKSPACES', False):
+    if is_super_admin(user_id):
         return True
 
+    if getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False) or getattr(config, 'WORKSPACE_MIGRATION_COMPATIBILITY', False):
+        if is_owner(update, workspace_id=workspace_id):
+            return True
+        group_id = getattr(config, 'TELEGRAM_GROUP_ID', None)
+        if group_id is not None:
+            try:
+                if chat_id == int(group_id):
+                    return True
+            except (ValueError, TypeError):
+                pass
+
+    # Multi-tenant mode: Check membership in current workspace
+    from database.queries import get_workspace_by_chat_id, get_workspace_member
+    ws_id = workspace_id or get_user_active_workspace(user_id)
+    if not ws_id:
+        ws = get_workspace_by_chat_id(chat_id)
+        if ws:
+            ws_id = ws.id
+
+    if ws_id:
+        member = get_workspace_member(ws_id, user_id)
+        if member and member.is_active and getattr(member, 'status', 'active') == 'active':
+            return True
+
     return False
+
 
 
 _USER_ACTIVE_WORKSPACES: Dict[int, str] = {}
@@ -377,48 +392,65 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
         if ws is None:
             if not is_authorized_user(update):
                 return None
+            creator_id = user_id
+            if getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False):
+                legacy_owner = getattr(config, 'TELEGRAM_USER_ID', None)
+                if legacy_owner:
+                    try:
+                        creator_id = int(legacy_owner)
+                    except (ValueError, TypeError):
+                        pass
             ws = get_or_create_workspace(
                 chat_id,
                 chat_type=chat_type,
                 title=chat_title,
-                creator_user_id=user_id,
+                creator_user_id=creator_id,
                 username=username,
                 display_name=display_name
             )
 
         member = get_workspace_member(ws.id, user_id)
         if member is None:
-            owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
-            is_global_owner = False
-            if owner_id is not None:
-                try:
-                    is_global_owner = (user_id == int(owner_id))
-                except (ValueError, TypeError):
-                    pass
-
-            if chat_type == 'private' or is_global_owner:
-                member_role = 'owner'
+            if is_super_admin(user_id):
+                caller_role = 'owner'
+            elif getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False):
+                owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+                if owner_id is not None and user_id == int(owner_id):
+                    caller_role = 'owner'
+                elif chat_type in ('group', 'supergroup'):
+                    caller_role = 'viewer'
+                else:
+                    return None
+            elif chat_type in ('group', 'supergroup'):
+                default_role = get_workspace_setting(ws.id, 'default_member_role') or getattr(config, 'DEFAULT_MEMBER_ROLE', 'member')
+                member = add_workspace_member(
+                    ws.id, user_id,
+                    username=username,
+                    display_name=display_name,
+                    role=default_role
+                )
+                caller_role = member.role if member else default_role
+            elif chat_type == 'private' and (getattr(config, 'ALLOW_PUBLIC_WORKSPACES', False) or getattr(config, 'ALLOW_PUBLIC_WORKSPACE_CREATION', False)):
+                member = add_workspace_member(
+                    ws.id, user_id,
+                    username=username,
+                    display_name=display_name,
+                    role='owner'
+                )
+                caller_role = 'owner'
             else:
-                member_role = get_workspace_setting(ws.id, 'default_member_role') or 'member'
-
-            member = add_workspace_member(
-                ws.id, user_id,
-                username=username,
-                display_name=display_name,
-                role=member_role
-            )
-
-        caller_role = member.role if member else 'member'
-        if is_super_admin(user_id):
-            caller_role = 'owner'
+                return None
         else:
-            owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
-            if owner_id is not None:
-                try:
-                    if user_id == int(owner_id):
-                        caller_role = 'owner'
-                except (ValueError, TypeError):
-                    pass
+            if not member.is_active or getattr(member, 'status', 'active') in ('suspended', 'removed'):
+                return None
+            caller_role = member.role
+            if is_super_admin(user_id):
+                caller_role = 'owner'
+            elif getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False):
+                owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+                if owner_id is not None and user_id == int(owner_id):
+                    caller_role = 'owner'
+
 
         return RequestContext(
             workspace_id=ws.id,

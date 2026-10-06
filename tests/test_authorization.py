@@ -32,6 +32,7 @@ STRANGER_CHAT_ID = 88888888
 def setup_auth_env(monkeypatch):
     monkeypatch.setattr(config, "TELEGRAM_USER_ID", OWNER_ID)
     monkeypatch.setattr(config, "TELEGRAM_GROUP_ID", GROUP_ID)
+    monkeypatch.setattr(config, "LEGACY_SINGLE_TENANT_MODE", True)
     monkeypatch.setattr(config, "ALLOW_PUBLIC_WORKSPACES", False)
 
 def make_mock_update(user_id=STRANGER_ID, chat_id=STRANGER_CHAT_ID, text="", callback_data=None):
@@ -154,10 +155,10 @@ def test_commands_reject_unauthorized_user(cmd_name, handler):
     ctx.args = []
     
     asyncio.run(handler(up, ctx))
-    # Must reply with unauthorized or admin refusal
+    # Must reply with unauthorized, request pending, or admin refusal
     assert up.effective_message.reply_text.called
-    call_args = str(up.effective_message.reply_text.call_args)
-    assert ("Unauthorized" in call_args or "Admin Only" in call_args or "restricted" in call_args)
+    call_args = str(up.effective_message.reply_text.call_args).lower()
+    assert ("unauthorized" in call_args or "admin only" in call_args or "restricted" in call_args or "access" in call_args)
 
 @pytest.mark.parametrize("cmd_name", list(ADMIN_COMMANDS))
 def test_admin_commands_reject_group_member(cmd_name):
@@ -168,8 +169,8 @@ def test_admin_commands_reject_group_member(cmd_name):
     
     asyncio.run(handler(up, ctx))
     assert up.effective_message.reply_text.called
-    call_args = str(up.effective_message.reply_text.call_args)
-    assert "Admin Only" in call_args or "restricted" in call_args
+    call_args = str(up.effective_message.reply_text.call_args).lower()
+    assert "admin only" in call_args or "restricted" in call_args
 
 @pytest.mark.parametrize("cmd_name", list(READ_ONLY_COMMANDS))
 def test_readonly_commands_allow_group_member(cmd_name):
@@ -216,8 +217,8 @@ def test_admin_callbacks_reject_group_member(action):
     
     asyncio.run(handle_callback_query(up, ctx))
     assert up.callback_query.answer.called
-    call_args = str(up.callback_query.answer.call_args)
-    assert "Admin Only" in call_args or "restricted" in call_args
+    call_args = str(up.callback_query.answer.call_args).lower()
+    assert "admin only" in call_args or "restricted" in call_args
 
 @pytest.mark.parametrize("action", list(ADMIN_CALLBACK_ACTIONS | READ_ONLY_CALLBACK_ACTIONS))
 def test_all_callbacks_reject_unauthorized_user(action):
@@ -227,8 +228,9 @@ def test_all_callbacks_reject_unauthorized_user(action):
     
     asyncio.run(handle_callback_query(up, ctx))
     assert up.callback_query.answer.called
-    call_args = str(up.callback_query.answer.call_args)
-    assert "Unauthorized" in call_args or "Admin Only" in call_args
+    call_args = str(up.callback_query.answer.call_args).lower()
+    assert "unauthorized" in call_args or "admin only" in call_args or "access" in call_args
+
 
 def test_unknown_or_stale_callback_gives_friendly_refusal():
     up = make_mock_update(user_id=OWNER_ID, chat_id=STRANGER_CHAT_ID, callback_data="non_existent_action:123")

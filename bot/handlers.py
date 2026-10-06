@@ -1463,7 +1463,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         user_id = get_effective_user_id(update)
         target_ws = get_workspace_by_id(target_ws_id)
         if target_ws and user_id:
-            set_user_active_workspace(user_id, target_ws.id)
+            chat_id = getattr(update.effective_chat, 'id', None)
+            if chat_id is not None and target_ws.chat_id == chat_id:
+                set_user_active_workspace(user_id, None)
+            else:
+                set_user_active_workspace(user_id, target_ws.id)
             try:
                 await query.answer(f"Switched to: {target_ws.title}")
             except Exception:
@@ -1521,20 +1525,32 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         target_uid = int(parts[1])
         role = parts[2].lower() if len(parts) > 2 else "member"
         from database.queries import (
-            get_access_request, set_user_permission_and_role,
-            get_workspace_by_chat_id, get_or_create_workspace, add_workspace_member
+            get_access_request, update_access_request_status, set_user_permission_and_role,
+            get_workspace_by_chat_id, get_or_create_workspace, add_workspace_member,
+            get_workspace_by_id, get_default_workspace_id
         )
+        from services.audit_service import log_audit_event
+
         req = get_access_request(target_uid)
         display_name = (req.get('display_name') if req else '') or str(target_uid)
         username = (req.get('username') if req else '') or ''
         chat_id = req.get('chat_id') if req else None
         chat_type = req.get('chat_type', 'private') if req else 'private'
+        req_ws_id = req.get('workspace_id') if req else None
 
-        # Set user permission and approve
+        # Update access request status to approved
+        approver_id = getattr(query.from_user, 'id', 0)
+        update_access_request_status(target_uid, 'approved', reviewed_by=approver_id)
         set_user_permission_and_role(target_uid, role, is_active=True)
 
-        # Provision personal workspace and membership
-        if chat_id:
+        target_ws_id = None
+        # Provision or join workspace and membership
+        if req_ws_id:
+            ws = get_workspace_by_id(req_ws_id)
+            if ws:
+                target_ws_id = ws.id
+                add_workspace_member(ws.id, target_uid, username=username, display_name=display_name, role=role)
+        elif chat_id:
             ws = get_workspace_by_chat_id(chat_id)
             if not ws:
                 ws = get_or_create_workspace(
@@ -1545,12 +1561,25 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     username=username,
                     display_name=display_name
                 )
+            target_ws_id = ws.id
             add_workspace_member(
                 ws.id, target_uid,
                 username=username,
                 display_name=display_name,
                 role=role
             )
+
+        if not target_ws_id:
+            target_ws_id = get_default_workspace_id()
+
+        # Audit log event
+        log_audit_event(
+            workspace_id=target_ws_id,
+            actor_user_id=approver_id,
+            action="access_request_approved",
+            resource=f"user:{target_uid}",
+            details={"role": role, "username": username}
+        )
 
         try:
             await query.answer(f"✅ Approved as {role.title()}!")
@@ -1580,7 +1609,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     chat_id=int(chat_id),
                     text=(
                         f"🎉 <b>Access Approved!</b>\n\n"
-                        f"The owner has approved your access with <b>{role.title()}</b> permissions.\n\n"
+                        f"The administrator has approved your access with <b>{role.title()}</b> permissions.\n\n"
                         f"Send /start to begin tracking your expenses!"
                     ),
                     parse_mode='HTML'
@@ -1595,12 +1624,24 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.answer("⛔ Only the bot owner can deny access.", show_alert=True)
             return
         target_uid = int(parts[1])
-        from database.queries import get_access_request, set_user_permission_and_role
+        from database.queries import get_access_request, update_access_request_status, set_user_permission_and_role, get_default_workspace_id
+        from services.audit_service import log_audit_event
+
         req = get_access_request(target_uid)
         display_name = (req.get('display_name') if req else '') or str(target_uid)
         chat_id = req.get('chat_id') if req else None
+        req_ws_id = (req.get('workspace_id') if req else None) or get_default_workspace_id()
 
+        approver_id = getattr(query.from_user, 'id', 0)
+        update_access_request_status(target_uid, 'rejected', reviewed_by=approver_id)
         set_user_permission_and_role(target_uid, 'viewer', is_active=False)
+
+        log_audit_event(
+            workspace_id=req_ws_id,
+            actor_user_id=approver_id,
+            action="access_request_denied",
+            resource=f"user:{target_uid}"
+        )
 
         try:
             await query.answer("❌ Access Denied & Blocked.")
