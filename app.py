@@ -96,6 +96,16 @@ async def on_startup(app):
         except Exception as e:
             logger.debug(f"Image cleanup notice: {e}")
 
+        # Ensure all user workspaces, group memberships, and historical ledger mappings
+        try:
+            from database.queries import ensure_all_user_workspaces
+            from config import TELEGRAM_GROUP_ID
+            grp_id = int(TELEGRAM_GROUP_ID) if TELEGRAM_GROUP_ID else None
+            ensure_all_user_workspaces(current_chat_title="Payment", current_chat_id=grp_id)
+            logger.info("Ensured all user workspaces and ledger memberships on startup.")
+        except Exception as e:
+            logger.warning(f"ensure_all_user_workspaces startup notice: {e}")
+
     except Exception as e:
         logger.error(f"Critical error during startup restore and initialization: {e}", exc_info=True)
         # Block backup if startup failed critically so we don't upload a corrupted/uninitialized database

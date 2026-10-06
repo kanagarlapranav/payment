@@ -176,3 +176,41 @@ def test_custom_workspace_creation():
             assert ws.title == "Goa Trip"
 
     asyncio.run(_test())
+
+
+def test_owner_historical_transactions_auto_backfill_to_personal_workspace():
+    """Verifies that owner's personal workspace inherits historical group transactions so it is not empty."""
+    from database.queries import (
+        get_default_workspace_id, get_transactions_paginated,
+        get_workspace_by_chat_id, get_balance_setting
+    )
+    from database.db import get_db_connection
+    from utils.dates import utc_now_iso
+    import uuid
+
+    owner_id = 8379948573
+    default_ws_id = get_default_workspace_id()
+
+    # Insert a dummy transaction into default workspace
+    now_utc = utc_now_iso()
+    with get_db_connection() as conn:
+        conn.execute("""
+            INSERT INTO transactions (
+                transaction_type, amount, person_name, transaction_date,
+                category, balance_before, balance_after, uid, workspace_id, occurred_at, created_at, updated_at
+            ) VALUES ('SENT', 500.0, 'Sai Akhil', '2026-10-01', 'General', 2000.0, 1500.0, ?, ?, ?, ?, ?)
+        """, (uuid.uuid4().hex, default_ws_id, now_utc, now_utc, now_utc))
+        conn.commit()
+
+    with patch("config.TELEGRAM_USER_ID", owner_id):
+        ensure_all_user_workspaces(current_chat_title="Payment", current_chat_id=-1004310685141)
+
+    owner_ws = get_workspace_by_chat_id(owner_id)
+    assert owner_ws is not None
+    assert owner_ws.id != default_ws_id
+
+    # Verify transactions in owner personal workspace
+    tx_data = get_transactions_paginated(workspace_id=owner_ws.id)
+    assert tx_data['total_count'] >= 1
+    assert any(t['person_name'] == 'Sai Akhil' for t in tx_data['transactions'])
+
