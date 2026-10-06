@@ -73,18 +73,22 @@ def cleanup_expired():
             _FAILED_LOGINS.pop(ip, None)
 
 
-def create_one_time_code() -> str:
+def create_one_time_code(user_id: Optional[int] = None, workspace_id: Optional[str] = None, role: str = "member") -> str:
     """
     Generates a cryptographically secure 32-character one-time login code.
     Valid for 5 minutes, single-use only.
+    Optionally associates identity (user_id, workspace_id, role) for tenant isolation.
     """
     cleanup_expired()
     code = secrets.token_urlsafe(32)
     _AUTH_CODES[code] = {
         "created_at": time.time(),
-        "used": False
+        "used": False,
+        "user_id": user_id,
+        "workspace_id": workspace_id,
+        "role": role
     }
-    logger.info("Generated new single-use 5m dashboard auth code.")
+    logger.info(f"Generated new single-use dashboard auth code (workspace_id={workspace_id}, user_id={user_id}, role={role}).")
     return code
 
 
@@ -111,6 +115,7 @@ def record_failed_attempt(client_ip: str):
 def exchange_code_for_session(code: str, client_ip: str = "", is_https: bool = False) -> Tuple[bool, str, str]:
     """
     Exchanges a single-use one-time code for a 30-minute session cookie.
+    Transfers associated workspace_id, user_id, role, and issues a CSRF token.
     
     Returns:
         (success: bool, session_or_error: str, cookie_header: str)
@@ -143,23 +148,57 @@ def exchange_code_for_session(code: str, client_ip: str = "", is_https: bool = F
         record_failed_attempt(client_ip)
         return False, "Login code has expired or was already used. Please request a new code via /dashboard in Telegram.", ""
 
-    # Generate session ID
+    # Generate session ID and CSRF token
     session_id = secrets.token_hex(32)
+    csrf_token = secrets.token_hex(16)
     _SESSIONS[session_id] = {
         "created_at": now,
-        "expires_at": now + SESSION_EXPIRY_SECONDS
+        "expires_at": now + SESSION_EXPIRY_SECONDS,
+        "user_id": code_data.get("user_id"),
+        "workspace_id": code_data.get("workspace_id"),
+        "role": code_data.get("role", "member"),
+        "csrf_token": csrf_token
     }
 
     # Reset failed attempts for this IP on successful auth
     if client_ip in _FAILED_LOGINS:
         _FAILED_LOGINS.pop(client_ip, None)
 
-    # Build HttpOnly, SameSite=Lax session cookie (Lax is required so browsers send it following external redirects from Telegram/WhatsApp)
+    # Build HttpOnly, SameSite=Lax session cookie
     secure_flag = "; Secure" if is_https or os.getenv("ENVIRONMENT") == "production" or os.getenv("RENDER") else ""
     cookie_header = f"session_id={session_id}; Path=/; Max-Age={int(SESSION_EXPIRY_SECONDS)}; HttpOnly; SameSite=Lax{secure_flag}"
     
-    logger.info("Successfully exchanged one-time code for 30-minute session cookie.")
+    logger.info(f"Successfully exchanged code for session {session_id[:8]}... (workspace_id={code_data.get('workspace_id')}, role={code_data.get('role', 'member')}).")
     return True, session_id, cookie_header
+
+
+def validate_dashboard_action(
+    session_info: Optional[Dict[str, Any]],
+    required_role: str = "viewer",
+    csrf_token_header: Optional[str] = None,
+    is_mutation: bool = False
+) -> Tuple[bool, str]:
+    """
+    Validates role authorization and anti-CSRF token for dashboard API requests.
+    Returns (authorized: bool, error_message: str).
+    """
+    if not session_info:
+        return False, "Unauthorized session. Please login via /dashboard in Telegram."
+
+    role = session_info.get("role", "viewer")
+    from bot.auth import WORKSPACE_ROLE_HIERARCHY
+    caller_level = WORKSPACE_ROLE_HIERARCHY.get(role, 1)
+    req_level = WORKSPACE_ROLE_HIERARCHY.get(required_role, 1)
+
+    if caller_level < req_level:
+        return False, f"Forbidden: This action requires '{required_role.upper()}' role (your role: '{role.title()}')."
+
+    if is_mutation:
+        expected_csrf = session_info.get("csrf_token")
+        if not expected_csrf or not csrf_token_header or not compare_secrets(expected_csrf, csrf_token_header):
+            return False, "Invalid or missing CSRF token (X-CSRF-Token)."
+
+    return True, ""
 
 
 def validate_session_id(session_id: Optional[str]) -> bool:
@@ -183,6 +222,44 @@ def validate_session_id(session_id: Optional[str]) -> bool:
     except Exception as e:
         logger.debug(f"Session ID validation notice: {e}")
         return False
+
+
+def get_session_info(session_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Returns session metadata dictionary (user_id, workspace_id, created_at, expires_at) if valid."""
+    cleanup_expired()
+    if not session_id:
+        return None
+
+    try:
+        for active_sid, data in list(_SESSIONS.items()):
+            if compare_secrets(active_sid, session_id):
+                if time.time() < data.get("expires_at", 0):
+                    return data
+                else:
+                    _SESSIONS.pop(active_sid, None)
+                    return None
+        return None
+    except Exception as e:
+        logger.debug(f"Session info lookup notice: {e}")
+        return None
+
+
+def get_session_info_from_cookie(cookie_header: Optional[str], session_param: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Extracts session ID from Cookie header or query param fallback and returns its session info."""
+    sid = None
+    if cookie_header:
+        try:
+            cookie = SimpleCookie()
+            cookie.load(cookie_header)
+            if "session_id" in cookie:
+                sid = cookie["session_id"].value
+        except Exception:
+            pass
+
+    if not sid and session_param:
+        sid = session_param
+
+    return get_session_info(sid) if sid else None
 
 
 def validate_session(cookie_header: Optional[str]) -> bool:

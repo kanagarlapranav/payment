@@ -174,10 +174,131 @@ def export_database_to_json(output_path: Path = None) -> dict:
                 logger.error(f"Error exporting database to JSON: {e}", exc_info=True)
                 return {}
 
+def export_workspace_backup(workspace_id: str, output_path: Path = None) -> dict:
+    """
+    Exports all data belonging exclusively to a tenant workspace (transactions, members,
+    workspace_settings, custom_menu_items) to an isolated JSON backup with Format v2 checksum.
+    Saves atomically under EXPORT_LOCK and LEDGER_LOCK.
+    """
+    if not workspace_id:
+        return {}
+    
+    from database.queries import get_workspace_by_id, get_all_workspace_members, get_balance_setting
+    ws = get_workspace_by_id(workspace_id)
+    if not ws:
+        logger.warning(f"Cannot export backup: workspace '{workspace_id}' not found.")
+        return {}
+
+    path = output_path or (DATA_DIR / f'backup_workspace_{workspace_id}.json')
+    with EXPORT_LOCK:
+        with LEDGER_LOCK:
+            try:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    
+                    # Fetch workspace transactions
+                    cursor.execute(
+                        "SELECT * FROM transactions WHERE workspace_id = ? ORDER BY occurred_at ASC, created_at ASC, id ASC",
+                        (str(workspace_id),)
+                    )
+                    tx_rows = [dict(row) for row in cursor.fetchall()]
+                    for tx in tx_rows:
+                        for k, v in tx.items():
+                            if isinstance(v, (datetime, )):
+                                tx[k] = v.isoformat()
+                            elif v is not None and not isinstance(v, (int, float, str, bool)):
+                                tx[k] = str(v)
+
+                    # Fetch workspace settings
+                    cursor.execute(
+                        "SELECT key, value FROM workspace_settings WHERE workspace_id = ?",
+                        (str(workspace_id),)
+                    )
+                    settings = {row['key']: row['value'] for row in cursor.fetchall()}
+                    
+                    # Fetch members
+                    members = get_all_workspace_members(workspace_id)
+                    members_data = []
+                    for m in members:
+                        m_dict = dict(m)
+                        for k, v in m_dict.items():
+                            if isinstance(v, datetime):
+                                m_dict[k] = v.isoformat()
+                        members_data.append(m_dict)
+
+                    # Fetch custom cafeteria menu dishes for this workspace
+                    cursor.execute(
+                        "SELECT name, price, category, is_veg FROM custom_menu_items WHERE workspace_id = ? ORDER BY id ASC",
+                        (str(workspace_id),)
+                    )
+                    menu_items = [dict(row) for row in cursor.fetchall()]
+
+                    # Fetch live count and derived balance
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM transactions WHERE workspace_id = ? AND deleted_at IS NULL",
+                        (str(workspace_id),)
+                    )
+                    live_count = cursor.fetchone()[0]
+
+                    current_balance = get_balance_setting(workspace_id=workspace_id)
+                    now_utc = utc_now_iso()
+                    rev = int(settings.get('backup_revision', '1'))
+
+                # Build payload for checksum
+                backup_data = {
+                    "version": 2,
+                    "format_version": "workspace_v1",
+                    "workspace_id": str(workspace_id),
+                    "workspace": dict(ws),
+                    "members": members_data,
+                    "revision": rev,
+                    "exported_at": now_utc,
+                    "transaction_count": len(tx_rows),
+                    "live_count": live_count,
+                    "empty_ledger": (live_count == 0),
+                    "balance": current_balance,
+                    "settings": settings,
+                    "custom_menu_items": menu_items,
+                    "budgets": [],
+                    "transactions": tx_rows,
+                }
+                checksum = compute_canonical_checksum(backup_data)
+                backup_data["checksum"] = checksum
+
+                # Atomic write
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}_{threading.get_ident()}")
+                try:
+                    with open(tmp_path, 'w', encoding='utf-8') as f:
+                        json.dump(backup_data, f, indent=2, ensure_ascii=False)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    for attempt in range(10):
+                        try:
+                            tmp_path.replace(path)
+                            break
+                        except PermissionError:
+                            if attempt == 9:
+                                raise
+                            import time
+                            time.sleep(0.02 * (attempt + 1))
+                finally:
+                    if tmp_path.exists():
+                        try:
+                            tmp_path.unlink()
+                        except OSError:
+                            pass
+
+                logger.info(f"Exported workspace {workspace_id} ({len(tx_rows)} txs, {live_count} live) to {path}")
+                return backup_data
+            except Exception as e:
+                logger.error(f"Error exporting workspace backup: {e}", exc_info=True)
+                return {}
+
 def compute_canonical_checksum(data_dict: dict) -> str:
     """
     Computes SHA-256 over canonical JSON (sort_keys=True, ensure_ascii=False, compact separators)
-    of version, revision, settings, custom_menu_items, budgets, and transactions.
+    of version, revision, settings, custom_menu_items, budgets, transactions, and optionally workspace metadata.
     """
     payload_for_hash = {
         "version": data_dict.get("version", 2),
@@ -187,6 +308,12 @@ def compute_canonical_checksum(data_dict: dict) -> str:
         "budgets": data_dict.get("budgets", []),
         "transactions": data_dict.get("transactions", []),
     }
+    if "workspace_id" in data_dict:
+        payload_for_hash["workspace_id"] = data_dict["workspace_id"]
+    if "workspace" in data_dict:
+        payload_for_hash["workspace"] = data_dict["workspace"]
+    if "members" in data_dict:
+        payload_for_hash["members"] = data_dict["members"]
     canonical_str = json.dumps(
         payload_for_hash,
         sort_keys=True,
@@ -395,9 +522,10 @@ def preview_database_import(input_path: Path = None, data_dict: dict = None) -> 
         'backup_balance': data_dict.get('balance', 0.0),
     }
 
-def import_database_from_json(input_path: Path = None, data_dict: dict = None, allow_empty_ledger: bool = False) -> dict:
+def import_database_from_json(input_path: Path = None, data_dict: dict = None, allow_empty_ledger: bool = False, target_workspace_id: str = None) -> dict:
     """
     Imports transactions, custom menu items, and settings from JSON into SQLite database.
+    Supports optional target_workspace_id to isolate imports to a specific tenant workspace.
     Order:
       1. Parse JSON
       2. Validate schema
@@ -411,7 +539,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
          Idempotent on re-import.
       8. v1 backups (no uid): never match by local id. Skipped if live row has same reference
          or (type, amount, date, time, person). Otherwise insert with new generated uid.
-      9. Recalculate balances inside the same connection.
+      9. Recalculate balances inside the same connection with workspace scoping.
       10. Compare recalculated balance with backup balance. On mismatch, report loudly.
     """
     path = input_path or BACKUP_JSON_PATH
@@ -437,6 +565,10 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
     custom_menu_items = data_dict.get("custom_menu_items", [])
     version = data_dict.get("version", 1)
 
+    from database.queries import get_default_workspace_id
+    fallback_ws = get_default_workspace_id()
+    target_ws = target_workspace_id or data_dict.get('workspace_id')
+
     with LEDGER_LOCK:
         try:
             with get_db_connection() as conn:
@@ -448,7 +580,13 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                 local_rev = int(rev_row['value']) if rev_row and rev_row['value'] and str(rev_row['value']).isdigit() else 1
                 inc_rev = int(data_dict.get('revision', 1))
 
-                cursor.execute("SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL")
+                if target_ws:
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL AND (workspace_id = ? OR (workspace_id IS NULL AND ? = ?))",
+                        (target_ws, target_ws, fallback_ws)
+                    )
+                else:
+                    cursor.execute("SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL")
                 local_live_count = cursor.fetchone()[0]
 
                 is_empty_backup = bool(data_dict.get('empty_ledger') or len(transactions) == 0)
@@ -471,7 +609,13 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                             'error': "Restoring an empty backup over live transactions requires explicit owner confirmation."
                         }
 
-                cursor.execute("SELECT * FROM transactions")
+                if target_ws:
+                    cursor.execute(
+                        "SELECT * FROM transactions WHERE workspace_id = ? OR (workspace_id IS NULL AND ? = ?)",
+                        (target_ws, target_ws, fallback_ws)
+                    )
+                else:
+                    cursor.execute("SELECT * FROM transactions")
                 existing_rows = cursor.fetchall()
                 existing_by_uid = {r['uid']: dict(r) for r in existing_rows if r['uid']}
 
@@ -482,7 +626,13 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                 if version >= 2:
                     now_utc = utc_now_iso()
                     if is_empty_backup:
-                        cursor.execute("UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE deleted_at IS NULL", (now_utc, now_utc))
+                        if target_ws:
+                            cursor.execute(
+                                "UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE deleted_at IS NULL AND (workspace_id = ? OR (workspace_id IS NULL AND ? = ?))",
+                                (now_utc, now_utc, target_ws, target_ws, fallback_ws)
+                            )
+                        else:
+                            cursor.execute("UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE deleted_at IS NULL", (now_utc, now_utc))
                     for tx in transactions:
                         tx_uid = tx['uid']
                         amt_dec = parse_decimal_amount(tx.get('amount'), allow_zero=False)
@@ -506,6 +656,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                         occurred_at = tx.get('occurred_at') or build_occurred_at(tx.get('transaction_date'), tx.get('transaction_time'))
                         created_at = tx.get('created_at') or utc_now_iso()
                         incoming_updated = tx.get('updated_at') or utc_now_iso()
+                        row_ws = target_ws or tx.get('workspace_id') or fallback_ws
 
                         if tx_uid not in existing_by_uid:
                             cursor.execute('''
@@ -514,8 +665,8 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                                     upi_id, phone_number, transaction_date, transaction_time, reference_number,
                                     transaction_id, payment_app, bank_name, bank_account, payment_status,
                                     category, balance_before, balance_after, ocr_text, original_image_path,
-                                    telegram_message_id, telegram_chat_id, uid, occurred_at, deleted_at, created_at, updated_at
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    telegram_message_id, telegram_chat_id, uid, workspace_id, occurred_at, deleted_at, created_at, updated_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             ''', (
                                 tt_val, amt_val, p_name, s_name, r_name,
                                 tx.get('upi_id', ''), tx.get('phone_number', ''), tx.get('transaction_date'),
@@ -524,14 +675,15 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                                 tx.get('payment_status', 'SUCCESS'), cat_val, bal_before, bal_after,
                                 tx.get('ocr_text', ''), tx.get('original_image_path', ''),
                                 str(tx.get('telegram_message_id', '')), str(tx.get('telegram_chat_id', '')),
-                                tx_uid, occurred_at, tx.get('deleted_at'), created_at, incoming_updated
+                                tx_uid, row_ws, occurred_at, tx.get('deleted_at'), created_at, incoming_updated
                             ))
                             inserted_count += 1
                             existing_by_uid[tx_uid] = {
                                 'id': cursor.lastrowid,
                                 'uid': tx_uid,
                                 'updated_at': incoming_updated,
-                                'deleted_at': tx.get('deleted_at')
+                                'deleted_at': tx.get('deleted_at'),
+                                'workspace_id': row_ws
                             }
                         else:
                             local_row = existing_by_uid[tx_uid]
@@ -566,7 +718,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                                         payment_app = ?, bank_name = ?, bank_account = ?, payment_status = ?,
                                         category = ?, balance_before = ?, balance_after = ?, ocr_text = ?,
                                         original_image_path = ?, telegram_message_id = ?, telegram_chat_id = ?,
-                                        occurred_at = ?, deleted_at = ?, updated_at = ?
+                                        occurred_at = ?, deleted_at = ?, updated_at = ?, workspace_id = ?
                                     WHERE id = ?
                                 ''', (
                                     tt_val, amt_val, p_name, s_name, r_name,
@@ -576,11 +728,12 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                                     tx.get('payment_status', 'SUCCESS'), cat_val, bal_before, bal_after,
                                     tx.get('ocr_text', ''), tx.get('original_image_path', ''),
                                     str(tx.get('telegram_message_id', '')), str(tx.get('telegram_chat_id', '')),
-                                    occurred_at, tx.get('deleted_at'), incoming_updated, db_id
+                                    occurred_at, tx.get('deleted_at'), incoming_updated, row_ws, db_id
                                 ))
                                 updated_count += 1
                                 local_row['updated_at'] = incoming_updated
                                 local_row['deleted_at'] = tx.get('deleted_at')
+                                local_row['workspace_id'] = row_ws
                             else:
                                 skipped_count += 1
                 else:
@@ -606,6 +759,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                         s_name = validate_string_length(tx.get('sender_name', ''), max_length=120)
                         r_name = validate_string_length(tx.get('recipient_name', ''), max_length=120)
                         cat_val = validate_string_length(tx.get('category', 'General'), max_length=100) or 'General'
+                        row_ws = target_ws or tx.get('workspace_id') or fallback_ws
 
                         fp = (
                             tt_val,
@@ -626,8 +780,8 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                                     upi_id, phone_number, transaction_date, transaction_time, reference_number,
                                     transaction_id, payment_app, bank_name, bank_account, payment_status,
                                     category, balance_before, balance_after, ocr_text, original_image_path,
-                                    telegram_message_id, telegram_chat_id, uid, occurred_at, deleted_at, created_at, updated_at
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    telegram_message_id, telegram_chat_id, uid, workspace_id, occurred_at, deleted_at, created_at, updated_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             ''', (
                                 tt_val, amt_val, p_name, s_name, r_name,
                                 tx.get('upi_id', ''), tx.get('phone_number', ''), tx.get('transaction_date'),
@@ -636,7 +790,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                                 tx.get('payment_status', 'SUCCESS'), cat_val, 0.0, 0.0,
                                 tx.get('ocr_text', ''), tx.get('original_image_path', ''),
                                 str(tx.get('telegram_message_id', '')), str(tx.get('telegram_chat_id', '')),
-                                new_uid, occurred_at, None, now_utc, now_utc
+                                new_uid, row_ws, occurred_at, None, now_utc, now_utc
                             ))
                             inserted_count += 1
                             if ref_no:
@@ -650,27 +804,39 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                     dish_name = validate_string_length(dish.get('name', ''), max_length=100, field_name="Dish name", required=True)
                     dish_price = float(parse_decimal_amount(dish.get('price', 0.0), allow_zero=False))
                     dish_cat = validate_string_length(dish.get('category', 'Snacks & Tea'), max_length=50) or "Snacks & Tea"
+                    menu_ws = target_ws or dish.get('workspace_id') or fallback_ws
                     cursor.execute('''
-                        INSERT INTO custom_menu_items (name, price, category, is_veg)
-                        VALUES (?, ?, ?, ?)
+                        INSERT INTO custom_menu_items (name, price, category, is_veg, workspace_id)
+                        VALUES (?, ?, ?, ?, ?)
                         ON CONFLICT(name) DO UPDATE SET
                             price = excluded.price,
                             category = excluded.category,
-                            is_veg = excluded.is_veg
-                    ''', (dish_name, dish_price, dish_cat, int(dish.get('is_veg', 1))))
+                            is_veg = excluded.is_veg,
+                            workspace_id = excluded.workspace_id
+                    ''', (dish_name, dish_price, dish_cat, int(dish.get('is_veg', 1)), menu_ws))
 
                 # Restore initial_balance and monthly_budget from settings if present
+                now_utc = utc_now_iso()
                 for k, v in settings.items():
                     if k in ('initial_balance', 'monthly_budget'):
                         try:
                             v = str(float(parse_decimal_amount(v, allow_zero=True)))
-                            cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))
+                            if target_ws:
+                                cursor.execute("""
+                                    INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+                                    VALUES (?, ?, ?, ?)
+                                    ON CONFLICT(workspace_id, key) DO UPDATE SET
+                                        value = excluded.value,
+                                        updated_at = excluded.updated_at
+                                """, (target_ws, k, str(v), now_utc))
+                            else:
+                                cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))
                         except Exception:
                             pass
 
                 # Step 8: Recalculate balance chain over live rows inside the same connection
                 from services.balance_service import recalculate_in_connection
-                derived_bal = recalculate_in_connection(conn)
+                derived_bal = recalculate_in_connection(conn, workspace_id=target_ws)
 
                 # Step 9: Compare recalculated balance with backup's balance
                 stored_bal = data_dict.get('balance')
@@ -706,7 +872,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
 
                 conn.commit()
 
-            logger.info(f"Imported database from JSON: {inserted_count} inserted, {updated_count} updated, {skipped_count} skipped.")
+            logger.info(f"Imported database from JSON: {inserted_count} inserted, {updated_count} updated, {skipped_count} skipped (workspace={target_ws}).")
             return {
                 'success': True,
                 'inserted': inserted_count,
@@ -717,6 +883,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                 'derived_balance': float(derived_dec),
                 'backup_balance': float(stored_dec) if stored_dec is not None else None,
                 'balance_discrepancy': balance_discrepancy,
+                'workspace_id': target_ws
             }
         except Exception as e:
             logger.error(f"Error importing database from JSON (rolled back): {e}", exc_info=True)

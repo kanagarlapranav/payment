@@ -8,25 +8,30 @@ from utils.dates import get_current_time_in_tz, utc_now_iso
 from utils.validation import parse_decimal_amount, validate_uid, CENT
 from config import logger
 
-def recalculate_in_connection(conn: sqlite3.Connection) -> float:
+def recalculate_in_connection(conn: sqlite3.Connection, workspace_id: str = None) -> float:
     """
-    Recalculates balance_before and balance_after for all live transactions
+    Recalculates balance_before and balance_after for all live transactions in the workspace
     strictly ordered by: occurred_at ASC, created_at ASC, id ASC.
     Uses Decimal arithmetic:
       - SENT subtracts
       - RECEIVED adds
       - TRANSFER keeps running_balance unchanged (bal_after == bal_before)
       - Starts from initial_balance
-      - Sets current_balance in settings (empty ledger = initial_balance)
+      - Sets current_balance in workspace_settings and settings (empty ledger = initial_balance)
       - Must NOT touch updated_at on transactions.
     Returns the final current_balance as float.
     Raises ValueError on invalid/corrupted amounts or invalid transaction types.
     """
     cursor = conn.cursor()
+    from database.queries import get_default_workspace_id
+    ws_id = workspace_id or get_default_workspace_id()
 
-    # 1. Fetch initial_balance anchor from settings
-    cursor.execute("SELECT value FROM settings WHERE key = 'initial_balance'")
+    # 1. Fetch initial_balance anchor from workspace_settings, fallback to settings
+    cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'initial_balance'", (ws_id,))
     row = cursor.fetchone()
+    if not row:
+        cursor.execute("SELECT value FROM settings WHERE key = 'initial_balance'")
+        row = cursor.fetchone()
     init_val_str = row['value'] if row and row['value'] is not None else '0.0'
     try:
         raw_init = Decimal(str(init_val_str))
@@ -36,13 +41,14 @@ def recalculate_in_connection(conn: sqlite3.Connection) -> float:
     except Exception as err:
         raise ValueError(f"Invalid initial_balance in settings: {init_val_str!r} ({err})")
 
-    # 2. Fetch all live transactions in strict chronological order
+    # 2. Fetch all live transactions for this workspace in strict chronological order
     cursor.execute('''
         SELECT id, transaction_type, amount, occurred_at, created_at
         FROM transactions
-        WHERE deleted_at IS NULL
+        WHERE (workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')
+          AND deleted_at IS NULL
         ORDER BY occurred_at ASC, created_at ASC, id ASC
-    ''')
+    ''', (ws_id,))
     txs = cursor.fetchall()
 
     # 3. Iterate through chain updating balances without touching updated_at
@@ -70,16 +76,22 @@ def recalculate_in_connection(conn: sqlite3.Connection) -> float:
             (float(bal_before), float(bal_after), tx['id'])
         )
 
-    # 4. Update current_balance in settings (empty ledger = initial_balance)
+    # 4. Update current_balance in workspace_settings and settings (empty ledger = initial_balance)
     final_float = float(running_balance.quantize(CENT))
+    now_utc = utc_now_iso()
     cursor.execute(
-        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('current_balance', ?, ?)",
-        (str(final_float), utc_now_iso())
+        "INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at) VALUES (?, 'current_balance', ?, ?)",
+        (ws_id, str(final_float), now_utc)
     )
+    if ws_id == get_default_workspace_id():
+        cursor.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('current_balance', ?, ?)",
+            (str(final_float), now_utc)
+        )
 
     return final_float
 
-def recalculate_all_balances() -> float:
+def recalculate_all_balances(workspace_id: str = None) -> float:
     """
     Recalculates balance_before and balance_after for all live transactions in chronological order
     under LEDGER_LOCK. Uses Decimal arithmetic rounded to 2 decimals.
@@ -87,11 +99,11 @@ def recalculate_all_balances() -> float:
     """
     with LEDGER_LOCK:
         with get_db_connection() as conn:
-            final_float = recalculate_in_connection(conn)
+            final_float = recalculate_in_connection(conn, workspace_id=workspace_id)
             conn.commit()
             return final_float
 
-def set_explicit_balance(new_balance: float) -> float:
+def set_explicit_balance(new_balance: float, workspace_id: str = None) -> float:
     """
     Sets the current balance to new_balance by adjusting initial_balance anchor such that
     current_balance equals the target after recalculation.
@@ -99,16 +111,28 @@ def set_explicit_balance(new_balance: float) -> float:
     Later recalculations will never overwrite this balance.
     Runs under LEDGER_LOCK with Decimal precision.
     """
+    from database.queries import get_default_workspace_id
+    default_ws = get_default_workspace_id()
+    target_ws = workspace_id or default_ws
+
     with LEDGER_LOCK:
         dec_new = parse_decimal_amount(new_balance, allow_zero=True)
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('''
-                SELECT id, transaction_type, amount
-                FROM transactions
-                WHERE deleted_at IS NULL
-                ORDER BY occurred_at ASC, created_at ASC, id ASC
-            ''')
+            if target_ws:
+                cursor.execute('''
+                    SELECT id, transaction_type, amount
+                    FROM transactions
+                    WHERE (workspace_id = ? OR workspace_id IS NULL) AND deleted_at IS NULL
+                    ORDER BY occurred_at ASC, created_at ASC, id ASC
+                ''', (target_ws,))
+            else:
+                cursor.execute('''
+                    SELECT id, transaction_type, amount
+                    FROM transactions
+                    WHERE deleted_at IS NULL
+                    ORDER BY occurred_at ASC, created_at ASC, id ASC
+                ''')
             txs = cursor.fetchall()
             net_delta = Decimal('0.00')
             for tx in txs:
@@ -129,17 +153,25 @@ def set_explicit_balance(new_balance: float) -> float:
             calc_initial = dec_new - net_delta
             initial_float = float(calc_initial.quantize(CENT))
             now_utc = utc_now_iso()
-            cursor.execute(
-                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('initial_balance', ?, ?)",
-                (str(initial_float), now_utc)
-            )
-            cursor.execute(
-                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('database_initialized', '1', ?)",
-                (now_utc,)
-            )
+
+            if target_ws:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at) VALUES (?, 'initial_balance', ?, ?)",
+                    (target_ws, str(initial_float), now_utc)
+                )
+
+            if not target_ws or target_ws == default_ws:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('initial_balance', ?, ?)",
+                    (str(initial_float), now_utc)
+                )
+                cursor.execute(
+                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('database_initialized', '1', ?)",
+                    (now_utc,)
+                )
 
             # Recalculate within this same connection
-            final_bal = recalculate_in_connection(conn)
+            final_bal = recalculate_in_connection(conn, workspace_id=target_ws)
             from database.queries import increment_revision_and_mark_dirty
             increment_revision_and_mark_dirty(conn)
             conn.commit()
@@ -167,17 +199,28 @@ def update_balance_for_transaction(transaction: Transaction) -> Transaction:
     transaction.balance_after = final_bal
     return transaction
 
-def get_today_summary() -> TransactionSummary:
-    """Calculates summary of today's transactions (live rows only) with Decimal precision."""
+def get_today_summary(workspace_id: str = None) -> TransactionSummary:
+    """Calculates summary of today's transactions (live rows only) with Decimal precision and workspace isolation."""
+    from database.queries import get_default_workspace_id
     today = get_current_time_in_tz().date()
+    ws_id = workspace_id or get_default_workspace_id()
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT transaction_type, amount FROM transactions WHERE transaction_date = ? AND deleted_at IS NULL", (str(today),))
+        cursor.execute("""
+            SELECT transaction_type, amount 
+            FROM transactions 
+            WHERE transaction_date = ? 
+              AND (workspace_id = ? OR workspace_id IS NULL)
+              AND deleted_at IS NULL
+        """, (str(today), ws_id))
         rows = cursor.fetchall()
 
-        cursor.execute("SELECT value FROM settings WHERE key = 'current_balance'")
+        cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'current_balance'", (ws_id,))
         bal_row = cursor.fetchone()
+        if not bal_row:
+            cursor.execute("SELECT value FROM settings WHERE key = 'current_balance'")
+            bal_row = cursor.fetchone()
         cur_bal = float(bal_row['value']) if bal_row and bal_row['value'] is not None else 0.0
 
         summary = TransactionSummary()
@@ -199,15 +242,26 @@ def get_today_summary() -> TransactionSummary:
         summary.net_change = float(total_received - total_sent)
         return summary
 
-def get_overall_summary() -> TransactionSummary:
-    """Calculates summary across ALL live transactions with Decimal precision."""
+def get_overall_summary(workspace_id: str = None) -> TransactionSummary:
+    """Calculates summary across live transactions with Decimal precision and workspace isolation."""
+    from database.queries import get_default_workspace_id
+    ws_id = workspace_id or get_default_workspace_id()
+
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT transaction_type, amount FROM transactions WHERE deleted_at IS NULL")
+        cursor.execute("""
+            SELECT transaction_type, amount 
+            FROM transactions 
+            WHERE (workspace_id = ? OR workspace_id IS NULL) 
+              AND deleted_at IS NULL
+        """, (ws_id,))
         rows = cursor.fetchall()
 
-        cursor.execute("SELECT value FROM settings WHERE key = 'current_balance'")
+        cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'current_balance'", (ws_id,))
         bal_row = cursor.fetchone()
+        if not bal_row:
+            cursor.execute("SELECT value FROM settings WHERE key = 'current_balance'")
+            bal_row = cursor.fetchone()
         cur_bal = float(bal_row['value']) if bal_row and bal_row['value'] is not None else 0.0
 
         summary = TransactionSummary()
@@ -237,16 +291,17 @@ def resequence_transaction_ids() -> None:
     logger.debug("resequence_transaction_ids called — skipped to preserve stable permanent transaction IDs.")
     return
 
-def validate_ledger_invariants(db_path=None) -> List[str]:
+def validate_ledger_invariants(db_path=None, workspace_id: str = None) -> List[str]:
     """
     Validates all ledger integrity invariants against the SQLite database.
+    Multi-tenant aware: checks reference uniqueness and continuity per workspace.
     Checks:
-      - broken chain (balance_before / balance_after continuity)
+      - broken chain (balance_before / balance_after continuity per workspace)
       - wrong signs (SENT increases balance, RECEIVED decreases, negative amounts)
       - invalid transaction types (must be SENT, RECEIVED, or TRANSFER)
       - non-positive amounts (amount <= 0, NaN, Inf)
-      - current_balance mismatch in settings
-      - duplicate live reference numbers
+      - current_balance mismatch in workspace_settings / settings
+      - duplicate live reference numbers within a workspace
       - invalid or missing UIDs
       - inconsistent deleted_at values
     Never auto-repairs. Returns a list of human-readable error strings.
@@ -255,39 +310,16 @@ def validate_ledger_invariants(db_path=None) -> List[str]:
 
     with get_db_connection(db_path=db_path) as conn:
         cursor = conn.cursor()
+        from database.queries import get_default_workspace_id
+        default_ws = get_default_workspace_id()
 
-        # 1. Fetch settings
-        cursor.execute("SELECT value FROM settings WHERE key = 'initial_balance'")
-        init_row = cursor.fetchone()
-        try:
-            raw_init = Decimal(str(init_row['value'])) if init_row else Decimal('0.00')
-            if not raw_init.is_finite():
-                errors.append("Invalid initial_balance setting: non-finite Decimal")
-                initial_balance = Decimal('0.00')
-            else:
-                initial_balance = raw_init.quantize(CENT)
-        except Exception as err:
-            errors.append(f"Invalid initial_balance setting: {err}")
-            initial_balance = Decimal('0.00')
-
-        cursor.execute("SELECT value FROM settings WHERE key = 'current_balance'")
-        cur_row = cursor.fetchone()
-        try:
-            raw_cur = Decimal(str(cur_row['value'])) if cur_row else None
-            if raw_cur is not None and not raw_cur.is_finite():
-                errors.append("Invalid current_balance setting: non-finite Decimal")
-                current_balance = None
-            else:
-                current_balance = raw_cur.quantize(CENT) if raw_cur is not None else None
-        except Exception as err:
-            errors.append(f"Invalid current_balance setting: {err}")
-            current_balance = None
-
-        # 2. Inspect all rows (live and deleted) for structural validity
+        # 1. Inspect all rows (live and deleted) for structural validity
         cursor.execute("SELECT * FROM transactions ORDER BY id ASC")
         all_txs = cursor.fetchall()
 
         seen_live_refs = {}
+        distinct_workspaces = set()
+
         for row in all_txs:
             row_id = row['id']
             tt = row['transaction_type']
@@ -295,6 +327,8 @@ def validate_ledger_invariants(db_path=None) -> List[str]:
             uid = row['uid']
             del_at = row['deleted_at']
             ref = row['reference_number']
+            ws_id = row['workspace_id'] or default_ws
+            distinct_workspaces.add(ws_id)
 
             # Invalid transaction types
             if tt not in ('SENT', 'RECEIVED', 'TRANSFER'):
@@ -314,13 +348,14 @@ def validate_ledger_invariants(db_path=None) -> List[str]:
             except Exception as err:
                 errors.append(f"Row {row_id}: invalid or missing UID {uid!r} ({err})")
 
-            # Duplicate live reference numbers
+            # Duplicate live reference numbers scoped per workspace
             if del_at is None and ref and str(ref).strip():
                 clean_ref = str(ref).strip()
-                if clean_ref in seen_live_refs:
-                    errors.append(f"Duplicate live reference_number {clean_ref!r} on rows {seen_live_refs[clean_ref]} and {row_id}")
+                ref_key = (ws_id, clean_ref)
+                if ref_key in seen_live_refs:
+                    errors.append(f"Duplicate live reference_number {clean_ref!r} on rows {seen_live_refs[ref_key]} and {row_id}")
                 else:
-                    seen_live_refs[clean_ref] = row_id
+                    seen_live_refs[ref_key] = row_id
 
             # Inconsistent deleted_at
             if del_at is not None:
@@ -328,72 +363,118 @@ def validate_ledger_invariants(db_path=None) -> List[str]:
                 if not del_str or del_str.lower() in ('none', 'null', '0', 'false'):
                     errors.append(f"Row {row_id}: inconsistent deleted_at value {del_at!r}")
 
-        # 3. Check ledger continuity on live transactions in strict chronological order
-        cursor.execute('''
-            SELECT id, transaction_type, amount, balance_before, balance_after, occurred_at, created_at
-            FROM transactions
-            WHERE deleted_at IS NULL
-            ORDER BY occurred_at ASC, created_at ASC, id ASC
-        ''')
-        live_txs = cursor.fetchall()
+        # 2. Determine workspaces to validate for continuity
+        if workspace_id:
+            target_workspaces = [workspace_id]
+        elif distinct_workspaces:
+            target_workspaces = sorted(distinct_workspaces)
+        else:
+            target_workspaces = [default_ws]
 
-        expected_balance = initial_balance
-        for row in live_txs:
-            row_id = row['id']
-            tt = row['transaction_type']
+        # 3. Check ledger continuity on live transactions per workspace
+        for ws in target_workspaces:
+            # Fetch initial_balance for this workspace
+            cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'initial_balance'", (ws,))
+            ws_init_row = cursor.fetchone()
+            if not ws_init_row:
+                cursor.execute("SELECT value FROM settings WHERE key = 'initial_balance'")
+                ws_init_row = cursor.fetchone()
 
             try:
-                raw_amt = Decimal(str(row['amount']))
-                if not raw_amt.is_finite() or raw_amt <= 0:
+                raw_init = Decimal(str(ws_init_row['value'])) if ws_init_row else Decimal('0.00')
+                if not raw_init.is_finite():
+                    errors.append(f"Workspace {ws}: Invalid initial_balance setting: non-finite Decimal")
+                    ws_initial_bal = Decimal('0.00')
+                else:
+                    ws_initial_bal = raw_init.quantize(CENT)
+            except Exception as err:
+                errors.append(f"Workspace {ws}: Invalid initial_balance setting: {err}")
+                ws_initial_bal = Decimal('0.00')
+
+            # Fetch current_balance for this workspace
+            cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'current_balance'", (ws,))
+            ws_cur_row = cursor.fetchone()
+            if not ws_cur_row:
+                cursor.execute("SELECT value FROM settings WHERE key = 'current_balance'")
+                ws_cur_row = cursor.fetchone()
+
+            try:
+                raw_cur = Decimal(str(ws_cur_row['value'])) if ws_cur_row else None
+                if raw_cur is not None and not raw_cur.is_finite():
+                    errors.append(f"Workspace {ws}: Invalid current_balance setting: non-finite Decimal")
+                    ws_current_bal = None
+                else:
+                    ws_current_bal = raw_cur.quantize(CENT) if raw_cur is not None else None
+            except Exception as err:
+                errors.append(f"Workspace {ws}: Invalid current_balance setting: {err}")
+                ws_current_bal = None
+
+            cursor.execute('''
+                SELECT id, transaction_type, amount, balance_before, balance_after, occurred_at, created_at
+                FROM transactions
+                WHERE (workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')
+                  AND deleted_at IS NULL
+                ORDER BY occurred_at ASC, created_at ASC, id ASC
+            ''', (ws,))
+            live_txs = cursor.fetchall()
+
+            expected_balance = ws_initial_bal
+            for row in live_txs:
+                row_id = row['id']
+                tt = row['transaction_type']
+
+                try:
+                    raw_amt = Decimal(str(row['amount']))
+                    if not raw_amt.is_finite() or raw_amt <= 0:
+                        dec_amt = None
+                        errors.append(f"Row {row_id}: non-positive or non-finite amount in ledger continuity: {row['amount']}")
+                    else:
+                        dec_amt = raw_amt.quantize(CENT)
+                except Exception as e:
                     dec_amt = None
-                    errors.append(f"Row {row_id}: non-positive or non-finite amount in ledger continuity: {row['amount']}")
+                    errors.append(f"Row {row_id}: malformed amount in ledger continuity: {e}")
+
+                try:
+                    raw_bb = Decimal(str(row['balance_before']))
+                    bal_before = raw_bb.quantize(CENT) if raw_bb.is_finite() else None
+                except Exception:
+                    bal_before = None
+
+                try:
+                    raw_ba = Decimal(str(row['balance_after']))
+                    bal_after = raw_ba.quantize(CENT) if raw_ba.is_finite() else None
+                except Exception:
+                    bal_after = None
+
+                # Broken chain
+                if bal_before != expected_balance:
+                    errors.append(f"Row {row_id}: broken chain balance_before mismatch (expected {expected_balance}, got {bal_before})")
+
+                # Validate signs and balance_after
+                if dec_amt is not None and bal_before is not None:
+                    if tt == 'SENT':
+                        calc_after = bal_before - dec_amt
+                    elif tt == 'RECEIVED':
+                        calc_after = bal_before + dec_amt
+                    elif tt == 'TRANSFER':
+                        calc_after = bal_before
+                    else:
+                        calc_after = None
+
+                    if calc_after is not None and bal_after != calc_after:
+                        errors.append(f"Row {row_id}: broken chain balance_after mismatch (expected {calc_after}, got {bal_after})")
+
+                    if calc_after is not None:
+                        expected_balance = calc_after
+                    elif bal_after is not None:
+                        expected_balance = bal_after
                 else:
-                    dec_amt = raw_amt.quantize(CENT)
-            except Exception as e:
-                dec_amt = None
-                errors.append(f"Row {row_id}: malformed amount in ledger continuity: {e}")
+                    if bal_after is not None:
+                        expected_balance = bal_after
 
-            try:
-                raw_bb = Decimal(str(row['balance_before']))
-                bal_before = raw_bb.quantize(CENT) if raw_bb.is_finite() else None
-            except Exception:
-                bal_before = None
-
-            try:
-                raw_ba = Decimal(str(row['balance_after']))
-                bal_after = raw_ba.quantize(CENT) if raw_ba.is_finite() else None
-            except Exception:
-                bal_after = None
-
-            # Broken chain: balance_before must equal previous row's balance_after (or initial_balance)
-            if bal_before != expected_balance:
-                errors.append(f"Row {row_id}: broken chain balance_before mismatch (expected {expected_balance}, got {bal_before})")
-
-            # Validate signs and balance_after
-            if dec_amt is not None and bal_before is not None:
-                if tt == 'SENT':
-                    calc_after = bal_before - dec_amt
-                elif tt == 'RECEIVED':
-                    calc_after = bal_before + dec_amt
-                elif tt == 'TRANSFER':
-                    calc_after = bal_before
-                else:
-                    calc_after = None
-
-                if calc_after is not None and bal_after != calc_after:
-                    errors.append(f"Row {row_id}: broken chain balance_after mismatch (expected {calc_after}, got {bal_after})")
-
-                if calc_after is not None:
-                    expected_balance = calc_after
-                elif bal_after is not None:
-                    expected_balance = bal_after
-            else:
-                if bal_after is not None:
-                    expected_balance = bal_after
-
-        # 4. Check that current_balance in settings matches the end of the chain
-        if current_balance is not None and current_balance != expected_balance:
-            errors.append(f"current_balance mismatch in settings (expected {expected_balance}, found {current_balance})")
+            # Check that current_balance matches the end of the chain
+            if ws_current_bal is not None and ws_current_bal != expected_balance:
+                errors.append(f"Workspace {ws}: current_balance mismatch (expected {expected_balance}, found {ws_current_bal})")
 
     return errors
 

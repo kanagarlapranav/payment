@@ -61,7 +61,7 @@ class PaytmParser(GenericParser):
 
         if t.amount <= 0:
             for line in lines[:10]:
-                if self._is_promo_or_balance_line(line) or any(w in line.lower() for w in ('upi', 'id', 'ref', 'date', 'bank', '****', '***')):
+                if self._is_promo_or_balance_line(line) or re.search(r'\b(?:upi\s*id|ref\s*(?:no|id)?|txn\s*id)\b', line, re.IGNORECASE) or '****' in line or '***' in line:
                     continue
                 cands = extract_amounts_from_line(line)
                 valid = [c for c in cands if not self.is_invalid_amount(c, line)]
