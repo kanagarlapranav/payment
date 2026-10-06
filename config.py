@@ -71,22 +71,35 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+# Multi-tenant and Legacy Compatibility Flags
+LEGACY_SINGLE_TENANT_MODE = os.getenv('LEGACY_SINGLE_TENANT_MODE', 'false').strip().lower() in ('1', 'true', 'yes')
+WORKSPACE_MIGRATION_COMPATIBILITY = os.getenv('WORKSPACE_MIGRATION_COMPATIBILITY', 'true').strip().lower() in ('1', 'true', 'yes')
+ALLOW_PUBLIC_WORKSPACES = os.getenv('ALLOW_PUBLIC_WORKSPACES', 'false').strip().lower() in ('1', 'true', 'yes')
+ALLOW_PUBLIC_WORKSPACE_CREATION = os.getenv('ALLOW_PUBLIC_WORKSPACE_CREATION', 'false').strip().lower() in ('1', 'true', 'yes')
+MEMBERSHIP_MODE = os.getenv('MEMBERSHIP_MODE', 'admin_approval').strip().lower()
+DEFAULT_MEMBER_ROLE = os.getenv('DEFAULT_MEMBER_ROLE', 'member').strip().lower()
+INVITE_EXPIRY_MINUTES = int(os.getenv('INVITE_EXPIRY_MINUTES', '60'))
+ACCESS_REQUEST_EXPIRY_HOURS = int(os.getenv('ACCESS_REQUEST_EXPIRY_HOURS', '72'))
+
 # Telegram Configuration
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 
-# Strictly validate owner User ID as integer to prevent silent auth bypasses
-raw_user_id = os.getenv('TELEGRAM_USER_ID')
-if not raw_user_id or not raw_user_id.strip():
-    raise ValueError("TELEGRAM_USER_ID is missing in environment. Authorization cannot be enforced.")
-try:
-    TELEGRAM_USER_ID = int(raw_user_id.strip())
-except ValueError:
-    raise ValueError(f"TELEGRAM_USER_ID must be a valid integer, got: {raw_user_id!r}")
+# Owner User ID (Optional in full multi-tenant mode, mandatory only if LEGACY_SINGLE_TENANT_MODE=true)
+raw_user_id = os.getenv('TELEGRAM_USER_ID', '').strip()
+if raw_user_id:
+    try:
+        TELEGRAM_USER_ID = int(raw_user_id)
+    except ValueError:
+        raise ValueError(f"TELEGRAM_USER_ID must be a valid integer, got: {raw_user_id!r}")
+else:
+    if LEGACY_SINGLE_TENANT_MODE:
+        raise ValueError("TELEGRAM_USER_ID is missing in environment while LEGACY_SINGLE_TENANT_MODE is true.")
+    TELEGRAM_USER_ID = None
 
-raw_group_id = os.getenv('TELEGRAM_GROUP_ID')
-TELEGRAM_GROUP_ID = int(raw_group_id.strip()) if raw_group_id and raw_group_id.strip() else None
+raw_group_id = os.getenv('TELEGRAM_GROUP_ID', '').strip()
+TELEGRAM_GROUP_ID = int(raw_group_id) if raw_group_id and (raw_group_id.isdigit() or (raw_group_id.startswith('-') and raw_group_id[1:].isdigit())) else None
 
-# Optional emergency super-admins for multi-tenant disaster recovery
+# Optional emergency super-admins for disaster recovery
 raw_super_admins = os.getenv('SUPER_ADMIN_USER_IDS', '')
 SUPER_ADMIN_USER_IDS = [
     int(uid.strip())
@@ -94,10 +107,6 @@ SUPER_ADMIN_USER_IDS = [
     if uid.strip() and (uid.strip().isdigit() or (uid.strip().startswith('-') and uid.strip()[1:].isdigit()))
 ]
 
-# Multi-tenant workspace auto-provisioning: allows users/groups to create their own isolated workspace
-ALLOW_PUBLIC_WORKSPACES = (
-    os.getenv('ALLOW_PUBLIC_WORKSPACES', 'false').strip().lower() in ('1', 'true', 'yes')
-)
 
 # OCR Configuration: avoid Windows path default on Linux/Render
 default_tesseract = r'C:\Program Files\Tesseract-OCR\tesseract.exe' if sys.platform == 'win32' else 'tesseract'

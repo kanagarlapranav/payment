@@ -100,6 +100,7 @@ def setup_database():
                         chat_id INTEGER UNIQUE NOT NULL,
                         chat_type TEXT NOT NULL DEFAULT 'private',
                         title TEXT DEFAULT '',
+                        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'suspended', 'archived', 'deleted')),
                         is_active INTEGER NOT NULL DEFAULT 1,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
@@ -115,6 +116,7 @@ def setup_database():
                         username TEXT DEFAULT '',
                         display_name TEXT DEFAULT '',
                         role TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('owner', 'admin', 'member', 'viewer')),
+                        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('pending', 'active', 'suspended', 'removed')),
                         is_active INTEGER NOT NULL DEFAULT 1,
                         joined_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
@@ -132,7 +134,82 @@ def setup_database():
                         PRIMARY KEY(workspace_id, key)
                     )
                 ''')
-                
+
+                # Workspace Invites Table (Hashed tokens, expiration, limits)
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS workspace_invites (
+                        id TEXT PRIMARY KEY,
+                        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                        token_hash TEXT NOT NULL UNIQUE,
+                        created_by INTEGER NOT NULL,
+                        intended_role TEXT NOT NULL DEFAULT 'member' CHECK(intended_role IN ('admin', 'member', 'viewer')),
+                        max_uses INTEGER NOT NULL DEFAULT 1,
+                        uses_count INTEGER NOT NULL DEFAULT 0,
+                        expires_at TEXT NOT NULL,
+                        revoked_at TEXT DEFAULT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                ''')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_invites_ws ON workspace_invites(workspace_id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_invites_hash ON workspace_invites(token_hash)')
+
+                # Audit Logs Table (Immutable tenant actions log)
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS audit_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                        actor_user_id INTEGER NOT NULL,
+                        actor_role TEXT NOT NULL DEFAULT 'member',
+                        action TEXT NOT NULL,
+                        resource TEXT NOT NULL,
+                        request_id TEXT DEFAULT '',
+                        result TEXT NOT NULL DEFAULT 'success',
+                        details_json TEXT DEFAULT '{}',
+                        created_at TEXT NOT NULL
+                    )
+                ''')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_audit_ws_created ON audit_logs(workspace_id, created_at DESC)')
+
+                # Workspace Job Runs Table (Scheduler deduplication)
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS workspace_job_runs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                        job_name TEXT NOT NULL,
+                        scheduled_date TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'completed',
+                        executed_at TEXT NOT NULL,
+                        UNIQUE(workspace_id, job_name, scheduled_date)
+                    )
+                ''')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_job_runs_ws_job ON workspace_job_runs(workspace_id, job_name, scheduled_date)')
+
+                # Dashboard Persistent Auth & Sessions Tables
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS dashboard_auth_codes (
+                        code_hash TEXT PRIMARY KEY,
+                        workspace_id TEXT NOT NULL,
+                        user_id INTEGER NOT NULL,
+                        role TEXT NOT NULL DEFAULT 'member',
+                        expires_at REAL NOT NULL,
+                        used_at REAL DEFAULT NULL,
+                        created_at REAL NOT NULL
+                    )
+                ''')
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS dashboard_sessions (
+                        session_id_hash TEXT PRIMARY KEY,
+                        workspace_id TEXT NOT NULL,
+                        user_id INTEGER NOT NULL,
+                        role TEXT NOT NULL DEFAULT 'member',
+                        csrf_token TEXT NOT NULL,
+                        expires_at REAL NOT NULL,
+                        revoked_at REAL DEFAULT NULL,
+                        created_at REAL NOT NULL
+                    )
+                ''')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_dash_sess_ws_user ON dashboard_sessions(workspace_id, user_id)')
+
                 # Settings table (global legacy fallback & system-level settings)
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS settings (
@@ -146,6 +223,7 @@ def setup_database():
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS access_requests (
                         telegram_user_id INTEGER PRIMARY KEY,
+                        workspace_id TEXT DEFAULT NULL,
                         username TEXT DEFAULT '',
                         display_name TEXT DEFAULT '',
                         chat_id INTEGER NOT NULL,
@@ -376,6 +454,28 @@ def setup_database():
                     cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('schema_version', '4', ?)", (now_utc,))
                     logger.info(f"Executed schema migration v4: provisioned default workspace {default_ws_id}, backfilled domain tables, and mirrored settings.")
 
+                # Idempotent Schema Migration v5: Status columns, Access Requests scoping, & persistent auth
+                if current_schema_ver < 5:
+                    cursor.execute("PRAGMA table_info(workspaces)")
+                    ws_cols = [c['name'] for c in cursor.fetchall()]
+                    if "status" not in ws_cols:
+                        cursor.execute("ALTER TABLE workspaces ADD COLUMN status TEXT DEFAULT 'active'")
+                        cursor.execute("UPDATE workspaces SET status = 'active' WHERE status IS NULL OR status = ''")
+
+                    cursor.execute("PRAGMA table_info(workspace_members)")
+                    wm_cols = [c['name'] for c in cursor.fetchall()]
+                    if "status" not in wm_cols:
+                        cursor.execute("ALTER TABLE workspace_members ADD COLUMN status TEXT DEFAULT 'active'")
+                        cursor.execute("UPDATE workspace_members SET status = 'active' WHERE status IS NULL OR status = ''")
+
+                    cursor.execute("PRAGMA table_info(access_requests)")
+                    ar_cols = [c['name'] for c in cursor.fetchall()]
+                    if "workspace_id" not in ar_cols:
+                        cursor.execute("ALTER TABLE access_requests ADD COLUMN workspace_id TEXT DEFAULT NULL")
+
+                    cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('schema_version', '5', ?)", (now_utc,))
+                    logger.info("Executed schema migration v5: added workspace/member status and access_requests workspace_id.")
+
                 # Ensure permanent database_id exists
                 cursor.execute("SELECT value FROM settings WHERE key = 'database_id'")
                 db_id_row = cursor.fetchone()
@@ -394,7 +494,7 @@ def setup_database():
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('last_telegram_backup_at', '', now_utc))
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('last_drive_backup_at', '', now_utc))
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('database_initialized', '0', now_utc))
-                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('schema_version', '4', now_utc))
+                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('schema_version', '5', now_utc))
 
                 # Ensure all legacy transactions have default workspace assigned
                 cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")

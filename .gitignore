@@ -16,6 +16,7 @@ data/*.json
 data/*.xlsx
 data/*.pdf
 data/*.pre-remediation
+data/*.backup*
 data/archive/
 data/archive
 *.db

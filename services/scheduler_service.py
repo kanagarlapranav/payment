@@ -171,6 +171,52 @@ async def send_daily_digest_with_retry(bot, target_chat_id: int | str, target_da
     return False
 
 
+def claim_workspace_job(workspace_id: str, job_name: str, scheduled_date: str) -> bool:
+    """
+    Attempts to claim execution of a scheduled job for a workspace on a specific date.
+    Returns True if claimed, False if already completed or in progress.
+    """
+    now_utc = utc_now_iso()
+    try:
+        with LEDGER_LOCK:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT status FROM workspace_job_runs
+                    WHERE workspace_id = ? AND job_name = ? AND scheduled_date = ?
+                """, (str(workspace_id), str(job_name), str(scheduled_date)))
+                row = cursor.fetchone()
+                if row and row['status'] == 'completed':
+                    return False
+                cursor.execute("""
+                    INSERT OR REPLACE INTO workspace_job_runs (
+                        workspace_id, job_name, scheduled_date, status, executed_at
+                    ) VALUES (?, ?, ?, 'running', ?)
+                """, (str(workspace_id), str(job_name), str(scheduled_date), now_utc))
+                conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to claim job {job_name} for workspace {workspace_id}: {e}")
+        return False
+
+
+def complete_workspace_job(workspace_id: str, job_name: str, scheduled_date: str, status: str = "completed"):
+    """Marks a workspace job run with its final execution status ('completed' or 'failed')."""
+    now_utc = utc_now_iso()
+    try:
+        with LEDGER_LOCK:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE workspace_job_runs
+                    SET status = ?, executed_at = ?
+                    WHERE workspace_id = ? AND job_name = ? AND scheduled_date = ?
+                """, (status, now_utc, str(workspace_id), str(job_name), str(scheduled_date)))
+                conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to record job status for workspace {workspace_id}: {e}")
+
+
 async def daily_digest_job(context: ContextTypes.DEFAULT_TYPE):
     """PTB JobQueue handler for daily financial digest with multi-workspace fan-out and per-workspace failure isolation."""
     today_str = get_current_ist_time().strftime("%Y-%m-%d")
@@ -198,7 +244,14 @@ async def daily_digest_job(context: ContextTypes.DEFAULT_TYPE):
                     logger.info(f"Daily digest for workspace {ws_id} already sent today. Skipping.")
                     continue
 
-                await send_daily_digest_with_retry(context.bot, chat_id, today_str, workspace_id=ws_id)
+                # Idempotent job claim check
+                if not claim_workspace_job(ws_id, "daily_digest", today_str):
+                    logger.info(f"Daily digest for workspace {ws_id} already claimed/completed. Skipping.")
+                    continue
+
+                success = await send_daily_digest_with_retry(context.bot, chat_id, today_str, workspace_id=ws_id)
+                complete_workspace_job(ws_id, "daily_digest", today_str, "completed" if success else "failed")
+
                 # Jitter rate limiting (100ms) to respect Telegram API 30 msg/s ceiling
                 await asyncio.sleep(0.1)
             except Exception as ws_err:
