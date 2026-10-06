@@ -5,8 +5,11 @@ with backward compatibility for single-user deployments.
 """
 
 from dataclasses import dataclass
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
+from datetime import datetime
+import html
 from telegram import Update
+from telegram.ext import ContextTypes
 import config
 from config import logger
 from database.models import Workspace, WorkspaceMember
@@ -24,14 +27,14 @@ READ_ONLY_COMMANDS = {
     "start", "balance", "today", "history", "last5", "recent", "details", "ids",
     "date", "search", "find", "amount", "amt", "monthly", "stats", "filter",
     "sort", "chatid", "help", "menu", "cafeteria", "canteen", "cafestats",
-    "cafespends", "budget", "digest", "insights", "gemini", "geministatus",
-    "quota", "ai", "status", "workspace", "workspaces", "members"
+    "cafespends", "budget", "digest", "status", "workspace", "workspaces", "members"
 }
 
 ADMIN_COMMANDS = {
     "edit", "delete", "setbalance", "export", "report", "statement",
     "restore", "importbackup", "backup", "backupnow", "undo", "revert", "setbudget", "addmenu", "delmenu",
-    "cafeedit", "editcafe", "dashboard", "setmodel", "model"
+    "cafeedit", "editcafe", "dashboard", "setmodel", "model",
+    "gemini", "geministatus", "quota", "ai", "insights"
 }
 
 # Command to Minimum Role Level Policy
@@ -43,8 +46,7 @@ COMMAND_ROLE_POLICY = {
     "amt": "viewer", "monthly": "viewer", "stats": "viewer", "filter": "viewer",
     "sort": "viewer", "chatid": "viewer", "help": "viewer", "menu": "viewer",
     "cafeteria": "viewer", "canteen": "viewer", "cafestats": "viewer",
-    "cafespends": "viewer", "budget": "viewer", "digest": "viewer", "insights": "viewer",
-    "gemini": "viewer", "geministatus": "viewer", "quota": "viewer", "ai": "viewer",
+    "cafespends": "viewer", "budget": "viewer", "digest": "viewer",
     "status": "viewer", "members": "viewer", "workspace": "viewer", "workspaces": "viewer",
 
     # Member & above (Mutation: Logging Payments, Self-Edit/Delete, Self-Undo & Reports)
@@ -54,24 +56,30 @@ COMMAND_ROLE_POLICY = {
     "export": "member", "report": "member", "statement": "member",
     "dashboard": "member",
 
-    # Admin & above (Management & Mutations)
+    # Admin & above (Management & Mutations, AI Quota & Insights)
     "setbudget": "admin", "addmenu": "admin",
     "delmenu": "admin", "cafeedit": "admin", "editcafe": "admin",
     "backup": "admin", "backupnow": "admin",
     "setmodel": "admin", "model": "admin",
+    "gemini": "admin", "geministatus": "admin", "quota": "admin", "ai": "admin", "insights": "admin",
 
-    # Owner only (Governance, Initial Balance & Disaster Recovery)
+    # Owner only (Governance, Initial Balance, Permissions & Disaster Recovery)
     "setbalance": "owner", "restore": "owner", "importbackup": "owner",
-    "setrole": "owner", "workspace_settings": "owner", "transfer_ownership": "owner"
+    "setrole": "owner", "permissions": "owner", "roles": "owner",
+    "workspace_settings": "owner", "transfer_ownership": "owner"
 }
 
 # Callback Action Prefix Policies
 READ_ONLY_CALLBACK_ACTIONS = {
-    "nav", "filter", "sort", "cafe_stats", "cafe_view_menu", "tx_view", "refresh_gemini",
-    "ws_switch", "ws_reset", "ws_reset_menu"
+    "nav", "filter", "sort", "cafe_stats", "cafe_view_menu", "tx_view",
+    "ws_switch", "ws_reset", "ws_reset_menu", "perm_view", "perm_list"
 }
 
 ADMIN_CALLBACK_ACTIONS = {
+    # AI & Model Controls (Admin Only)
+    "refresh_gemini", "set_model",
+    # Access Approval & Permissions (Admin/Owner Only)
+    "auth_grant", "auth_deny", "perm_set",
     # Receipt Card Actions & Pending Edits
     "save_p", "force_save_p", "edit_p", "ep_field", "ep_back", "cat_p", "set_pcat", "cancel_p",
     # Undo & Quick Add & Duplicate
@@ -502,31 +510,140 @@ async def resolve_workspace_context(
 resolve_context = resolve_workspace_context
 
 
-async def require_authorized(update: Update) -> bool:
+async def require_authorized(update: Update, context: Optional[ContextTypes.DEFAULT_TYPE] = None) -> bool:
     """
     Ensures the user/chat has basic read-only or workspace authorization.
-    Sends friendly refusal on unauthorized access and returns False.
+    If unauthorized:
+    - If status is 'pending', notifies user that access request is pending approval.
+    - If status is 'rejected' or user is deactivated, notifies user that access is denied.
+    - If new user, creates an access request in database and sends approval request with inline buttons to the bot owner.
     """
     if is_authorized_user(update):
         return True
 
     user_id = get_effective_user_id(update)
     chat_id = get_effective_chat_id(update)
+    if not user_id or not chat_id:
+        return False
+
+    from database.queries import get_access_request, create_access_request, get_workspace_member, get_workspace_by_chat_id
     from utils.telemetry import increment_metric
     increment_metric("auth_denials")
-    logger.warning(f"Unauthorized access rejected for user={user_id}, chat={chat_id}")
+    logger.warning(f"Unauthorized interaction from user={user_id}, chat={chat_id}")
+
+    user = update.effective_user
+    chat = update.effective_chat
+    username = getattr(user, 'username', '') or ''
+    full_name = getattr(user, 'full_name', '') or getattr(user, 'first_name', '') or username or str(user_id)
+    chat_type = getattr(chat, 'type', 'private') or 'private'
+
+    req = get_access_request(user_id)
+    status = req.get('status') if req else None
+
+    # Check if user has an explicit deactivated membership in this workspace
+    ws = get_workspace_by_chat_id(chat_id)
+    member = get_workspace_member(ws.id, user_id) if ws else None
+    if member and not member.is_active:
+        status = 'rejected'
+
+    if update.callback_query:
+        if status == 'rejected':
+            try:
+                await update.callback_query.answer("⛔ Access Denied. You do not have permission to use this bot.", show_alert=True)
+            except Exception:
+                pass
+        else:
+            try:
+                await update.callback_query.answer("⏳ Access Request Pending. Awaiting approval from the bot owner.", show_alert=True)
+            except Exception:
+                pass
+        return False
 
     msg_target = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
-    if update.callback_query:
+    if not msg_target:
+        return False
+
+    if status == 'rejected':
         try:
-            await update.callback_query.answer("❌ Unauthorized access.", show_alert=True)
+            await msg_target.reply_text(
+                "⛔ <b>Access Denied</b>\n\n"
+                "You do not have permission to access this bot. Please contact the administrator.",
+                parse_mode='HTML'
+            )
         except Exception:
             pass
-    elif msg_target:
+        return False
+
+    if status == 'pending':
         try:
-            await msg_target.reply_text("❌ Unauthorized user.")
+            await msg_target.reply_text(
+                "⏳ <b>Access Request Pending</b>\n\n"
+                "Your request to access Payment Tracker has been submitted and is awaiting approval from the bot owner.\n\n"
+                "<i>You will receive a notification here once approved.</i>",
+                parse_mode='HTML'
+            )
         except Exception:
             pass
+        return False
+
+    # New user: Create access request and notify bot owner
+    create_access_request(
+        telegram_user_id=user_id,
+        username=username,
+        display_name=full_name,
+        chat_id=chat_id,
+        chat_type=chat_type
+    )
+
+    try:
+        await msg_target.reply_text(
+            "⏳ <b>Access Request Submitted</b>\n\n"
+            "Welcome! This bot requires owner approval to protect financial privacy.\n\n"
+            "Your access request has been sent to the bot owner. You will receive a message here as soon as permission is granted.",
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        logger.error(f"Failed to reply to new user {user_id}: {e}")
+
+    # Notify Bot Owner with Interactive Inline Buttons
+    owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+    if owner_id:
+        try:
+            bot = update.get_bot() if hasattr(update, 'get_bot') else getattr(update, '_bot', None)
+            if not bot and context:
+                bot = context.bot
+            if bot:
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                owner_msg = (
+                    "🔔 <b>New User Access Request</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    f"👤 <b>Name:</b> {html.escape(full_name)}\n"
+                    f"💬 <b>Username:</b> @{html.escape(username) if username else 'N/A'}\n"
+                    f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
+                    f"💬 <b>Chat Type:</b> <code>{chat_type}</code>\n"
+                    f"📅 <b>Time:</b> {time_str}\n\n"
+                    "<i>Select permission level to grant or deny access:</i>"
+                )
+                markup = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("👤 Approve Member", callback_data=f"auth_grant:{user_id}:member"),
+                        InlineKeyboardButton("🛡️ Approve Admin", callback_data=f"auth_grant:{user_id}:admin")
+                    ],
+                    [
+                        InlineKeyboardButton("👁️ Approve Viewer", callback_data=f"auth_grant:{user_id}:viewer"),
+                        InlineKeyboardButton("❌ Reject / Block", callback_data=f"auth_deny:{user_id}")
+                    ]
+                ])
+                await bot.send_message(
+                    chat_id=int(owner_id),
+                    text=owner_msg,
+                    reply_markup=markup,
+                    parse_mode='HTML'
+                )
+        except Exception as e:
+            logger.error(f"Failed to notify owner {owner_id} of access request: {e}", exc_info=True)
+
     return False
 
 
@@ -595,11 +712,43 @@ async def require_admin(update: Update, silent: bool = False) -> bool:
     increment_metric("auth_denials")
     logger.warning(f"Admin-only action blocked for non-owner user={user_id}, chat={chat_id}")
 
-    refusal_text = "⛔ <b>Admin Only:</b> This action (mutation/settings/export/dashboard) is restricted to the bot owner."
+    refusal_text = "⛔ <b>Admin Only:</b> This action (mutation/settings/export/dashboard) is restricted to administrators."
     msg_target = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
     if update.callback_query:
         try:
-            await update.callback_query.answer("⛔ Admin Only: This action is restricted to the bot owner.", show_alert=True)
+            await update.callback_query.answer("⛔ Admin Only: This action requires Administrator role.", show_alert=True)
+        except Exception:
+            pass
+    elif msg_target:
+        try:
+            await msg_target.reply_text(refusal_text, parse_mode='HTML')
+        except Exception:
+            pass
+    return False
+
+
+async def require_owner(update: Update, silent: bool = False) -> bool:
+    """
+    Ensures the caller is the global bot owner or workspace owner.
+    """
+    if is_owner(update):
+        return True
+
+    user_id = get_effective_user_id(update)
+    chat_id = get_effective_chat_id(update)
+
+    if silent:
+        return False
+
+    from utils.telemetry import increment_metric
+    increment_metric("auth_denials")
+    logger.warning(f"Owner-only action blocked for user={user_id}, chat={chat_id}")
+
+    refusal_text = "⛔ <b>Owner Only:</b> This command is strictly reserved for the Bot Owner."
+    msg_target = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
+    if update.callback_query:
+        try:
+            await update.callback_query.answer("⛔ Owner Only: Strictly reserved for Bot Owner.", show_alert=True)
         except Exception:
             pass
     elif msg_target:

@@ -1,3 +1,4 @@
+from typing import Any, Tuple, Optional
 from telegram import Update
 from telegram.ext import ContextTypes
 from config import TELEGRAM_USER_ID, TELEGRAM_GROUP_ID, DATA_DIR, DAILY_DIGEST_TIME, logger
@@ -337,57 +338,74 @@ async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"This chat's ID is: `{chat_id}`", parse_mode='Markdown')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Displays the complete, comprehensive guide of everything the bot can do."""
+    """Displays the role-tailored guide of commands and bot capabilities."""
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context, is_owner
+    ctx = get_workspace_context(update)
+    caller_is_owner = is_owner(update)
+    caller_is_admin = caller_is_owner or (ctx and ctx.has_role('admin'))
     
-    help_text = (
-        "👑 <b>Payment Tracker Bot — Complete Guide</b>\n\n"
-        "Automatically log expenses, scan receipts from any UPI app, track balances, manage budgets, and view live visual dashboards.\n\n"
-        "📸 <b>1. Receipt Upload & Scanning (AI Engine)</b> <i>[Admin Only]</i>\n"
+    sections = [
+        "👑 <b>Payment Tracker Bot — Quick Guide</b>\n"
+        "Automatically log expenses, scan receipts from any UPI app, track balances, and manage budgets.\n"
+    ]
+    
+    # 1. Logging expenses
+    sections.append(
+        "💬 <b>1. Tracking & Logging Expenses</b>\n"
         "• Send a <b>screenshot</b> or <b>shared receipt</b> (image + text caption) from any app:\n"
-        "  <code>BHIM</code>, <code>Paytm</code>, <code>PhonePe</code>, <code>Google Pay</code>, <code>CRED</code>, <code>Super.money</code>, <code>NaviPay</code>, <code>YONO SBI</code>, <code>Vyom</code>.\n"
-        "• Instantly extracts Amount, Person, Date, Bank, & UTR Ref No.\n"
-        "• <i>Ephemeral Image Privacy:</i> Receipt images are deleted right after scanning.\n\n"
-        "💬 <b>2. Natural Text Tracking</b> <i>[Admin Only]</i>\n"
+        "  <code>BHIM</code>, <code>Paytm</code>, <code>PhonePe</code>, <code>Google Pay</code>, <code>CRED</code>, etc.\n"
         "• Simply type what you spent or received:\n"
         "  <code>Paid 500 to Ramesh</code>\n"
         "  <code>Received 6200 from Johnson</code>\n"
-        "  <code>Paid 5000 to Balaji yesterday</code>\n\n"
-        "📊 <b>3. Balance & History</b> <i>[Group & Admin]</i>\n"
-        "• /balance — Current balance, total sent/received today & net flow\n"
-        "• /history — Clean sequential transaction list with pagination & filters\n"
-        "• /last5 (or /recent) — View the latest 5 transactions immediately\n"
-        "• /details — Detailed view with database IDs & UTR numbers\n"
-        "• /date &lt;date&gt; — View transactions on a specific date\n"
-        "• /search &lt;query&gt; — Search by person name, bank, or UTR\n"
-        "• /amount &lt;number&gt; — Search by exact amount\n\n"
-        "📈 <b>4. Analytics & Budgets</b> <i>[Group & Admin]</i>\n"
-        "• /budget — View monthly budget progress & status bar\n"
-        "• /insights — AI-powered category breakdown, spending percentages & advice\n"
-        "• /monthly (or /stats) — Monthly total spent, income, net savings & top recipient\n"
-        "• /filter — Interactive filter buttons (Today, Yesterday, Month, Sent, Received)\n"
-        f"• /sort — Interactive sorting menu (Amount High ➔ Low, Low ➔ High, Date)\n"
-        f"• /digest — Generate today's closing financial digest (Auto-sent daily at {DAILY_DIGEST_TIME} IST)\n\n"
-        "🍽️ <b>5. Cafeteria Vegetarian System</b> <i>[Group Read-Only / Admin Edit]</i>\n"
-        "• /menu — Full vegetarian cafeteria menu with prices & add-ons\n"
-        "• /cafestats — Cafeteria monthly spend totals & most ordered items\n"
-        "• /cafeedit — Re-tag or edit items for recent cafeteria payments <i>[Admin Only]</i>\n"
-        "• /addmenu &lt;item, price, cat&gt; — Add custom menu item <i>[Admin Only]</i>\n"
-        "• /delmenu &lt;item&gt; — Remove custom menu item <i>[Admin Only]</i>\n\n"
-        "⚙️ <b>6. Management & Mutations</b> <i>[Admin Only]</i>\n"
-        "• /edit — Interactive 1-tap menu to edit amount, name, date, type, or UTR\n"
-        "• /delete — Interactive 1-tap menu to delete record & auto-recalculate\n"
-        "• /undo — Instantly revert the last delete, edit, or add action\n"
-        "• /setbalance &lt;amt&gt; — Set starting balance (e.g. <code>/setbalance 50000</code>)\n"
-        "• /setbudget &lt;amt&gt; — Set monthly spending target (e.g. <code>/setbudget 20000</code>)\n"
-        "• /restore — Restore from cloud/JSON backup whenever needed on demand\n"
-        "• /export (or /report, /statement) — Download official PDF Statement or Excel Sheet\n"
-        "• /dashboard — View interactive dark-mode charts & live web analytics\n"
-        "• /gemini (or /quota, /status) — Check live Gemini AI quota & OCR engine status\n\n"
-        "☁️ <b>Access Policy & Reliability:</b>\n"
-        "• Owner has full administrative control; configured group has read-only access.\n"
-        "• Every transaction, edit, and deletion is automatically backed up and synced 24/7."
+        "  <code>Paid 50 to Cafeteria</code>\n"
     )
+    
+    # 2. Balance & History
+    sections.append(
+        "📊 <b>2. Balance & History</b>\n"
+        "• /balance — Current balance & today's cash flow\n"
+        "• /history — Clean sequential transaction list\n"
+        "• /last5 (or /recent) — View latest 5 transactions\n"
+        "• /search &lt;query&gt; — Search by person name, bank, or UTR\n"
+        "• /amount &lt;number&gt; — Search by exact amount\n"
+        "• /dashboard — View interactive dark-mode charts & live web analytics\n"
+    )
+    
+    # 3. Cafeteria System
+    sections.append(
+        "🍽️ <b>3. Cafeteria System</b>\n"
+        "• /menu — Vegetarian cafeteria menu with prices & add-ons\n"
+        "• /cafestats — Cafeteria spend totals & favorite items\n"
+    )
+    
+    # Admin section (only visible to Admins and Owner)
+    if caller_is_admin:
+        sections.append(
+            "🛡️ <b>4. Management & Analytics (Admin Only)</b>\n"
+            "• /insights — AI-powered category breakdown & advice\n"
+            "• /export — Download official Statement or Excel Sheet\n"
+            "• /edit — Interactive menu to edit transactions\n"
+            "• /delete — Interactive menu to delete transactions\n"
+            "• /undo — Instantly revert the last action\n"
+            "• /setbudget &lt;amt&gt; — Set monthly spending limit\n"
+            "• /addmenu & /delmenu — Add or remove custom cafeteria items\n"
+            "• /gemini (or /quota) — Inspect Gemini AI OCR status\n"
+            "• /setmodel — Switch active Gemini AI model\n"
+        )
+        
+    # Owner section (only visible to Owner)
+    if caller_is_owner:
+        sections.append(
+            "👑 <b>5. Owner Controls & Governance (Owner Only)</b>\n"
+            "• /permissions (or /roles) — Manage user permissions & access levels\n"
+            "• /workspaces — Switch and manage multi-tenant workspaces\n"
+            "• /setbalance &lt;amt&gt; — Set starting balance (e.g. <code>/setbalance 50000</code>)\n"
+            "• /setrole &lt;user&gt; &lt;role&gt; — Set member role in workspace\n"
+            "• /restore — Restore from cloud/JSON backup on demand\n"
+        )
+        
+    help_text = "\n".join(sections)
     from bot.keyboards import get_help_keyboard
     await update.message.reply_text(help_text, reply_markup=get_help_keyboard(), parse_mode='HTML')
 
@@ -494,9 +512,9 @@ async def render_gemini_status_payload(force_refresh: bool = False) -> tuple:
     return card, keyboard
 
 async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Checks and reports the live Google Gemini Vision AI status and quota in Telegram chat."""
-    from bot.auth import require_authorized
-    if not await require_authorized(update):
+    """Checks and reports the live Google Gemini Vision AI status and quota in Telegram chat (Admin only)."""
+    from bot.auth import require_admin
+    if not await require_admin(update):
         return
 
     status_msg = await update.message.reply_text("🤖 <i>Checking Gemini AI quota and status…</i>", parse_mode='HTML')
@@ -1344,8 +1362,9 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generates AI spending insights and category analytics."""
-    if not await require_authorized(update): return
+    """Generates AI spending insights and category analytics (Admin only)."""
+    from bot.auth import require_admin
+    if not await require_admin(update): return
     from services.category_service import format_spending_insights
     from bot.keyboards import get_insights_keyboard
     from datetime import datetime
@@ -1441,11 +1460,11 @@ async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(digest_text, reply_markup=get_digest_keyboard(), parse_mode='HTML')
 
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Provides a live link to the interactive web dashboard & visual charts with a 60-second one-time login code."""
-    if not await require_admin(update): return
+    """Provides a live link to the interactive web dashboard & visual charts with a single-use login code."""
+    from bot.auth import require_member, get_workspace_context, get_user_active_workspace
+    if not await require_member(update): return
     import os
     from services.dashboard_auth import create_one_time_code
-    from bot.auth import get_workspace_context
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     
     from config import RENDER_EXTERNAL_URL
@@ -1457,16 +1476,25 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = create_one_time_code(user_id=user_id, workspace_id=ws_id, role=role)
     auth_url = f"{render_url}/auth?code={code}"
     
+    ws_title = ctx.workspace.title if (ctx and ctx.workspace) else "Personal Workspace"
+    
     msg = (
         f"📊 <b>LIVE FINANCIAL DASHBOARD</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🏢 <b>Active Workspace:</b> <b>{html.escape(ws_title)}</b>\n"
+        f"👤 <b>Access Role:</b> <code>{role.title()}</code>\n\n"
         f"Tap <b>Open Dashboard</b> below to view interactive charts, month switcher, category donut breakdowns, top payees, and spending heatmaps!\n\n"
         f"🔒 <i>Single-use secure link valid for 5 minutes. Sets a 30-minute session. Server restarts require a fresh link with /dashboard.</i>\n\n"
         f"🔗 <code>{auth_url}</code>"
     )
-    markup = InlineKeyboardMarkup([
+    buttons = [
         [InlineKeyboardButton("📊 Open Dashboard", url=auth_url)]
-    ])
+    ]
+    if user_id and get_user_active_workspace(user_id):
+        buttons.append([InlineKeyboardButton("🔄 Reset to My Workspace", callback_data="ws_reset")])
+        msg += "\n\n💡 <i>Notice: You are currently viewing a switched workspace. Tap 'Reset to My Workspace' to return to your personal ledger.</i>"
+
+    markup = InlineKeyboardMarkup(buttons)
     try:
         await update.message.reply_text(msg, reply_markup=markup, parse_mode='HTML')
     except Exception as e:
@@ -2019,8 +2047,90 @@ async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Failed to update member role.")
 
 
+def render_permissions_list_payload() -> tuple[str, Any]:
+    """Renders interactive user permissions and role manager card with inline buttons."""
+    from database.queries import get_all_users_for_permissions
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    users = get_all_users_for_permissions()
+    
+    role_icons = {'owner': '👑', 'admin': '🛡️', 'member': '👤', 'viewer': '👁️'}
+    text_lines = [
+        "👥 <b>User Permissions & Access Control</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "Manage access levels, roles, and restrictions for all users from Telegram.",
+        "",
+        f"<b>Total Users:</b> {len(users)}",
+        "━━━━━━━━━━━━━━━━━━━━"
+    ]
+    keyboard = []
+    for u in users:
+        uid = u['telegram_user_id']
+        role = (u['role'] or 'member').lower()
+        is_active = bool(u['is_active'])
+        icon = role_icons.get(role, '👤')
+        status_dot = "🟢" if is_active else "🔴"
+        uname = f"@{u['username']}" if u['username'] else (u['display_name'] or f"ID {uid}")
+        
+        text_lines.append(f"{status_dot} {icon} <b>{html.escape(uname)}</b> — <code>{role.upper()}</code> (<code>{uid}</code>)")
+        btn_label = f"{status_dot} {icon} {uname[:16]} ({role[:3].upper()})"
+        keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"perm_view:{uid}")])
+        
+    text_lines.append("")
+    text_lines.append("<i>Tap any user below to view details, change permissions, or revoke access:</i>")
+    return "\n".join(text_lines), InlineKeyboardMarkup(keyboard)
 
 
+def render_user_permission_card(target_uid: int) -> tuple[str, Any]:
+    """Renders detailed card and action buttons for a single user."""
+    from database.queries import get_all_users_for_permissions
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    users = get_all_users_for_permissions()
+    target_user = next((u for u in users if u['telegram_user_id'] == int(target_uid)), None)
+    
+    role_icons = {'owner': '👑', 'admin': '🛡️', 'member': '👤', 'viewer': '👁️'}
+    if not target_user:
+        return "❌ User not found.", InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Users", callback_data="perm_list")]])
+        
+    role = (target_user['role'] or 'member').lower()
+    is_active = bool(target_user['is_active'])
+    status_text = "🟢 Active (Access Granted)" if is_active else "🔴 Revoked / Blocked (No Access)"
+    icon = role_icons.get(role, '👤')
+    display = target_user['display_name'] or "Unknown"
+    uname = f"@{target_user['username']}" if target_user['username'] else "None"
+    
+    card = (
+        "⚙️ <b>User Permissions & Access Control</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Name:</b> {html.escape(display)}\n"
+        f"💬 <b>Username:</b> {html.escape(uname)}\n"
+        f"🆔 <b>User ID:</b> <code>{target_uid}</code>\n"
+        f"🛡️ <b>Current Role:</b> {icon} <b>{role.upper()}</b>\n"
+        f"🚦 <b>Status:</b> <b>{status_text}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "<i>Select an action below to update this user's role or access:</i>"
+    )
+    
+    buttons = [
+        [
+            InlineKeyboardButton(f"{'✅ ' if role == 'admin' and is_active else ''}🛡️ Admin", callback_data=f"perm_set:{target_uid}:admin"),
+            InlineKeyboardButton(f"{'✅ ' if role == 'member' and is_active else ''}👤 Member", callback_data=f"perm_set:{target_uid}:member")
+        ],
+        [
+            InlineKeyboardButton(f"{'✅ ' if role == 'viewer' and is_active else ''}👁️ Viewer", callback_data=f"perm_set:{target_uid}:viewer"),
+            InlineKeyboardButton("🚫 Revoke / Block" if is_active else "🟢 Re-activate Member", 
+                                 callback_data=f"perm_set:{target_uid}:revoke" if is_active else f"perm_set:{target_uid}:member")
+        ],
+        [InlineKeyboardButton("⬅️ Back to Users", callback_data="perm_list")]
+    ]
+    return card, InlineKeyboardMarkup(buttons)
+
+
+async def permissions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Opens interactive user permissions and access control dashboard (Owner only)."""
+    from bot.auth import require_owner
+    if not await require_owner(update): return
+    card, markup = render_permissions_list_payload()
+    await update.message.reply_text(card, reply_markup=markup, parse_mode='HTML')
 
 
 
