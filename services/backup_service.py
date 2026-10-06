@@ -1157,3 +1157,258 @@ async def restore_from_telegram(bot, chat_id: str = None) -> bool:
     except Exception as e:
         logger.error(f"Error restoring backup from Telegram: {e}", exc_info=True)
         return restore_local_fallback_if_valid()
+
+
+def export_workspace_to_json(workspace_id: str, output_path: Path = None, actor_user_id: int = 0) -> dict:
+    """
+    Exports a single workspace's complete dataset to a tenant-isolated versioned JSON structure.
+    Computes a canonical SHA-256 checksum and logs an audit event.
+    """
+    if not workspace_id:
+        return {"success": False, "error": "Missing workspace_id"}
+
+    from utils.workspace_storage import get_workspace_backup_dir
+    with EXPORT_LOCK:
+        with LEDGER_LOCK:
+            try:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT * FROM workspaces WHERE id = ?", (str(workspace_id),))
+                    ws_row = cursor.fetchone()
+                    if not ws_row:
+                        return {"success": False, "error": f"Workspace {workspace_id} not found"}
+
+                    # Workspace settings
+                    cursor.execute("SELECT key, value, updated_at FROM workspace_settings WHERE workspace_id = ?", (str(workspace_id),))
+                    settings = [dict(r) for r in cursor.fetchall()]
+
+                    # Workspace members
+                    cursor.execute("SELECT telegram_user_id, username, display_name, role, is_active, status, joined_at FROM workspace_members WHERE workspace_id = ?", (str(workspace_id),))
+                    members = [dict(r) for r in cursor.fetchall()]
+
+                    # Workspace transactions
+                    cursor.execute("SELECT * FROM transactions WHERE workspace_id = ? ORDER BY occurred_at ASC, id ASC", (str(workspace_id),))
+                    transactions = [dict(r) for r in cursor.fetchall()]
+
+                    # Custom menu items
+                    cursor.execute("SELECT name, price, category, is_veg FROM custom_menu_items WHERE workspace_id = ?", (str(workspace_id),))
+                    menu_items = [dict(r) for r in cursor.fetchall()]
+
+                    # Payee categories
+                    cursor.execute("SELECT payee_name, category FROM payee_categories WHERE workspace_id = ?", (str(workspace_id),))
+                    payee_cats = [dict(r) for r in cursor.fetchall()]
+
+                    # Recurring payments
+                    cursor.execute("SELECT * FROM recurring_payments WHERE workspace_id = ?", (str(workspace_id),))
+                    recurring = [dict(r) for r in cursor.fetchall()]
+
+                    # Monthly reviews
+                    cursor.execute("SELECT * FROM monthly_reviews WHERE workspace_id = ?", (str(workspace_id),))
+                    reviews = [dict(r) for r in cursor.fetchall()]
+
+                # Normalize dates/decimals for serialization
+                for rows in (transactions, recurring, reviews):
+                    for item in rows:
+                        for k, v in item.items():
+                            if isinstance(v, (datetime, )):
+                                item[k] = v.isoformat()
+                            elif v is not None and not isinstance(v, (int, float, str, bool)):
+                                item[k] = str(v)
+
+                now_utc = utc_now_iso()
+                ws_dict = dict(ws_row)
+                payload = {
+                    "format_version": "workspace_v1",
+                    "workspace_id": str(workspace_id),
+                    "workspace_title": ws_dict.get("title", "Workspace"),
+                    "exported_at": now_utc,
+                    "settings": settings,
+                    "members": members,
+                    "transactions": transactions,
+                    "custom_menu_items": menu_items,
+                    "payee_categories": payee_cats,
+                    "recurring_payments": recurring,
+                    "monthly_reviews": reviews
+                }
+
+                canonical_str = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+                payload["checksum"] = hashlib.sha256(canonical_str.encode('utf-8')).hexdigest()
+
+                target_path = output_path or (get_workspace_backup_dir(workspace_id) / f"backup_{workspace_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+                temp_path = target_path.with_suffix(".tmp")
+                with open(temp_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=2, ensure_ascii=False)
+                if target_path.exists():
+                    target_path.unlink()
+                temp_path.rename(target_path)
+
+                from services.audit_service import log_audit_event
+                log_audit_event(
+                    workspace_id=str(workspace_id),
+                    actor_user_id=actor_user_id,
+                    action="backup_exported",
+                    resource=f"workspace:{workspace_id}",
+                    details={"path": str(target_path), "transactions_count": len(transactions)}
+                )
+
+                return {"success": True, "path": str(target_path), "payload": payload}
+            except Exception as e:
+                logger.error(f"Failed to export workspace {workspace_id}: {e}", exc_info=True)
+                return {"success": False, "error": str(e)}
+
+
+def restore_workspace_from_json(workspace_id: str, data_dict: dict, actor_user_id: int = 0) -> dict:
+    """
+    Restores a specific workspace from an isolated JSON backup payload.
+    Validates format, workspace identity, and checksum.
+    Executes atomically in a single SQLite transaction with automatic rollback.
+    """
+    if not workspace_id:
+        return {"success": False, "error": "Missing workspace_id"}
+
+    if not isinstance(data_dict, dict):
+        return {"success": False, "error": "Invalid backup payload format"}
+
+    if data_dict.get("format_version") != "workspace_v1":
+        return {"success": False, "error": "Unsupported backup format version (expected 'workspace_v1')"}
+
+    # Strict workspace isolation check
+    payload_ws_id = str(data_dict.get("workspace_id") or "")
+    if payload_ws_id != str(workspace_id):
+        return {
+            "success": False,
+            "error": f"Workspace mismatch: Cannot restore backup from workspace '{payload_ws_id}' into workspace '{workspace_id}'"
+        }
+
+    # Verify checksum
+    provided_checksum = data_dict.get("checksum")
+    if not provided_checksum:
+        return {"success": False, "error": "Missing checksum in workspace backup payload"}
+
+    verify_payload = {k: v for k, v in data_dict.items() if k != "checksum"}
+    expected_canonical = json.dumps(verify_payload, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+    expected_checksum = hashlib.sha256(expected_canonical.encode('utf-8')).hexdigest()
+
+    if provided_checksum != expected_checksum:
+        return {"success": False, "error": "Checksum validation failed: corrupted or tampered backup payload"}
+
+    # 1. Create pre-restore snapshot
+    pre_snap = export_workspace_to_json(workspace_id, actor_user_id=actor_user_id)
+    if not pre_snap.get("success"):
+        logger.warning(f"Could not generate pre-restore snapshot for workspace {workspace_id}: {pre_snap.get('error')}")
+
+    with LEDGER_LOCK:
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                now_utc = utc_now_iso()
+
+                # Clean existing workspace domain rows
+                cursor.execute("DELETE FROM transactions WHERE workspace_id = ?", (str(workspace_id),))
+                cursor.execute("DELETE FROM custom_menu_items WHERE workspace_id = ?", (str(workspace_id),))
+                cursor.execute("DELETE FROM payee_categories WHERE workspace_id = ?", (str(workspace_id),))
+                cursor.execute("DELETE FROM recurring_payments WHERE workspace_id = ?", (str(workspace_id),))
+                cursor.execute("DELETE FROM monthly_reviews WHERE workspace_id = ?", (str(workspace_id),))
+                cursor.execute("DELETE FROM workspace_settings WHERE workspace_id = ?", (str(workspace_id),))
+
+                # Restore settings
+                for s in data_dict.get("settings", []):
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at)
+                        VALUES (?, ?, ?, ?)
+                    """, (str(workspace_id), s['key'], s['value'], s.get('updated_at') or now_utc))
+
+                # Restore transactions
+                cursor.execute("PRAGMA table_info(transactions)")
+                all_tx_cols = {row[1] for row in cursor.fetchall()}
+                txs = data_dict.get("transactions", [])
+                for tx in txs:
+                    insert_data = {}
+                    for col in all_tx_cols:
+                        if col == 'id':
+                            continue
+                        if col == 'workspace_id':
+                            insert_data[col] = str(workspace_id)
+                        elif col == 'uid':
+                            insert_data[col] = tx.get('uid') or tx.get('transaction_uid') or uuid.uuid4().hex
+                        elif col in tx:
+                            insert_data[col] = tx[col]
+                    if insert_data:
+                        cols = list(insert_data.keys())
+                        placeholders = ', '.join(['?'] * len(cols))
+                        col_str = ', '.join(cols)
+                        cursor.execute(f"INSERT INTO transactions ({col_str}) VALUES ({placeholders})", list(insert_data.values()))
+
+
+                # Restore custom menu items
+                for mi in data_dict.get("custom_menu_items", []):
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO custom_menu_items (workspace_id, name, price, category, is_veg, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (str(workspace_id), mi['name'], mi['price'], mi.get('category', 'Snacks & Tea'), mi.get('is_veg', 1), mi.get('created_at') or now_utc))
+
+                # Restore payee categories
+                for pc in data_dict.get("payee_categories", []):
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO payee_categories (workspace_id, payee_name, category, updated_at)
+                        VALUES (?, ?, ?, ?)
+                    """, (str(workspace_id), pc['payee_name'], pc['category'], pc.get('updated_at') or now_utc))
+
+                # Restore recurring payments
+                for rp in data_dict.get("recurring_payments", []):
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO recurring_payments (
+                            workspace_id, title, amount, category, payee, frequency,
+                            start_date, next_due_date, end_date, auto_log, reminder_days,
+                            status, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        str(workspace_id), rp['title'], rp['amount'], rp.get('category'),
+                        rp.get('payee'), rp.get('frequency', 'monthly'), rp['start_date'],
+                        rp['next_due_date'], rp.get('end_date'), rp.get('auto_log', 0),
+                        rp.get('reminder_days', 1), rp.get('status', 'active'),
+                        rp.get('created_at') or now_utc, rp.get('updated_at') or now_utc
+                    ))
+
+                # Restore monthly reviews
+                for mr in data_dict.get("monthly_reviews", []):
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO monthly_reviews (
+                            workspace_id, year, month, total_income, total_expense, net_savings,
+                            savings_rate_pct, top_category, top_category_amount, top_payee,
+                            top_payee_amount, max_transaction_id, max_transaction_amount,
+                            budget_allocated, budget_spent_pct, is_closed, reviewed_at,
+                            notes, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        str(workspace_id), mr['year'], mr['month'], mr['total_income'],
+                        mr['total_expense'], mr['net_savings'], mr['savings_rate_pct'],
+                        mr.get('top_category'), mr.get('top_category_amount'),
+                        mr.get('top_payee'), mr.get('top_payee_amount'),
+                        mr.get('max_transaction_id'), mr.get('max_transaction_amount'),
+                        mr.get('budget_allocated'), mr.get('budget_spent_pct'),
+                        mr.get('is_closed', 1), mr.get('reviewed_at') or now_utc,
+                        mr.get('notes'), mr.get('created_at') or now_utc
+                    ))
+
+                conn.commit()
+
+            from services.audit_service import log_audit_event
+            log_audit_event(
+                workspace_id=str(workspace_id),
+                actor_user_id=actor_user_id,
+                action="backup_restored",
+                resource=f"workspace:{workspace_id}",
+                details={"restored_transactions": len(txs)}
+            )
+
+            return {
+                "success": True,
+                "restored_transactions": len(txs),
+                "restored_menu_items": len(data_dict.get("custom_menu_items", [])),
+                "restored_recurring": len(data_dict.get("recurring_payments", []))
+            }
+        except Exception as e:
+            logger.error(f"Failed to restore workspace {workspace_id}: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
