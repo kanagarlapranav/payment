@@ -86,6 +86,19 @@ except ValueError:
 raw_group_id = os.getenv('TELEGRAM_GROUP_ID')
 TELEGRAM_GROUP_ID = int(raw_group_id.strip()) if raw_group_id and raw_group_id.strip() else None
 
+# Optional emergency super-admins for multi-tenant disaster recovery
+raw_super_admins = os.getenv('SUPER_ADMIN_USER_IDS', '')
+SUPER_ADMIN_USER_IDS = [
+    int(uid.strip())
+    for uid in raw_super_admins.split(',')
+    if uid.strip() and (uid.strip().isdigit() or (uid.strip().startswith('-') and uid.strip()[1:].isdigit()))
+]
+
+# Multi-tenant workspace auto-provisioning: allows users/groups to create their own isolated workspace
+ALLOW_PUBLIC_WORKSPACES = (
+    os.getenv('ALLOW_PUBLIC_WORKSPACES', 'false' if IS_TEST_ENV else 'true').strip().lower() in ('1', 'true', 'yes')
+)
+
 # OCR Configuration: avoid Windows path default on Linux/Render
 default_tesseract = r'C:\Program Files\Tesseract-OCR\tesseract.exe' if sys.platform == 'win32' else 'tesseract'
 TESSERACT_CMD = os.getenv('TESSERACT_CMD', default_tesseract)

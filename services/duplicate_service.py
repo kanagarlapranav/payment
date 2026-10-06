@@ -12,5 +12,6 @@ def is_duplicate(transaction: Transaction) -> bool:
         # unless we implement deep comparison.
         return False
         
-    existing = get_transaction_by_reference(transaction.reference_number)
+    ws_id = getattr(transaction, 'workspace_id', None)
+    existing = get_transaction_by_reference(transaction.reference_number, workspace_id=ws_id)
     return existing is not None

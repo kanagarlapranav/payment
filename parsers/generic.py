@@ -145,7 +145,7 @@ class GenericParser(BasePaymentParser):
 
         currency_matches = []
         for line in lines:
-            if self._is_promo_or_balance_line(line) or any(w in line.lower() for w in ('****', '***', 'xx', 'ending in')):
+            if self._is_promo_or_balance_line(line):
                 continue
             if re.search(r'[₹$€£¥?*]|Rs\.?|INR|[RrFf](?=\d)', line):
                 cands = extract_amounts_from_line(line)

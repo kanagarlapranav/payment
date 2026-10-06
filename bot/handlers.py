@@ -9,8 +9,9 @@ import re
 from datetime import datetime, timedelta, date
 from config import TELEGRAM_USER_ID, IMAGE_DIR, logger
 from bot.auth import (
-    require_authorized, require_admin, is_owner, is_authorized_user,
-    get_callback_policy, ADMIN_CALLBACK_ACTIONS, READ_ONLY_CALLBACK_ACTIONS
+    require_authorized, require_admin, require_member, is_owner, is_authorized_user,
+    get_callback_policy, ADMIN_CALLBACK_ACTIONS, READ_ONLY_CALLBACK_ACTIONS,
+    get_workspace_context, resolve_workspace_context
 )
 from bot.commands import (
     is_authorized, is_admin_user, render_home_menu_text, render_history_page,
@@ -44,34 +45,61 @@ from utils.dates import parse_date, get_current_time_in_tz, format_display_date
 # In-memory store for pending transactions awaiting confirmation
 pending_transactions = {}
 
-def set_pending_transaction(pending_id: str, transaction) -> None:
-    """Stores pending transaction in memory and persists to SQLite database."""
+def set_pending_transaction(pending_id: str, transaction, workspace_id: str = None) -> None:
+    """Stores pending transaction in memory and persists to SQLite database with workspace scoping."""
     pending_transactions[pending_id] = transaction
+    ws_id = workspace_id or getattr(transaction, 'workspace_id', None)
+    if ws_id:
+        pending_transactions[(ws_id, pending_id)] = transaction
     try:
-        save_pending_receipt(pending_id, transaction)
+        save_pending_receipt(pending_id, transaction, workspace_id=ws_id)
     except Exception as e:
         logger.error(f"Error persisting pending receipt {pending_id}: {e}")
 
-def fetch_pending_transaction(pending_id: str):
-    """Fetches pending transaction from memory or falls back to SQLite database."""
+def fetch_pending_transaction(pending_id: str, workspace_id: str = None):
+    """Fetches pending transaction from memory or falls back to SQLite database with workspace scoping."""
+    if workspace_id and (workspace_id, pending_id) in pending_transactions:
+        return pending_transactions[(workspace_id, pending_id)]
+    
     tx = pending_transactions.get(pending_id)
     if tx:
+        tx_ws = getattr(tx, 'workspace_id', None)
+        if workspace_id and tx_ws and tx_ws != workspace_id:
+            return None
         return tx
+
     try:
-        tx = get_pending_receipt(pending_id)
+        tx = get_pending_receipt(pending_id, workspace_id=workspace_id)
         if tx:
+            tx_ws = getattr(tx, 'workspace_id', None)
+            if workspace_id and tx_ws and tx_ws != workspace_id:
+                return None
             pending_transactions[pending_id] = tx
+            ws_id = workspace_id or tx_ws
+            if ws_id:
+                pending_transactions[(ws_id, pending_id)] = tx
             return tx
     except Exception as e:
         logger.error(f"Error retrieving pending receipt {pending_id}: {e}")
     return None
 
-def pop_pending_transaction(pending_id: str):
-    """Pops pending transaction from memory and deletes from SQLite database."""
-    tx = pending_transactions.pop(pending_id, None)
+def pop_pending_transaction(pending_id: str, workspace_id: str = None):
+    """Pops pending transaction from memory and deletes from SQLite database with workspace scoping."""
+    tx = None
+    if workspace_id:
+        tx = pending_transactions.pop((workspace_id, pending_id), None)
+    
+    fallback_tx = pending_transactions.get(pending_id)
+    if fallback_tx:
+        tx_ws = getattr(fallback_tx, 'workspace_id', None)
+        if not workspace_id or not tx_ws or tx_ws == workspace_id:
+            pending_transactions.pop(pending_id, None)
+            if not tx:
+                tx = fallback_tx
+
     try:
-        db_tx = get_pending_receipt(pending_id)
-        delete_pending_receipt(pending_id)
+        db_tx = get_pending_receipt(pending_id, workspace_id=workspace_id)
+        delete_pending_receipt(pending_id, workspace_id=workspace_id)
         if not tx:
             tx = db_tx
     except Exception as e:
@@ -331,7 +359,7 @@ MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles incoming images with Gemini Vision AI first, RapidOCR + Heuristic Parser fallback."""
-    if not await require_admin(update): return
+    if not (await require_admin(update) or await require_member(update)): return
     
     message = update.message
     chat_id = str(message.chat_id)
@@ -471,8 +499,15 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        ws_ctx = get_workspace_context(update)
+        ws_id = ws_ctx.workspace_id if ws_ctx else None
+        if transaction:
+            transaction.workspace_id = ws_id
+            if message.from_user:
+                transaction.telegram_user_id = int(message.from_user.id)
+
         # 1. Payee Category Memory: check if payee category is remembered from past
-        rem_cat = await asyncio.to_thread(get_payee_category, transaction.person_name)
+        rem_cat = await asyncio.to_thread(get_payee_category, transaction.person_name, ws_id)
         if rem_cat:
             transaction.category = rem_cat
         elif not transaction.category or transaction.category == 'General':
@@ -486,13 +521,14 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             amount=transaction.amount,
             reference_number=transaction.reference_number,
             person_name=transaction.person_name,
-            tx_date=str(transaction.transaction_date) if transaction.transaction_date else None
+            tx_date=str(transaction.transaction_date) if transaction.transaction_date else None,
+            workspace_id=ws_id
         )
         dup_warning = f"⚠️ Similar to #{dup['id']} ({dup.get('match_reason', 'duplicate')}) — duplicate?" if dup else None
 
         # 3. Store in pending for interactive confirmation
         pending_id = uuid.uuid4().hex[:10]
-        set_pending_transaction(pending_id, transaction)
+        set_pending_transaction(pending_id, transaction, workspace_id=ws_id)
 
         # 4. Render the polished Confirmation Card requested by user
         card_text = format_receipt_card(transaction, dup_warning)
@@ -535,11 +571,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             pass
         return
 
-    if policy == 'admin':
+    ws_ctx = get_workspace_context(update)
+    if policy in ('admin', 'owner'):
         if not await require_admin(update):
             return
-    elif policy == 'read_only':
+    elif policy in ('read_only', 'viewer'):
         if not await require_authorized(update):
+            return
+    else:
+        ws_ctx = await resolve_workspace_context(update, required_policy=policy)
+        if not ws_ctx:
             return
 
     data = query.data
@@ -552,17 +593,19 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception:
             pass
     
+    ws_id = ws_ctx.workspace_id if ws_ctx else None
+
     # --- 0. Interactive Home Menu Navigation ---
     if action == "nav":
         nav_target = parts[1] if len(parts) > 1 else "home"
         try:
             if nav_target == "home":
-                text = render_home_menu_text()
+                text = render_home_menu_text(workspace_id=ws_id)
                 await query.edit_message_text(text, reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
             elif nav_target == "balance":
-                balance = get_balance_setting()
-                today_stats = get_today_summary()
-                overall = get_overall_summary()
+                balance = get_balance_setting(workspace_id=ws_id)
+                today_stats = get_today_summary(workspace_id=ws_id)
+                overall = get_overall_summary(workspace_id=ws_id)
                 text = (
                     "💰 <b>Live Account Balance</b>\n"
                     "━━━━━━━━━━━━━━\n"
@@ -581,9 +624,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.edit_message_text(text, reply_markup=get_balance_keyboard(), parse_mode='HTML')
             elif nav_target == "today":
                 from database.queries import get_transactions_by_date
-                today_stats = get_today_summary()
+                today_stats = get_today_summary(workspace_id=ws_id)
                 today_date = get_current_time_in_tz().date()
-                txs = get_transactions_by_date(today_date)
+                txs = get_transactions_by_date(today_date, workspace_id=ws_id)
                 lines = [
                     "📅 <b>Today's Transactions</b>",
                     "━━━━━━━━━━━━━━"
@@ -606,7 +649,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 page = int(parts[2]) if len(parts) > 2 else 1
                 ft = parts[3] if len(parts) > 3 else "ALL"
                 sb = parts[4] if len(parts) > 4 else "date_desc"
-                text, markup = render_history_page(page=page, filter_type=ft, page_size=5, sort_by=sb)
+                text, markup = render_history_page(page=page, filter_type=ft, page_size=5, sort_by=sb, workspace_id=ws_id)
                 await query.edit_message_text(text, reply_markup=markup, parse_mode='HTML')
             elif nav_target == "history_noop":
                 pass
@@ -670,7 +713,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 )
                 await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
             elif nav_target == "quickadd":
-                top_p = get_top_payees(limit=3)
+                top_p = get_top_payees(limit=3, workspace_id=ws_id)
                 text = (
                     "⚡ <b>One-Tap Quick Entry</b>\n"
                     "━━━━━━━━━━━━━━━━━━━━\n"
@@ -730,7 +773,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 )
                 await query.edit_message_text(text, reply_markup=get_more_menu_keyboard(), parse_mode='HTML')
             elif nav_target == "contacts":
-                text = render_contacts_ledger_text()
+                text = render_contacts_ledger_text(workspace_id=ws_id)
                 await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
             elif nav_target == "dash_info":
                 from config import RENDER_EXTERNAL_URL
@@ -1023,13 +1066,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     # --- 1. Transaction Detail, Duplicate & Backup Actions ---
     elif action == "tx_view":
         tx_id = int(parts[1])
-        text, markup = render_transaction_detail(tx_id)
+        text, markup = render_transaction_detail(tx_id, workspace_id=ws_id)
         await query.edit_message_text(text, reply_markup=markup, parse_mode='HTML')
         return
 
     elif action == "dup_tx":
         tx_id = int(parts[1])
-        orig_tx = get_transaction_by_id(tx_id)
+        orig_tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         if not orig_tx:
             await query.edit_message_text("❌ Transaction not found.", reply_markup=get_back_to_menu_keyboard())
             return
@@ -1042,9 +1085,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             person_name=orig_tx.get('person_name'),
             category=orig_tx.get('category') or 'General',
             payment_app=orig_tx.get('payment_app'),
-            bank_name=orig_tx.get('bank_name')
+            bank_name=orig_tx.get('bank_name'),
+            workspace_id=ws_id
         )
-        set_pending_transaction(dup_pending_id, dup_tx)
+        set_pending_transaction(dup_pending_id, dup_tx, workspace_id=ws_id)
         card_text = format_receipt_card(dup_tx, dup_warning=f"📋 Duplicating Transaction #{tx_id}")
         await query.edit_message_text(card_text, reply_markup=get_confirmation_card_keyboard(dup_pending_id), parse_mode='HTML')
         return
@@ -1060,7 +1104,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif action == "delete_tx":
         tx_id = int(parts[1])
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         if not tx:
             await query.edit_message_text(
                 f"❌ <b>Transaction Not Found</b>\nTransaction #{tx_id} could not be found.",
@@ -1121,9 +1165,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action in ("save_p", "force_save_p"):
         is_force = (action == "force_save_p")
         pending_id = parts[1]
-        transaction = pop_pending_transaction(pending_id) if not is_force else fetch_pending_transaction(pending_id)
+        transaction = pop_pending_transaction(pending_id, workspace_id=ws_id) if not is_force else fetch_pending_transaction(pending_id, workspace_id=ws_id)
         if is_force:
-            pop_pending_transaction(pending_id)
+            pop_pending_transaction(pending_id, workspace_id=ws_id)
 
         if not transaction:
             msg_text = (query.message.text if query.message else "") or (query.message.caption if query.message else "")
@@ -1140,17 +1184,21 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await safe_edit_callback_message(query, "❌ Receipt confirmation expired.", reply_markup=get_back_to_menu_keyboard())
             return
 
+        if ws_id:
+            transaction.workspace_id = ws_id
+
         # Check if this exact receipt/transaction was already saved in the database
         existing = None
         if not is_force:
             if transaction.reference_number:
-                existing = get_transaction_by_reference(transaction.reference_number)
+                existing = get_transaction_by_reference(transaction.reference_number, workspace_id=ws_id)
             if not existing:
                 pot_dup = find_potential_duplicate(
                     amount=transaction.amount,
                     reference_number=transaction.reference_number,
                     person_name=transaction.person_name,
-                    tx_date=str(transaction.transaction_date) if transaction.transaction_date else None
+                    tx_date=str(transaction.transaction_date) if transaction.transaction_date else None,
+                    workspace_id=ws_id
                 )
                 if pot_dup and pot_dup.get('match_reason') and 'ref' in pot_dup.get('match_reason', ''):
                     existing = pot_dup
@@ -1163,7 +1211,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     await ans
             except Exception:
                 pass
-            set_pending_transaction(pending_id, transaction)
+            set_pending_transaction(pending_id, transaction, workspace_id=ws_id)
             date_display = existing.get('transaction_date') or "Today"
             if existing.get('transaction_time'):
                 date_display += f", {existing['transaction_time']}"
@@ -1194,8 +1242,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         
         # Remember payee preference in DB if available
         if transaction.person_name and transaction.category:
-            remember_payee_category(transaction.person_name, transaction.category)
+            remember_payee_category(transaction.person_name, transaction.category, workspace_id=ws_id)
             
+        if query.from_user and getattr(query.from_user, 'id', None):
+            transaction.telegram_user_id = int(query.from_user.id)
+
         success = commit_transaction(transaction, allow_duplicate=is_force)
         if success:
             try:
@@ -1225,16 +1276,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 logger.warning(f"Could not record undo action: {u_err}")
 
             # Fetch fresh transaction from DB to get the exact recalculated balance_after
-            saved_tx = get_transaction_by_id(transaction.id)
+            saved_tx = get_transaction_by_id(transaction.id, workspace_id=ws_id)
             if saved_tx and saved_tx.get('balance_after') is not None:
                 current_bal_val = saved_tx.get('balance_after')
             else:
-                current_bal_val = get_balance_setting()
+                current_bal_val = get_balance_setting(workspace_id=ws_id)
 
             # Check budget alerts (Requirement 5: After saving a transaction, add a one-line alert if a budget crosses 80% or 100%)
             from services.budget_service import get_budget_info
             now = get_current_time_in_tz()
-            b_info = get_budget_info(now.year, now.month)
+            b_info = get_budget_info(now.year, now.month, workspace_id=ws_id)
             budget_alert = ""
             if b_info.get('budget', 0) > 0:
                 pct = b_info.get('percentage', 0)
@@ -1263,7 +1314,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             from services.task_manager import schedule_debounced_backup
             schedule_debounced_backup(context.bot)
         else:
-            existing = get_transaction_by_reference(transaction.reference_number) if transaction.reference_number else None
+            existing = get_transaction_by_reference(transaction.reference_number, workspace_id=ws_id) if transaction.reference_number else None
             if existing:
                 try:
                     ans = query.answer("ℹ️ Already Saved!", show_alert=False)
@@ -1293,7 +1344,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     [InlineKeyboardButton(f"↩️ Undo #{existing['id']}", callback_data=f"undo_tx:{existing['id']}")],
                     [InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:home")]
                 ])
-                set_pending_transaction(pending_id, transaction)
+                set_pending_transaction(pending_id, transaction, workspace_id=ws_id)
                 await safe_edit_callback_message(query, already_saved_text, reply_markup=kb, parse_mode='HTML')
             else:
                 try:
@@ -1335,12 +1386,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif action == "ep_back":
         pending_id = parts[1]
-        transaction = fetch_pending_transaction(pending_id)
+        transaction = fetch_pending_transaction(pending_id, workspace_id=ws_id)
         if not transaction:
             msg_text = (query.message.text if query.message else "") or (query.message.caption if query.message else "")
             transaction = reconstruct_transaction_from_card(msg_text)
             if transaction:
-                set_pending_transaction(pending_id, transaction)
+                if ws_id:
+                    transaction.workspace_id = ws_id
+                set_pending_transaction(pending_id, transaction, workspace_id=ws_id)
         if not transaction:
             await safe_edit_callback_message(query, "❌ Transaction expired.", reply_markup=get_back_to_menu_keyboard())
             return
@@ -1348,7 +1401,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             amount=transaction.amount,
             reference_number=transaction.reference_number,
             person_name=transaction.person_name,
-            tx_date=str(transaction.transaction_date) if transaction.transaction_date else None
+            tx_date=str(transaction.transaction_date) if transaction.transaction_date else None,
+            workspace_id=ws_id
         )
         dup_warning = f"⚠️ Similar to #{dup['id']} ({dup.get('match_reason', 'duplicate')}) — duplicate?" if dup else None
         card_text = format_receipt_card(transaction, dup_warning)
@@ -1369,20 +1423,23 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "set_pcat":
         pending_id = parts[1]
         new_cat = parts[2]
-        transaction = fetch_pending_transaction(pending_id)
+        transaction = fetch_pending_transaction(pending_id, workspace_id=ws_id)
         if not transaction:
             msg_text = (query.message.text if query.message else "") or (query.message.caption if query.message else "")
             transaction = reconstruct_transaction_from_card(msg_text)
         if transaction:
+            if ws_id:
+                transaction.workspace_id = ws_id
             transaction.category = new_cat
-            set_pending_transaction(pending_id, transaction)
+            set_pending_transaction(pending_id, transaction, workspace_id=ws_id)
             if transaction.person_name:
-                remember_payee_category(transaction.person_name, new_cat)
+                remember_payee_category(transaction.person_name, new_cat, workspace_id=ws_id)
             dup = find_potential_duplicate(
                 amount=transaction.amount,
                 reference_number=transaction.reference_number,
                 person_name=transaction.person_name,
-                tx_date=str(transaction.transaction_date) if transaction.transaction_date else None
+                tx_date=str(transaction.transaction_date) if transaction.transaction_date else None,
+                workspace_id=ws_id
             )
             dup_warning = f"⚠️ Similar to #{dup['id']} ({dup.get('match_reason', 'duplicate')}) — duplicate?" if dup else None
             card_text = format_receipt_card(transaction, dup_warning)
@@ -1394,20 +1451,81 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "cancel_p":
         await query.answer("❌ Receipt discarded.", show_alert=False)
         pending_id = parts[1]
-        pop_pending_transaction(pending_id)
+        pop_pending_transaction(pending_id, workspace_id=ws_id)
         await safe_edit_callback_message(query, "❌ Receipt discarded.", reply_markup=get_back_to_menu_keyboard())
+        return
+
+    # --- Workspace Switcher Actions ---
+    elif action == "ws_switch":
+        target_ws_id = parts[1]
+        from bot.auth import set_user_active_workspace, get_effective_user_id
+        from database.queries import get_workspace_by_id
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        import html
+        user_id = get_effective_user_id(update)
+        target_ws = get_workspace_by_id(target_ws_id)
+        if target_ws and user_id:
+            set_user_active_workspace(user_id, target_ws.id)
+            try:
+                await query.answer(f"Switched to: {target_ws.title}")
+            except Exception:
+                pass
+            await safe_edit_callback_message(
+                query,
+                f"✅ <b>Active Workspace Switched!</b>\n\n"
+                f"🏢 <b>Workspace:</b> <b>{html.escape(target_ws.title or 'Workspace')}</b>\n"
+                f"🆔 <code>{target_ws.id}</code>\n"
+                f"💬 <b>Type:</b> {target_ws.chat_type.title()}\n\n"
+                f"👉 <i>Commands (/history, /last5, /balance, /edit, /delete, /report) will now inspect and manage this workspace.</i>\n\n"
+                f"Type /workspaces anytime to switch again or reset.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Reset to Current Chat Default", callback_data="ws_reset")],
+                    [InlineKeyboardButton("🏢 Switch Workspace", callback_data="ws_reset_menu")]
+                ]),
+                parse_mode='HTML'
+            )
+        else:
+            await query.answer("❌ Workspace not found.", show_alert=True)
+        return
+
+    elif action in ("ws_reset", "ws_reset_menu"):
+        from bot.auth import set_user_active_workspace, get_effective_user_id
+        user_id = get_effective_user_id(update)
+        if user_id:
+            set_user_active_workspace(user_id, None)
+        try:
+            await query.answer("Reset to default workspace.")
+        except Exception:
+            pass
+        if action == "ws_reset_menu":
+            from bot.commands import workspace_command
+            await workspace_command(update, context)
+        else:
+            await safe_edit_callback_message(
+                query,
+                "🔄 <b>Active workspace reset to default for this chat.</b>\n\n"
+                "You are back to your standard chat view.",
+                reply_markup=get_back_to_menu_keyboard(),
+                parse_mode='HTML'
+            )
         return
 
     # --- 2. Quick Undo & Quick Add Actions ---
     elif action == "undo_tx":
         tx_id = int(parts[1])
-        tx = get_transaction_by_id(tx_id)
+        from database.queries import can_user_modify_transaction
+        caller_id = update.effective_user.id if update.effective_user else None
+        caller_role = ws_ctx.role if ws_ctx else 'member'
+        if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
+            await query.answer("⛔ You can only undo payments that you recorded.", show_alert=True)
+            return
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         if not tx:
             await query.edit_message_text("❌ Transaction not found or already removed.", reply_markup=get_back_to_menu_keyboard())
             return
-        deleted = delete_transaction(tx_id)
+        deleted = delete_transaction(tx_id, workspace_id=ws_id)
         if deleted:
-            new_bal = recalculate_all_balances()
+            new_bal = recalculate_all_balances(workspace_id=ws_id)
             try:
                 from services.backup_service import export_database_to_json
                 export_database_to_json()
@@ -1445,7 +1563,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             category=cat,
             transaction_date=now_dt.date(),
             transaction_time=now_dt.strftime("%I:%M %p"),
-            payment_app="One-Tap Quick Entry"
+            payment_app="One-Tap Quick Entry",
+            workspace_id=ws_id,
+            telegram_user_id=int(query.from_user.id) if (query.from_user and getattr(query.from_user, 'id', None)) else None
         )
         success = commit_transaction(tx)
         if success:
@@ -1465,11 +1585,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     # 1. OCR Confirmation / Cancellation (Legacy fallback)
     elif action in ("confirm_tx", "cancel_tx"):
         tx_id = parts[1]
-        transaction = fetch_pending_transaction(tx_id)
+        transaction = fetch_pending_transaction(tx_id, workspace_id=ws_id)
         
         if not transaction:
             await query.edit_message_text("❌ Transaction expired or no longer available.")
             return
+
+        if ws_id:
+            transaction.workspace_id = ws_id
+        if query.from_user and getattr(query.from_user, 'id', None):
+            transaction.telegram_user_id = int(query.from_user.id)
             
         if action == "confirm_tx":
             success = commit_transaction(transaction)
@@ -1480,16 +1605,22 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 schedule_debounced_backup(context.bot)
             else:
                 await query.edit_message_text("⚠️ Transaction already recorded.")
-            pop_pending_transaction(tx_id)
+            pop_pending_transaction(tx_id, workspace_id=ws_id)
             
         elif action == "cancel_tx":
             await query.edit_message_text("❌ Transaction cancelled.")
-            pop_pending_transaction(tx_id)
+            pop_pending_transaction(tx_id, workspace_id=ws_id)
             
     # 2. Transaction Selection for Edit / Delete
     elif action == "select_edit":
         tx_id = int(parts[1])
-        tx = get_transaction_by_id(tx_id)
+        from database.queries import can_user_modify_transaction
+        caller_id = update.effective_user.id if update.effective_user else None
+        caller_role = ws_ctx.role if ws_ctx else 'member'
+        if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
+            await query.answer("⛔ You can only edit payments that you recorded.", show_alert=True)
+            return
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         if not tx:
             await query.edit_message_text("❌ Transaction not found.")
             return
@@ -1506,22 +1637,24 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(text, reply_markup=get_edit_fields_keyboard(tx_id), parse_mode='HTML')
         
     elif action == "select_delete":
-        if not is_admin_user(update):
-            await query.answer("❌ Only the bot owner can delete transactions.", show_alert=True)
+        tx_id = int(parts[1])
+        from database.queries import can_user_modify_transaction
+        caller_id = update.effective_user.id if update.effective_user else None
+        caller_role = ws_ctx.role if ws_ctx else 'member'
+        if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
+            await query.answer("⛔ You can only delete payments that you recorded.", show_alert=True)
             return
         await query.answer()
-        tx_id = int(parts[1])
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         if not tx:
             from database.db import get_db_connection
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,))
                 raw_row = cursor.fetchone()
-            from bot.keyboards import get_back_to_menu_keyboard
             if raw_row and raw_row['deleted_at']:
                 from database.queries import get_balance_setting
-                cur_bal = get_balance_setting()
+                cur_bal = get_balance_setting(workspace_id=ws_id)
                 await query.edit_message_text(
                     f"✅ <b>Delete Confirmed!</b>\n"
                     f"━━━━━━━━━━━━━━\n"
@@ -1553,6 +1686,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "edit_field":
         field = parts[1]
         tx_id = int(parts[2])
+        from database.queries import can_user_modify_transaction
+        caller_id = update.effective_user.id if update.effective_user else None
+        caller_role = ws_ctx.role if ws_ctx else 'member'
+        if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
+            await query.answer("⛔ You can only edit payments that you recorded.", show_alert=True)
+            return
         
         context.user_data['action'] = 'waiting_edit_value'
         context.user_data['edit_tx_id'] = tx_id
@@ -1572,9 +1711,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
         
     elif action in ("edit_cancel", "select_edit_cancel"):
-        if not is_admin_user(update):
-            await query.answer("❌ Only the bot owner can cancel editing.", show_alert=True)
-            return
         await query.answer("❌ Editing cancelled.", show_alert=False)
         context.user_data.pop('action', None)
         context.user_data.pop('edit_tx_id', None)
@@ -1583,22 +1719,25 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     # 4. Delete Confirmation
     elif action == "delete_confirm":
-        if not is_admin_user(update):
-            await query.answer("❌ Only the bot owner can delete transactions.", show_alert=True)
+        tx_id = int(parts[1])
+        from database.queries import can_user_modify_transaction
+        caller_id = update.effective_user.id if update.effective_user else None
+        caller_role = ws_ctx.role if ws_ctx else 'member'
+        if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
+            await query.answer("⛔ You can only delete payments that you recorded.", show_alert=True)
             return
         await query.answer("✅ Delete Confirmed!", show_alert=False)
         tx_id = int(parts[1])
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         if not tx:
             from database.db import get_db_connection
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,))
                 raw_row = cursor.fetchone()
-            from bot.keyboards import get_back_to_menu_keyboard
             if raw_row and raw_row['deleted_at']:
                 from database.queries import get_balance_setting
-                cur_bal = get_balance_setting()
+                cur_bal = get_balance_setting(workspace_id=ws_id)
                 await query.edit_message_text(
                     f"✅ <b>Delete Confirmed!</b>\n"
                     f"━━━━━━━━━━━━━━\n"
@@ -1624,9 +1763,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         user_id = update.effective_user.id if update.effective_user else None
         record_delete_action(tx, chat_id=chat_id, user_id=user_id)
 
-        success = delete_transaction(tx_id)
+        success = delete_transaction(tx_id, workspace_id=ws_id)
         if success:
-            new_bal = recalculate_all_balances()
+            new_bal = recalculate_all_balances(workspace_id=ws_id)
             try:
                 from services.backup_service import export_database_to_json
                 export_database_to_json()
@@ -1643,7 +1782,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await safe_edit_callback_message(
                 query,
                 f"✅ <b>Delete Confirmed!</b>\n"
-                f"━━━━━━━━━━━━━━\n"
+                "━━━━━━━━━━━━━━\n"
                 f"🗑️ <b>Transaction #{tx_id} has been deleted.</b>\n\n"
                 f"• <b>Type:</b> {html.escape(str(tx_type))}\n"
                 f"• <b>Amount:</b> {html.escape(amt_str)}\n"
@@ -1653,7 +1792,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 parse_mode='HTML'
             )
         else:
-            from bot.keyboards import get_back_to_menu_keyboard
             await safe_edit_callback_message(query, "❌ Nothing was saved: Failed to delete transaction.", reply_markup=get_back_to_menu_keyboard())
 
     elif action in ("delete_cancel", "select_delete_cancel"):
@@ -1662,7 +1800,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             return
         await query.answer("❌ Deletion cancelled.", show_alert=False)
         context.user_data.pop('action', None)
-        from bot.keyboards import get_back_to_menu_keyboard
         await safe_edit_callback_message(
             query,
             "❌ <b>Deletion Cancelled</b>\n\nNo changes were made to your ledger.",
@@ -1679,7 +1816,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         chat_id = update.effective_chat.id if update.effective_chat else None
         user_id = update.effective_user.id if update.effective_user else None
         success, msg = perform_undo(chat_id=chat_id, user_id=user_id)
-        from bot.keyboards import get_back_to_menu_keyboard
         if success:
             try:
                 from services.backup_service import export_database_to_json
@@ -1706,14 +1842,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception:
             pass
         from services.undo_service import perform_undo
-        import asyncio
         chat_id = update.effective_chat.id if update.effective_chat else None
         user_id = update.effective_user.id if update.effective_user else None
         success, msg = await asyncio.to_thread(perform_undo, chat_id=chat_id, user_id=user_id)
-        from bot.keyboards import get_back_to_menu_keyboard
         if success:
             from database.queries import get_balance_setting
-            bal = get_balance_setting()
+            bal = get_balance_setting(workspace_id=ws_id)
             try:
                 from services.backup_service import export_database_to_json
                 export_database_to_json()
@@ -1745,7 +1879,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await ans
         except Exception:
             pass
-        from bot.keyboards import get_back_to_menu_keyboard
         await query.edit_message_text(
             "❌ <b>Undo Cancelled</b>\n━━━━━━━━━━━━━━\nNo changes were made to your ledger.",
             reply_markup=get_back_to_menu_keyboard(),
@@ -1758,13 +1891,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "correct_amount":
         tx_id = int(parts[1])
         new_amt = float(parts[2])
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         if not tx:
             await query.edit_message_text("❌ Transaction not found.")
             return
-        success = update_transaction(tx_id, {'amount': new_amt})
+        success = update_transaction(tx_id, {'amount': new_amt}, workspace_id=ws_id)
         if success:
-            new_bal = recalculate_all_balances()
+            new_bal = recalculate_all_balances(workspace_id=ws_id)
             from services.task_manager import schedule_debounced_backup
             schedule_debounced_backup(context.bot)
             if is_gdrive_available():
@@ -1800,17 +1933,17 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         now = get_current_time_in_tz()
         
         if filter_type == "today":
-            txs = search_transactions(target_date=now.date(), sort_by="date_desc")
+            txs = search_transactions(target_date=now.date(), sort_by="date_desc", workspace_id=ws_id)
             title = f"📅 Today's Transactions ({now.strftime('%d %b %Y')})"
         elif filter_type == "yesterday":
             y_date = now.date() - timedelta(days=1)
-            txs = search_transactions(target_date=y_date, sort_by="date_desc")
+            txs = search_transactions(target_date=y_date, sort_by="date_desc", workspace_id=ws_id)
             title = f"📅 Yesterday's Transactions ({y_date.strftime('%d %b %Y')})"
         elif filter_type == "this_month":
-            txs = search_transactions(year=now.year, month=now.month, sort_by="date_desc")
+            txs = search_transactions(year=now.year, month=now.month, sort_by="date_desc", workspace_id=ws_id)
             title = f"🗓️ This Month's Transactions ({now.strftime('%B %Y')})"
         elif filter_type == "monthly_stats":
-            stats = get_monthly_summary(now.year, now.month)
+            stats = get_monthly_summary(now.year, now.month, workspace_id=ws_id)
             top_p = f"{stats['top_recipient']['person_name']} ({format_currency(stats['top_recipient']['total'])})" if stats['top_recipient'] else "N/A"
             text = (
                 f"📊 <b>Monthly Analytics - {now.strftime('%B %Y')}</b>\n\n"
@@ -1823,13 +1956,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text(text, reply_markup=get_filter_keyboard(), parse_mode='HTML')
             return
         elif filter_type == "type_sent":
-            txs = search_transactions(tx_type="SENT", limit=15, sort_by="date_desc")
+            txs = search_transactions(tx_type="SENT", limit=15, sort_by="date_desc", workspace_id=ws_id)
             title = "🔴 Recent Sent Transactions"
         elif filter_type == "type_received":
-            txs = search_transactions(tx_type="RECEIVED", limit=15, sort_by="date_desc")
+            txs = search_transactions(tx_type="RECEIVED", limit=15, sort_by="date_desc", workspace_id=ws_id)
             title = "🟢 Recent Received Transactions"
         elif filter_type == "show_ids":
-            txs = get_recent_transactions(limit=10)
+            txs = get_recent_transactions(limit=10, workspace_id=ws_id)
             if not txs:
                 await query.edit_message_text("No transactions found.")
                 return
@@ -1876,7 +2009,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             "amount_desc": "Amount (Highest first)",
             "amount_asc": "Amount (Lowest first)"
         }
-        txs = search_transactions(sort_by=sort_by, limit=10)
+        txs = search_transactions(sort_by=sort_by, limit=10, workspace_id=ws_id)
         if not txs:
             await query.edit_message_text("No transactions found.")
             return
@@ -2116,13 +2249,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif action == "cafe_stats":
         from services.cafeteria_service import format_cafeteria_stats
-        stats_text = format_cafeteria_stats()
+        stats_text = format_cafeteria_stats(workspace_id=ws_id)
         await query.message.reply_text(stats_text, parse_mode='HTML')
 
     elif action == "cafe_view_menu":
         from services.cafeteria_service import format_full_menu
         from bot.keyboards import get_menu_view_keyboard
-        menu_text = format_full_menu()
+        menu_text = format_full_menu(workspace_id=ws_id)
         await query.message.reply_text(menu_text, reply_markup=get_menu_view_keyboard(), parse_mode='HTML')
 
     elif action == "cafe_menu_add_prompt":
@@ -2175,7 +2308,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "cafe_edit_last":
         from database.queries import get_cafeteria_transactions
         from bot.keyboards import get_cafeteria_selection_keyboard
-        cafe_txs = get_cafeteria_transactions(limit=1)
+        cafe_txs = get_cafeteria_transactions(limit=1, workspace_id=ws_id)
         if cafe_txs:
             tx = cafe_txs[0]
             tx_id = tx['id']
@@ -2294,16 +2427,32 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     chat_id = str(update.message.chat_id)
     message_id = str(update.message.message_id)
+
+    ws_ctx = get_workspace_context(update)
+    ws_id = ws_ctx.workspace_id if ws_ctx else None
     
     # Normalize commands e.g. \\date, /search, /monthly, /filter, /sort, /details, /undo
     from bot.commands import (
         edit_command, delete_command, history_command, balance_command,
         date_command, search_command, monthly_command, filter_command, sort_command, details_command, amount_command,
-        undo_command
+        undo_command, workspace_command, members_command, setrole_command
     )
     cmd_lower = text.lower()
     
-    if cmd_lower in (r'\undo', 'undo', '/undo', 'revert', '/revert', r'\revert'):
+    if cmd_lower.startswith((r'\workspace', 'workspace', '/workspace', r'\workspaces', 'workspaces', '/workspaces')):
+        parts = text.split(maxsplit=1)
+        context.args = parts[1].split() if len(parts) > 1 else []
+        await workspace_command(update, context)
+        return
+    elif cmd_lower in (r'\members', 'members', '/members', r'\team', 'team', '/team'):
+        await members_command(update, context)
+        return
+    elif cmd_lower.startswith((r'\setrole', 'setrole', '/setrole')):
+        parts = text.split(maxsplit=1)
+        context.args = parts[1].split() if len(parts) > 1 else []
+        await setrole_command(update, context)
+        return
+    elif cmd_lower in (r'\undo', 'undo', '/undo', 'revert', '/revert', r'\revert'):
         await undo_command(update, context)
         return
     elif cmd_lower in (r'\backup', 'backup', '/backup', r'\backupnow', 'backupnow', '/backupnow'):
@@ -2433,25 +2582,40 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await amount_command(update, context)
                 return
 
-    # Check if user is in an interactive state (all pending actions are admin mutations)
+    # Check if user is in an interactive state
     pending_action = context.user_data.get('action')
     if pending_action:
-        if not await require_admin(update):
-            return
+        member_actions = {
+            'waiting_edit_id', 'waiting_delete_id', 'waiting_edit_value',
+            'waiting_edit_pending_value', 'waiting_payee_amount',
+            'waiting_quick_text', 'waiting_cafe_custom_amount'
+        }
+        if pending_action in member_actions:
+            if not (await require_admin(update) or await require_member(update)):
+                return
+        else:
+            if not await require_admin(update):
+                return
     
     if pending_action == 'waiting_edit_id':
         clean_id_str = text.replace('#', '').strip()
         if clean_id_str.isdigit():
             num = int(clean_id_str)
-            recent_ids = context.user_data.get('recent_edit_ids') or [t['id'] for t in get_recent_transactions(limit=10)]
+            recent_ids = context.user_data.get('recent_edit_ids') or [t['id'] for t in get_recent_transactions(limit=10, workspace_id=ws_id)]
             tx = None
             if num in recent_ids:
-                tx = get_transaction_by_id(num)
+                tx = get_transaction_by_id(num, workspace_id=ws_id)
             elif 1 <= num <= len(recent_ids):
-                tx = get_transaction_by_id(recent_ids[num - 1])
+                tx = get_transaction_by_id(recent_ids[num - 1], workspace_id=ws_id)
             if not tx:
-                tx = get_transaction_by_id(num)
+                tx = get_transaction_by_id(num, workspace_id=ws_id)
             if tx:
+                caller_id = update.effective_user.id if update.effective_user else None
+                caller_role = getattr(context, 'user_role', None) or (ws_ctx.role if ws_ctx else 'member')
+                from database.queries import can_user_modify_transaction
+                if not can_user_modify_transaction(tx['id'], caller_id, caller_role) and not is_admin_user(update):
+                    await update.message.reply_text("⛔ You can only edit payments that you recorded.")
+                    return
                 tx_id = tx['id']
                 context.user_data.pop('action', None)
                 context.user_data.pop('recent_edit_ids', None)
@@ -2475,15 +2639,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         clean_id_str = text.replace('#', '').strip()
         if clean_id_str.isdigit():
             num = int(clean_id_str)
-            recent_ids = context.user_data.get('recent_delete_ids') or [t['id'] for t in get_recent_transactions(limit=10)]
+            recent_ids = context.user_data.get('recent_delete_ids') or [t['id'] for t in get_recent_transactions(limit=10, workspace_id=ws_id)]
             tx = None
             if num in recent_ids:
-                tx = get_transaction_by_id(num)
+                tx = get_transaction_by_id(num, workspace_id=ws_id)
             elif 1 <= num <= len(recent_ids):
-                tx = get_transaction_by_id(recent_ids[num - 1])
+                tx = get_transaction_by_id(recent_ids[num - 1], workspace_id=ws_id)
             if not tx:
-                tx = get_transaction_by_id(num)
+                tx = get_transaction_by_id(num, workspace_id=ws_id)
             if tx:
+                caller_id = update.effective_user.id if update.effective_user else None
+                caller_role = getattr(context, 'user_role', None) or (ws_ctx.role if ws_ctx else 'member')
+                from database.queries import can_user_modify_transaction
+                if not can_user_modify_transaction(tx['id'], caller_id, caller_role) and not is_admin_user(update):
+                    await update.message.reply_text("⛔ You can only delete payments that you recorded.")
+                    return
                 tx_id = tx['id']
                 context.user_data.pop('action', None)
                 context.user_data.pop('recent_delete_ids', None)
@@ -2505,6 +2675,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
     elif pending_action == 'waiting_edit_value':
         tx_id = context.user_data.get('edit_tx_id')
+        caller_id = update.effective_user.id if update.effective_user else None
+        caller_role = getattr(context, 'user_role', None) or (ws_ctx.role if ws_ctx else 'member')
+        from database.queries import can_user_modify_transaction
+        if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
+            context.user_data.pop('action', None)
+            context.user_data.pop('edit_tx_id', None)
+            context.user_data.pop('edit_field', None)
+            await update.message.reply_text("⛔ You can only edit payments that you recorded.")
+            return
         field = context.user_data.get('edit_field')
 
         updates = {}
@@ -2614,7 +2793,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         custom_note = text.strip()
         
         if tx_id:
-            tx = get_transaction_by_id(tx_id)
+            caller_id = update.effective_user.id if update.effective_user else None
+            caller_role = getattr(context, 'user_role', None) or (ws_ctx.role if ws_ctx else 'member')
+            from database.queries import can_user_modify_transaction
+            if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
+                await update.message.reply_text("⛔ You can only edit payments that you recorded.")
+                return
+            tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
             if tx:
                 if parsed_amt > 0:
                     tag_desc = f"{item_type} (₹{parsed_amt:.0f})" if item_type != 'Custom' else f"Custom Item (₹{parsed_amt:.0f})"
@@ -2717,7 +2902,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         field = context.user_data.pop('pending_field', None)
         context.user_data.pop('action', None)
 
-        transaction = fetch_pending_transaction(pending_id)
+        transaction = fetch_pending_transaction(pending_id, workspace_id=ws_id)
         if not transaction:
             await update.message.reply_text("❌ Receipt has expired.", reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
             return
@@ -2763,13 +2948,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if d_val:
                 transaction.transaction_date = d_val
 
-        set_pending_transaction(pending_id, transaction)
+        set_pending_transaction(pending_id, transaction, workspace_id=ws_id)
 
         dup = find_potential_duplicate(
             amount=transaction.amount,
             reference_number=transaction.reference_number,
             person_name=transaction.person_name,
-            tx_date=str(transaction.transaction_date) if transaction.transaction_date else None
+            tx_date=str(transaction.transaction_date) if transaction.transaction_date else None,
+            workspace_id=ws_id
         )
         dup_warning = f"⚠️ Similar to #{dup['id']} ({dup.get('match_reason', 'duplicate')}) — duplicate?" if dup else None
         card_text = format_receipt_card(transaction, dup_warning)
@@ -2791,16 +2977,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Invalid amount: {err}. Please try again:")
             return
 
-        cat = get_payee_category(payee) or "General"
+        cat = get_payee_category(payee, ws_id) or "General"
         from database.models import Transaction
         t = Transaction(
             amount=val,
             transaction_type=tt,
             person_name=payee,
-            category=cat
+            category=cat,
+            workspace_id=ws_id,
+            telegram_user_id=update.effective_user.id if update.effective_user else None
         )
         pid = uuid.uuid4().hex[:10]
-        set_pending_transaction(pid, t)
+        set_pending_transaction(pid, t, workspace_id=ws_id)
         card_text = format_receipt_card(t)
         await update.message.reply_text(
             card_text,
@@ -2814,8 +3002,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Process natural text through process_transaction
         transaction, conf = process_transaction(text, "", "", "")
         if transaction and transaction.amount and transaction.amount > 0:
+            if ws_id:
+                transaction.workspace_id = ws_id
+            if update.effective_user:
+                transaction.telegram_user_id = update.effective_user.id
             pid = uuid.uuid4().hex[:10]
-            set_pending_transaction(pid, transaction)
+            set_pending_transaction(pid, transaction, workspace_id=ws_id)
             card_text = format_receipt_card(transaction)
             await update.message.reply_text(
                 card_text,
@@ -2856,20 +3048,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Check quick menu trigger
     if text.strip().lower() in ('menu', 'home', 'start'):
-        await update.message.reply_text(render_home_menu_text(), reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
+        await update.message.reply_text(render_home_menu_text(workspace_id=ws_id), reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
         return
 
     # Check short text entry: e.g. "120 dosa", "+500 salary", "-45 tea", "coffee 15"
     short_parsed = parse_short_entry(text)
     if short_parsed:
-        if not await require_admin(update):
+        if not (await require_admin(update) or await require_member(update)):
             return
         amt, tx_type, name = short_parsed
         from database.models import Transaction
         now_dt = get_current_time_in_tz()
         
         # Category heuristics & payee memory
-        cat = get_payee_category(name)
+        cat = get_payee_category(name, ws_id)
         if not cat:
             lower_name = name.lower()
             if any(w in lower_name for w in ('dosa', 'tea', 'coffee', 'meals', 'lunch', 'canteen', 'cafe', 'food', 'snack', 'breakfast', 'dinner', 'vada', 'poori', 'chapathi', 'juice', 'ice cream')):
@@ -2890,7 +3082,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             category=cat,
             transaction_date=now_dt.date(),
             transaction_time=now_dt.strftime("%I:%M %p"),
-            payment_app="Short Text Entry"
+            payment_app="Short Text Entry",
+            workspace_id=ws_id,
+            telegram_user_id=update.effective_user.id if update.effective_user else None
         )
         if tx_type == 'SENT':
             tx.recipient_name = name.title()
@@ -2917,8 +3111,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         transaction, confidence = process_transaction(text, "", message_id, chat_id)
         if transaction.amount and transaction.amount > 0 and transaction.transaction_type:
-            if not await require_admin(update):
+            if not (await require_admin(update) or await require_member(update)):
                 return
+            if ws_id:
+                transaction.workspace_id = ws_id
+            if update.effective_user:
+                transaction.telegram_user_id = update.effective_user.id
             if confidence >= 80:
                 from services.cafeteria_service import is_cafeteria_payment
                 from bot.keyboards import get_cafeteria_selection_keyboard
@@ -2941,7 +3139,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             elif confidence >= 30:
                 tx_id = uuid.uuid4().hex[:10]
-                set_pending_transaction(tx_id, transaction)
+                set_pending_transaction(tx_id, transaction, workspace_id=ws_id)
                 card_text = format_receipt_card(transaction)
                 await update.message.reply_text(card_text, reply_markup=get_confirmation_card_keyboard(tx_id), parse_mode='HTML')
                 return
@@ -3047,3 +3245,24 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 tmp_path.unlink()
             except OSError:
                 pass
+
+
+async def handle_chat_migration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles Telegram group -> supergroup migration service messages."""
+    msg = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
+    if not msg:
+        return
+    old_chat_id = msg.chat.id if hasattr(msg, 'chat') and msg.chat else None
+    new_chat_id = getattr(msg, 'migrate_to_chat_id', None)
+    if not new_chat_id and getattr(msg, 'migrate_from_chat_id', None):
+        old_chat_id = getattr(msg, 'migrate_from_chat_id', None)
+        new_chat_id = msg.chat.id if hasattr(msg, 'chat') and msg.chat else None
+
+    if old_chat_id and new_chat_id:
+        from database.queries import migrate_workspace_chat_id
+        success = migrate_workspace_chat_id(old_chat_id, new_chat_id)
+        if success:
+            logger.info(f"Telegram chat migration successfully processed: {old_chat_id} -> {new_chat_id}")
+        else:
+            logger.warning(f"Telegram chat migration failed for: {old_chat_id} -> {new_chat_id}")
+
