@@ -1464,7 +1464,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         target_ws = get_workspace_by_id(target_ws_id)
         if target_ws and user_id:
             chat_id = getattr(update.effective_chat, 'id', None)
-            if chat_id is not None and target_ws.chat_id == chat_id:
+            from database.queries import get_default_workspace_id
+            default_ws_id = get_default_workspace_id()
+            if (chat_id is not None and target_ws.chat_id == chat_id) or target_ws.id == default_ws_id:
                 set_user_active_workspace(user_id, None)
             else:
                 set_user_active_workspace(user_id, target_ws.id)

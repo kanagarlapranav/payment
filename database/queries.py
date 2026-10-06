@@ -227,49 +227,53 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
     with LEDGER_LOCK:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            # If current chat is a group, update generic title to actual chat title
-            if current_chat_id is not None and current_chat_title:
-                clean_title = current_chat_title.strip()
-                if not clean_title.endswith("(Group)"):
-                    clean_title = f"{clean_title} (Group)"
-                cursor.execute(
-                    "UPDATE workspaces SET title = ? WHERE chat_id = ? AND (title IN ('Primary Workspace', 'Workspace', '') OR title IS NULL)",
-                    (clean_title, int(current_chat_id))
-                )
-                # Ensure group members are populated
-                cursor.execute("SELECT id FROM workspaces WHERE chat_id = ? AND is_active = 1", (int(current_chat_id),))
-                group_ws_row = cursor.fetchone()
-                if group_ws_row:
-                    grp_id = group_ws_row['id']
-                    if owner_id:
-                        cursor.execute("SELECT id FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, owner_id))
-                        if not cursor.fetchone():
-                            cursor.execute("""
-                                INSERT OR REPLACE INTO workspace_members 
-                                (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
-                                VALUES (?, ?, 'pranav', 'Pranav', 'owner', 1, ?, ?)
-                            """, (grp_id, owner_id, utc_now_iso(), utc_now_iso()))
-                    if 8343764796:
-                        cursor.execute("SELECT id FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, 8343764796))
-                        if not cursor.fetchone():
-                            cursor.execute("""
-                                INSERT OR REPLACE INTO workspace_members 
-                                (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
-                                VALUES (?, ?, 'nagendra', 'Nagendra', 'member', 1, ?, ?)
-                            """, (grp_id, 8343764796, utc_now_iso(), utc_now_iso()))
-                conn.commit()
+            # 1. Update group chat titles and ensure members for all group workspaces
+            now_utc = utc_now_iso()
+            cursor.execute("SELECT id, chat_id, title FROM workspaces WHERE (chat_type IN ('group', 'supergroup') OR chat_id < 0) AND is_active = 1")
+            group_workspaces_list = cursor.fetchall()
+            for g_row in group_workspaces_list:
+                grp_id = g_row['id']
+                grp_chat_id = g_row['chat_id']
+                if current_chat_id is not None and current_chat_title and grp_chat_id == int(current_chat_id):
+                    clean_title = current_chat_title.strip()
+                    if not clean_title.endswith("(Group)"):
+                        clean_title = f"{clean_title} (Group)"
+                    if not g_row['title'] or g_row['title'] in ('Primary Workspace', 'Workspace', '') or g_row['title'].startswith('Chat_'):
+                        cursor.execute(
+                            "UPDATE workspaces SET title = ?, updated_at = ? WHERE id = ?",
+                            (clean_title, now_utc, grp_id)
+                        )
+                elif not g_row['title'] or g_row['title'] in ('Primary Workspace', 'Workspace', ''):
+                    cursor.execute(
+                        "UPDATE workspaces SET title = 'Payment (Group)', updated_at = ? WHERE id = ?",
+                        (now_utc, grp_id)
+                    )
 
-            # Collect all known user IDs with their best display names / usernames
+                if owner_id:
+                    cursor.execute("SELECT id FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, owner_id))
+                    if not cursor.fetchone():
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO workspace_members 
+                            (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
+                            VALUES (?, ?, 'pranav', 'Pranav', 'owner', 1, ?, ?)
+                        """, (grp_id, owner_id, now_utc, now_utc))
+
+                # Ensure Nagendra is in the group workspace
+                cursor.execute("SELECT id FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, 8343764796))
+                if not cursor.fetchone():
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO workspace_members 
+                        (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
+                        VALUES (?, ?, 'nagendra', 'Nagendra', 'member', 1, ?, ?)
+                    """, (grp_id, 8343764796, now_utc, now_utc))
+
+            # 2. Collect all known user IDs with their best display names / usernames
             known_users: dict[int, tuple[str, str]] = {}
-            
-            # 1. Owner
             if owner_id:
                 known_users[owner_id] = ("Pranav", "pranav")
-            
-            # 2. Known friend Nagendra
             known_users[8343764796] = ("Nagendra", "nagendra")
 
-            # 3. From workspace_members
+            # From workspace_members
             cursor.execute("SELECT telegram_user_id, display_name, username FROM workspace_members")
             for r in cursor.fetchall():
                 try:
@@ -281,7 +285,7 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                 except Exception:
                     pass
 
-            # 4. From access_requests
+            # From access_requests
             cursor.execute("SELECT telegram_user_id, display_name, username FROM access_requests")
             for r in cursor.fetchall():
                 try:
@@ -293,7 +297,7 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                 except Exception:
                     pass
 
-            # 5. From transactions
+            # From transactions
             cursor.execute("SELECT DISTINCT telegram_user_id, person_name FROM transactions WHERE telegram_user_id IS NOT NULL")
             for r in cursor.fetchall():
                 try:
@@ -304,8 +308,7 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                 except Exception:
                     pass
 
-            # Now, for every known user, ensure a DM workspace exists (chat_id = uid, chat_type = 'dm')
-            now_utc = utc_now_iso()
+            # 3. For every known user, ensure a DM personal workspace exists (chat_id = uid, chat_type = 'dm')
             for uid, (dname, uname) in known_users.items():
                 if uid <= 0:
                     continue  # groups have negative chat_ids
@@ -346,6 +349,49 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                                 (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
                                 VALUES (?, ?, 'owner', 'Owner', 'owner', 1, ?, ?)
                             """, (ws_row['id'], owner_id, now_utc, now_utc))
+
+            # 4. If owner personal workspace has 0 transactions, backfill historical transactions into it
+            if owner_id:
+                cursor.execute("SELECT id FROM workspaces WHERE chat_id = ? AND is_active = 1", (owner_id,))
+                owner_ws_row = cursor.fetchone()
+                if owner_ws_row:
+                    owner_ws_id = owner_ws_row['id']
+                    cursor.execute("SELECT COUNT(*) FROM transactions WHERE workspace_id = ? AND deleted_at IS NULL", (owner_ws_id,))
+                    owner_tx_count = cursor.fetchone()[0]
+                    if owner_tx_count == 0:
+                        default_ws_id = get_default_workspace_id()
+                        if default_ws_id and default_ws_id != owner_ws_id:
+                            cursor.execute("""
+                                SELECT * FROM transactions 
+                                WHERE (workspace_id = ? OR workspace_id IS NULL)
+                                  AND (telegram_user_id IS NULL OR telegram_user_id = ?)
+                                  AND deleted_at IS NULL
+                                ORDER BY occurred_at ASC, id ASC
+                            """, (default_ws_id, owner_id))
+                            legacy_rows = cursor.fetchall()
+                            if legacy_rows:
+                                from services.balance_service import recalculate_in_connection
+                                for tx in legacy_rows:
+                                    new_uid = uuid.uuid4().hex
+                                    cursor.execute("""
+                                        INSERT INTO transactions (
+                                            transaction_type, amount, person_name, sender_name, recipient_name,
+                                            upi_id, phone_number, transaction_date, transaction_time, reference_number,
+                                            transaction_id, payment_app, bank_name, bank_account, payment_status,
+                                            category, balance_before, balance_after, ocr_text, original_image_path,
+                                            telegram_message_id, telegram_chat_id, uid, workspace_id, occurred_at,
+                                            deleted_at, created_at, updated_at, telegram_user_id
+                                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+                                    """, (
+                                        tx['transaction_type'], tx['amount'], tx['person_name'], tx['sender_name'], tx['recipient_name'],
+                                        tx['upi_id'], tx['phone_number'], tx['transaction_date'], tx['transaction_time'], tx['reference_number'],
+                                        tx['transaction_id'], tx['payment_app'], tx['bank_name'], tx['bank_account'], tx['payment_status'],
+                                        tx['category'], tx['balance_before'], tx['balance_after'], tx['ocr_text'], tx['original_image_path'],
+                                        tx['telegram_message_id'], str(owner_id), new_uid, owner_ws_id, tx['occurred_at'],
+                                        tx['created_at'], now_utc, owner_id
+                                    ))
+                                recalculate_in_connection(conn, workspace_id=owner_ws_id)
+                                logger.info(f"Auto-backfilled {len(legacy_rows)} historical transactions into owner personal workspace {owner_ws_id}")
 
             conn.commit()
 
