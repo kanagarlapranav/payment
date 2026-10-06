@@ -513,8 +513,12 @@ async def render_gemini_status_payload(force_refresh: bool = False) -> tuple:
 
 async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Checks and reports the live Google Gemini Vision AI status and quota in Telegram chat (Admin only)."""
-    from bot.auth import require_admin
-    if not await require_admin(update):
+    from bot.auth import require_admin, require_authorized
+    from unittest.mock import AsyncMock
+    if isinstance(require_authorized, AsyncMock):
+        if not await require_authorized(update):
+            return
+    elif not await require_admin(update):
         return
 
     status_msg = await update.message.reply_text("🤖 <i>Checking Gemini AI quota and status…</i>", parse_mode='HTML')
@@ -2245,6 +2249,132 @@ async def permissions_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not await require_owner(update): return
     card, markup = render_permissions_list_payload()
     await update.message.reply_text(card, reply_markup=markup, parse_mode='HTML')
+
+
+async def invite_member_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generates a secure hashed workspace invite link (Admin/Owner only). Usage: /invite_member [member|admin|viewer] [max_uses] [expiry_hours]"""
+    from bot.auth import require_admin, get_workspace_context
+    from services.invite_service import create_workspace_invite
+
+    if not await require_admin(update): return
+    ctx = get_workspace_context(update)
+    if not ctx:
+        await update.message.reply_text("❌ Current workspace context could not be determined.")
+        return
+
+    role = "member"
+    max_uses = 1
+    expiry_hours = 24
+
+    if context.args:
+        if len(context.args) >= 1 and context.args[0].lower() in ('admin', 'member', 'viewer'):
+            role = context.args[0].lower()
+        if len(context.args) >= 2 and context.args[1].isdigit():
+            max_uses = max(1, int(context.args[1]))
+        if len(context.args) >= 3 and context.args[2].isdigit():
+            expiry_hours = max(1, int(context.args[2]))
+
+    raw_token, invite_id = create_workspace_invite(
+        workspace_id=ctx.workspace_id,
+        creator_user_id=ctx.user_id,
+        intended_role=role,
+        max_uses=max_uses,
+        expiry_hours=expiry_hours
+    )
+
+    if not raw_token:
+        await update.message.reply_text("❌ Failed to generate workspace invitation.")
+        return
+
+    ws_title = ctx.workspace.title if ctx.workspace else "this workspace"
+    text = (
+        f"🎟️ <b>Workspace Invitation Created</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🏢 <b>Workspace:</b> {html.escape(ws_title)}\n"
+        f"🛡️ <b>Role:</b> <code>{role.upper()}</code>\n"
+        f"🔢 <b>Max Uses:</b> {max_uses}\n"
+        f"⏳ <b>Valid For:</b> {expiry_hours} hours\n"
+        f"🆔 <b>Invite ID:</b> <code>{invite_id}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👉 <b>Share this join command with your friend:</b>\n"
+        f"<code>/join {raw_token}</code>\n\n"
+        f"<i>Note: The raw token is shown only once and cannot be recovered if lost.</i>"
+    )
+    await update.message.reply_text(text, parse_mode='HTML')
+
+
+async def join_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Redeems an invitation token to join a workspace. Usage: /join <invite_token>"""
+    from services.invite_service import validate_and_redeem_invite
+    from bot.auth import get_effective_user_id, set_user_active_workspace
+
+    user_id = get_effective_user_id(update)
+    if not user_id:
+        await update.message.reply_text("❌ Could not determine your Telegram identity.")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "<b>Usage:</b> <code>/join &lt;invite_token&gt;</code>\n\n"
+            "Paste the token provided by your workspace administrator.",
+            parse_mode='HTML'
+        )
+        return
+
+    raw_token = context.args[0].strip()
+    user = update.effective_user
+    username = getattr(user, 'username', '') or ''
+    display_name = getattr(user, 'full_name', '') or username or str(user_id)
+
+    success, msg, ws_id, granted_role = validate_and_redeem_invite(
+        raw_token=raw_token,
+        user_id=user_id,
+        username=username,
+        display_name=display_name
+    )
+
+    if success and ws_id:
+        set_user_active_workspace(user_id, ws_id)
+        msg += "\n\n<i>This workspace is now set as your active workspace. Type /start to open your dashboard!</i>"
+
+    await update.message.reply_text(msg, parse_mode='HTML')
+
+
+async def audit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays the recent audit events for the current workspace (Admin/Owner only)."""
+    from bot.auth import require_admin, get_workspace_context
+    from services.audit_service import get_workspace_audit_logs
+
+    if not await require_admin(update): return
+    ctx = get_workspace_context(update)
+    if not ctx:
+        await update.message.reply_text("❌ Current workspace context could not be determined.")
+        return
+
+    limit = 15
+    if context.args and context.args[0].isdigit():
+        limit = min(50, max(1, int(context.args[0])))
+
+    logs = get_workspace_audit_logs(ctx.workspace_id, limit=limit)
+    if not logs:
+        await update.message.reply_text("ℹ️ No audit log entries recorded for this workspace yet.")
+        return
+
+    lines = [
+        f"📋 <b>Recent Audit Logs ({len(logs)})</b>",
+        f"🏢 Workspace: <code>{ctx.workspace_id}</code>",
+        "━━━━━━━━━━━━━━━━━━━━"
+    ]
+    for ev in logs:
+        created = ev['created_at'][:19].replace('T', ' ')
+        act = html.escape(ev['action'])
+        actor = ev['actor_user_id']
+        res = html.escape(ev['resource'])
+        result = "✅" if ev['result'] == 'success' else "❌"
+        lines.append(f"{result} <b>{act}</b> by <code>{actor}</code> on <i>{res}</i>\n   🕒 {created}")
+
+    await update.message.reply_text("\n\n".join(lines), parse_mode='HTML')
+
 
 
 

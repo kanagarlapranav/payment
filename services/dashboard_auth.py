@@ -3,14 +3,14 @@ Dashboard Authentication and Session Management Service.
 
 Security Architecture:
 1. One-Time Login Codes:
-   - Generated exclusively via owner-only Telegram /dashboard command.
+   - Generated exclusively via owner/admin Telegram /dashboard command.
    - Valid for 60 seconds, strictly single-use.
-   - Compared using hmac.compare_digest on bytes (non-ASCII safe).
-2. Session Cookie:
+   - Stored hashed in SQLite (dashboard_auth_codes) and in-memory cache.
+2. Persistent Session Cookie:
    - Exchanged via GET /auth?code=...
    - HttpOnly, SameSite=Strict, Secure (over HTTPS or production), 30-minute validity.
-   - Browser redirects to /dashboard with code completely removed from URL.
-   - Stored in-memory (server restarts require running /dashboard again).
+   - Stored hashed in SQLite (dashboard_sessions) and in-memory cache.
+   - Live membership & role revalidated against workspace_members on access.
 3. Rate Limiting:
    - In-memory rate limiting on failed auth attempts per client IP (max 5 failures per 5 minutes).
 4. Security Headers:
@@ -20,27 +20,29 @@ Security Architecture:
 import time
 import secrets
 import hmac
+import hashlib
 import os
 from http.cookies import SimpleCookie
 from typing import Optional, Tuple, Dict, Any
 
 from config import logger
+from database.db import get_db_connection, LEDGER_LOCK
 
-# In-memory storage for active single-use auth codes and sessions
-# Structure: code -> {"created_at": float, "used": bool}
+# In-memory fast cache
 _AUTH_CODES: Dict[str, Dict[str, Any]] = {}
-
-# Structure: session_id -> {"created_at": float, "expires_at": float}
 _SESSIONS: Dict[str, Dict[str, Any]] = {}
-
-# Structure: ip_address -> [timestamp, timestamp, ...]
 _FAILED_LOGINS: Dict[str, list[float]] = {}
 
 # Expiry Constants
-CODE_EXPIRY_SECONDS = 60.0        # 60s single-use validity
+CODE_EXPIRY_SECONDS = 60.0         # 60 seconds validity
 SESSION_EXPIRY_SECONDS = 1800.0    # 30 minutes session lifetime
 MAX_FAILED_ATTEMPTS = 5
 RATE_LIMIT_WINDOW_SECONDS = 300.0  # 5 minutes window
+
+
+def _hash_val(val: str) -> str:
+    """Computes SHA-256 hash of a code or session ID."""
+    return hashlib.sha256(val.strip().encode("utf-8")).hexdigest()
 
 
 def compare_secrets(a: str | bytes, b: str | bytes) -> bool:
@@ -56,12 +58,12 @@ def cleanup_expired():
     """Prunes expired auth codes, expired sessions, and old rate limit timestamps."""
     now = time.time()
     
-    # Prune auth codes older than 10 minutes
+    # Prune auth codes older than 10 minutes from memory
     expired_codes = [c for c, data in _AUTH_CODES.items() if now - data.get("created_at", 0) > 600.0]
     for c in expired_codes:
         _AUTH_CODES.pop(c, None)
 
-    # Prune expired sessions
+    # Prune expired sessions from memory
     expired_sessions = [s for s, data in _SESSIONS.items() if now > data.get("expires_at", 0)]
     for s in expired_sessions:
         _SESSIONS.pop(s, None)
@@ -77,18 +79,38 @@ def create_one_time_code(user_id: Optional[int] = None, workspace_id: Optional[s
     """
     Generates a cryptographically secure 32-character one-time login code.
     Valid for 5 minutes, single-use only.
-    Optionally associates identity (user_id, workspace_id, role) for tenant isolation.
+    Persists hashed code to SQLite database and in-memory cache.
     """
     cleanup_expired()
     code = secrets.token_urlsafe(32)
+    code_h = _hash_val(code)
+    now = time.time()
+    expires_at = now + CODE_EXPIRY_SECONDS
+
+    # 1. In-memory cache
     _AUTH_CODES[code] = {
-        "created_at": time.time(),
+        "created_at": now,
         "used": False,
         "user_id": user_id,
         "workspace_id": workspace_id,
         "role": role
     }
-    logger.info(f"Generated new single-use dashboard auth code (workspace_id={workspace_id}, user_id={user_id}, role={role}).")
+
+    # 2. Database persistence
+    try:
+        with LEDGER_LOCK:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO dashboard_auth_codes (
+                        code_hash, workspace_id, user_id, role, expires_at, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (code_h, str(workspace_id or ""), int(user_id or 0), str(role or "member"), expires_at, now))
+                conn.commit()
+    except Exception as e:
+        logger.warning(f"Could not persist dashboard auth code to DB: {e}")
+
+    logger.info(f"Generated new persistent single-use dashboard auth code (workspace_id={workspace_id}, user_id={user_id}, role={role}).")
     return code
 
 
@@ -114,7 +136,7 @@ def record_failed_attempt(client_ip: str):
 
 def exchange_code_for_session(code: str, client_ip: str = "", is_https: bool = False) -> Tuple[bool, str, str]:
     """
-    Exchanges a single-use one-time code for a 30-minute session cookie.
+    Exchanges a single-use one-time code for a 30-minute persistent session cookie.
     Transfers associated workspace_id, user_id, role, and issues a CSRF token.
     
     Returns:
@@ -130,45 +152,99 @@ def exchange_code_for_session(code: str, client_ip: str = "", is_https: bool = F
         record_failed_attempt(client_ip)
         return False, "Missing authentication code.", ""
 
-    # Find matching code entry using timing-safe comparison
+    code_h = _hash_val(code)
+    now = time.time()
+
+    code_data = None
+    # 1. Check in-memory
     matching_code_key = None
     for stored_code in list(_AUTH_CODES.keys()):
         if compare_secrets(stored_code, code):
             matching_code_key = stored_code
             break
 
-    if not matching_code_key:
+    code_data = None
+    if matching_code_key:
+        code_data = _AUTH_CODES.pop(matching_code_key, None)
+
+    if code_data and (code_data.get("used") or (now - code_data.get("created_at", 0) > CODE_EXPIRY_SECONDS)):
+        record_failed_attempt(client_ip)
+        return False, "Invalid login code: code has expired or was already used. Please request a new code via /dashboard in Telegram.", ""
+
+    # 2. Check DB to ensure single-use and persistence
+    db_code_row = None
+    try:
+        with LEDGER_LOCK:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT workspace_id, user_id, role, expires_at, used_at
+                    FROM dashboard_auth_codes
+                    WHERE code_hash = ?
+                """, (code_h,))
+                db_code_row = cursor.fetchone()
+                if db_code_row:
+                    cursor.execute("""
+                        UPDATE dashboard_auth_codes SET used_at = ? WHERE code_hash = ? AND used_at IS NULL
+                    """, (now, code_h))
+                    conn.commit()
+    except Exception as e:
+        logger.warning(f"Error querying dashboard_auth_codes from DB: {e}")
+
+    if db_code_row:
+        if db_code_row['used_at'] is not None or now > db_code_row['expires_at']:
+            record_failed_attempt(client_ip)
+            return False, "Invalid login code: code has expired or was already used. Please request a new code via /dashboard in Telegram.", ""
+        user_id = db_code_row['user_id']
+        workspace_id = db_code_row['workspace_id']
+        role = db_code_row['role'] or "member"
+    elif code_data and not code_data.get("used") and (now - code_data.get("created_at", 0) <= CODE_EXPIRY_SECONDS):
+        user_id = code_data.get("user_id")
+        workspace_id = code_data.get("workspace_id")
+        role = code_data.get("role", "member")
+    else:
         record_failed_attempt(client_ip)
         return False, "Invalid login code. Please generate a new one via /dashboard in Telegram.", ""
 
-    code_data = _AUTH_CODES.pop(matching_code_key, None)
-    now = time.time()
-
-    if not code_data or code_data.get("used") or (now - code_data.get("created_at", 0) > CODE_EXPIRY_SECONDS):
-        record_failed_attempt(client_ip)
-        return False, "Login code has expired or was already used. Please request a new code via /dashboard in Telegram.", ""
-
     # Generate session ID and CSRF token
     session_id = secrets.token_hex(32)
+    session_h = _hash_val(session_id)
     csrf_token = secrets.token_hex(16)
+    expires_at = now + SESSION_EXPIRY_SECONDS
+
+    # Save to memory
     _SESSIONS[session_id] = {
         "created_at": now,
-        "expires_at": now + SESSION_EXPIRY_SECONDS,
-        "user_id": code_data.get("user_id"),
-        "workspace_id": code_data.get("workspace_id"),
-        "role": code_data.get("role", "member"),
+        "expires_at": expires_at,
+        "user_id": user_id,
+        "workspace_id": workspace_id,
+        "role": role,
         "csrf_token": csrf_token
     }
+
+    # Save to DB
+    try:
+        with LEDGER_LOCK:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO dashboard_sessions (
+                        session_id_hash, workspace_id, user_id, role, csrf_token, expires_at, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (session_h, str(workspace_id or ""), int(user_id or 0), role, csrf_token, expires_at, now))
+                conn.commit()
+    except Exception as e:
+        logger.warning(f"Error persisting session to DB: {e}")
 
     # Reset failed attempts for this IP on successful auth
     if client_ip in _FAILED_LOGINS:
         _FAILED_LOGINS.pop(client_ip, None)
 
-    # Build HttpOnly, SameSite=Lax session cookie
+    # Build HttpOnly session cookie
     secure_flag = "; Secure" if is_https or os.getenv("ENVIRONMENT") == "production" or os.getenv("RENDER") else ""
     cookie_header = f"session_id={session_id}; Path=/; Max-Age={int(SESSION_EXPIRY_SECONDS)}; HttpOnly; SameSite=Lax{secure_flag}"
     
-    logger.info(f"Successfully exchanged code for session {session_id[:8]}... (workspace_id={code_data.get('workspace_id')}, role={code_data.get('role', 'member')}).")
+    logger.info(f"Successfully exchanged code for session {session_id[:8]}... (workspace_id={workspace_id}, role={role}).")
     return True, session_id, cookie_header
 
 
@@ -201,47 +277,106 @@ def validate_dashboard_action(
     return True, ""
 
 
-def validate_session_id(session_id: Optional[str]) -> bool:
-    """
-    Validates a raw session_id string.
-    Returns True if the session exists and has not expired.
-    """
-    cleanup_expired()
-    if not session_id:
-        return False
-
-    try:
-        for active_sid, data in list(_SESSIONS.items()):
-            if compare_secrets(active_sid, session_id):
-                if time.time() < data.get("expires_at", 0):
-                    return True
-                else:
-                    _SESSIONS.pop(active_sid, None)
-                    return False
-        return False
-    except Exception as e:
-        logger.debug(f"Session ID validation notice: {e}")
-        return False
-
-
 def get_session_info(session_id: Optional[str]) -> Optional[Dict[str, Any]]:
-    """Returns session metadata dictionary (user_id, workspace_id, created_at, expires_at) if valid."""
+    """
+    Returns session metadata dictionary (user_id, workspace_id, created_at, expires_at, role, csrf_token).
+    Validates against in-memory cache and persistent SQLite store, and revalidates live membership.
+    """
     cleanup_expired()
     if not session_id:
         return None
 
+    now = time.time()
+    data = None
+
+    # Check memory cache
+    for active_sid, sdata in list(_SESSIONS.items()):
+        if compare_secrets(active_sid, session_id):
+            if now < sdata.get("expires_at", 0):
+                data = dict(sdata)
+            else:
+                _SESSIONS.pop(active_sid, None)
+            break
+
+    # If not found in cache, check database
+    if not data:
+        session_h = _hash_val(session_id)
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT workspace_id, user_id, role, csrf_token, expires_at, created_at, revoked_at
+                    FROM dashboard_sessions
+                    WHERE session_id_hash = ?
+                """, (session_h,))
+                row = cursor.fetchone()
+                if row:
+                    if row['revoked_at'] is None and now < row['expires_at']:
+                        data = {
+                            "created_at": row['created_at'],
+                            "expires_at": row['expires_at'],
+                            "user_id": row['user_id'],
+                            "workspace_id": row['workspace_id'],
+                            "role": row['role'],
+                            "csrf_token": row['csrf_token']
+                        }
+                        _SESSIONS[session_id] = data
+        except Exception as e:
+            logger.debug(f"DB session lookup notice: {e}")
+
+    if not data:
+        return None
+
+    # Revalidate live membership & status
+    ws_id = data.get("workspace_id")
+    uid = data.get("user_id")
+    if ws_id and uid:
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM workspaces WHERE id = ?", (str(ws_id),))
+                ws_row = cursor.fetchone()
+                if ws_row:
+                    cursor.execute("""
+                        SELECT role, is_active, status FROM workspace_members
+                        WHERE workspace_id = ? AND telegram_user_id = ?
+                    """, (str(ws_id), int(uid)))
+                    mem = cursor.fetchone()
+                    if not mem or not mem['is_active'] or mem['status'] in ('suspended', 'removed'):
+                        # Revoke session if user has been deactivated or removed from existing workspace
+                        revoke_session(session_id)
+                        return None
+                    data['role'] = mem['role']
+        except Exception as e:
+            logger.debug(f"Live membership revalidation notice: {e}")
+
+    return data
+
+
+def revoke_session(session_id: Optional[str]) -> bool:
+    """Revokes an active session in both memory and database."""
+    if not session_id:
+        return False
+    _SESSIONS.pop(session_id, None)
+    session_h = _hash_val(session_id)
     try:
-        for active_sid, data in list(_SESSIONS.items()):
-            if compare_secrets(active_sid, session_id):
-                if time.time() < data.get("expires_at", 0):
-                    return data
-                else:
-                    _SESSIONS.pop(active_sid, None)
-                    return None
-        return None
+        with LEDGER_LOCK:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE dashboard_sessions SET revoked_at = ? WHERE session_id_hash = ?
+                """, (time.time(), session_h))
+                conn.commit()
+        return True
     except Exception as e:
-        logger.debug(f"Session info lookup notice: {e}")
-        return None
+        logger.warning(f"Error revoking session in DB: {e}")
+        return False
+
+
+def validate_session_id(session_id: Optional[str]) -> bool:
+    """Returns True if the session exists and has not expired."""
+    info = get_session_info(session_id)
+    return info is not None
 
 
 def get_session_info_from_cookie(cookie_header: Optional[str], session_param: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -263,24 +398,9 @@ def get_session_info_from_cookie(cookie_header: Optional[str], session_param: Op
 
 
 def validate_session(cookie_header: Optional[str]) -> bool:
-    """
-    Validates the session_id from the incoming HTTP request's Cookie header.
-    Returns True if the session exists and has not expired.
-    """
-    if not cookie_header:
-        return False
-
-    try:
-        cookie = SimpleCookie()
-        cookie.load(cookie_header)
-        if "session_id" not in cookie:
-            return False
-
-        supplied_session = cookie["session_id"].value
-        return validate_session_id(supplied_session)
-    except Exception as e:
-        logger.debug(f"Session validation notice: {e}")
-        return False
+    """Validates session from Cookie header."""
+    info = get_session_info_from_cookie(cookie_header)
+    return info is not None
 
 
 def get_security_headers(is_api: bool = False) -> Dict[str, str]:

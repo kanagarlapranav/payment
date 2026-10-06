@@ -376,25 +376,28 @@ def validate_ledger_invariants(db_path=None, workspace_id: str = None) -> List[s
             # Fetch initial_balance for this workspace
             cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'initial_balance'", (ws,))
             ws_init_row = cursor.fetchone()
-            if not ws_init_row:
+            if not ws_init_row and ws == default_ws:
                 cursor.execute("SELECT value FROM settings WHERE key = 'initial_balance'")
                 ws_init_row = cursor.fetchone()
 
-            try:
-                raw_init = Decimal(str(ws_init_row['value'])) if ws_init_row else Decimal('0.00')
-                if not raw_init.is_finite():
-                    errors.append(f"Workspace {ws}: Invalid initial_balance setting: non-finite Decimal")
+            if ws_init_row:
+                try:
+                    raw_init = Decimal(str(ws_init_row['value']))
+                    if not raw_init.is_finite():
+                        errors.append(f"Workspace {ws}: Invalid initial_balance setting: non-finite Decimal")
+                        ws_initial_bal = Decimal('0.00')
+                    else:
+                        ws_initial_bal = raw_init.quantize(CENT)
+                except Exception as err:
+                    errors.append(f"Workspace {ws}: Invalid initial_balance setting: {err}")
                     ws_initial_bal = Decimal('0.00')
-                else:
-                    ws_initial_bal = raw_init.quantize(CENT)
-            except Exception as err:
-                errors.append(f"Workspace {ws}: Invalid initial_balance setting: {err}")
-                ws_initial_bal = Decimal('0.00')
+            else:
+                ws_initial_bal = None
 
             # Fetch current_balance for this workspace
             cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'current_balance'", (ws,))
             ws_cur_row = cursor.fetchone()
-            if not ws_cur_row:
+            if not ws_cur_row and ws == default_ws:
                 cursor.execute("SELECT value FROM settings WHERE key = 'current_balance'")
                 ws_cur_row = cursor.fetchone()
 
@@ -409,16 +412,30 @@ def validate_ledger_invariants(db_path=None, workspace_id: str = None) -> List[s
                 errors.append(f"Workspace {ws}: Invalid current_balance setting: {err}")
                 ws_current_bal = None
 
-            cursor.execute('''
-                SELECT id, transaction_type, amount, balance_before, balance_after, occurred_at, created_at
-                FROM transactions
-                WHERE (workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')
-                  AND deleted_at IS NULL
-                ORDER BY occurred_at ASC, created_at ASC, id ASC
-            ''', (ws,))
+            if ws == default_ws:
+                cursor.execute('''
+                    SELECT id, transaction_type, amount, balance_before, balance_after, occurred_at, created_at
+                    FROM transactions
+                    WHERE (workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')
+                      AND deleted_at IS NULL
+                    ORDER BY occurred_at ASC, created_at ASC, id ASC
+                ''', (ws,))
+            else:
+                cursor.execute('''
+                    SELECT id, transaction_type, amount, balance_before, balance_after, occurred_at, created_at
+                    FROM transactions
+                    WHERE workspace_id = ?
+                      AND deleted_at IS NULL
+                    ORDER BY occurred_at ASC, created_at ASC, id ASC
+                ''', (ws,))
             live_txs = cursor.fetchall()
 
-            expected_balance = ws_initial_bal
+            if ws_initial_bal is not None:
+                expected_balance = ws_initial_bal
+            elif live_txs:
+                expected_balance = Decimal(str(live_txs[0]['balance_before'])).quantize(CENT)
+            else:
+                expected_balance = Decimal('0.00')
             for row in live_txs:
                 row_id = row['id']
                 tt = row['transaction_type']

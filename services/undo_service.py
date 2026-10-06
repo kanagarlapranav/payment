@@ -25,21 +25,23 @@ from utils.validation import validate_uid
 _UNDO_STACK = []
 
 
-def _resolve_scope(chat_id: int | None, user_id: int | None) -> tuple[int, int]:
-    """Resolves effective chat_id and user_id with fallback to configured defaults."""
+def _resolve_scope(chat_id: int | None, user_id: int | None, workspace_id: str | None = None) -> tuple[int, int, str]:
+    """Resolves effective chat_id, user_id, and workspace_id."""
     c_id = int(chat_id) if chat_id is not None else int(TELEGRAM_GROUP_ID or TELEGRAM_USER_ID or 0)
     u_id = int(user_id) if user_id is not None else int(TELEGRAM_USER_ID or 0)
-    return c_id, u_id
+    ws_id = str(workspace_id) if workspace_id else ""
+    return c_id, u_id, ws_id
 
 
 def record_delete_action(
     deleted_tx: dict,
     chat_id: int | None = None,
     user_id: int | None = None,
+    workspace_id: str | None = None,
 ) -> bool:
     """
     Records a soft-deleted transaction in undo_log by its permanent UID.
-    Scoped by (chat_id, user_id).
+    Scoped by (workspace_id, chat_id, user_id).
     """
     if not deleted_tx:
         return False
@@ -54,22 +56,23 @@ def record_delete_action(
         logger.warning(f"Cannot record undo for transaction without uid: {deleted_tx}")
         return False
 
+    ws_id = workspace_id or deleted_tx.get('workspace_id') or ""
     valid_uid = validate_uid(uid)
-    c_id, u_id = _resolve_scope(chat_id, user_id)
+    c_id, u_id, resolved_ws_id = _resolve_scope(chat_id, user_id, ws_id)
     now_utc = utc_now_iso()
 
     with LEDGER_LOCK, get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-                INSERT INTO undo_log (chat_id, user_id, action, uid, created_at)
-                VALUES (?, ?, 'delete', ?, ?)
-                """,
-            (c_id, u_id, valid_uid, now_utc),
+            INSERT INTO undo_log (workspace_id, chat_id, user_id, action, uid, created_at)
+            VALUES (?, ?, ?, 'delete', ?, ?)
+            """,
+            (resolved_ws_id or None, c_id, u_id, valid_uid, now_utc),
         )
         conn.commit()
 
-    logger.info(f"Recorded undo delete for UID {valid_uid} scoped to chat {c_id}, user {u_id}")
+    logger.info(f"Recorded undo delete for UID {valid_uid} scoped to workspace={resolved_ws_id}, chat={c_id}, user={u_id}")
     return True
 
 
@@ -77,16 +80,19 @@ def record_insert_action(
     inserted_tx_uid_or_id: Any,
     chat_id: int | None = None,
     user_id: int | None = None,
+    workspace_id: str | None = None,
 ) -> bool:
     """
     Records a freshly inserted transaction in undo_log by its permanent UID so it can be undone.
-    Scoped by (chat_id, user_id).
+    Scoped by (workspace_id, chat_id, user_id).
     """
     uid = None
+    tx_ws_id = workspace_id or ""
     if isinstance(inserted_tx_uid_or_id, int) or (isinstance(inserted_tx_uid_or_id, str) and inserted_tx_uid_or_id.isdigit()):
         row = get_transaction_by_id(int(inserted_tx_uid_or_id))
         if row:
             uid = row.get('uid')
+            tx_ws_id = tx_ws_id or row.get('workspace_id', '')
     elif inserted_tx_uid_or_id:
         uid = str(inserted_tx_uid_or_id).strip()
 
@@ -94,21 +100,21 @@ def record_insert_action(
         return False
 
     valid_uid = validate_uid(uid)
-    c_id, u_id = _resolve_scope(chat_id, user_id)
+    c_id, u_id, resolved_ws_id = _resolve_scope(chat_id, user_id, tx_ws_id)
     now_utc = utc_now_iso()
 
     with LEDGER_LOCK, get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-                INSERT INTO undo_log (chat_id, user_id, action, uid, created_at)
-                VALUES (?, ?, 'insert', ?, ?)
-                """,
-            (c_id, u_id, valid_uid, now_utc),
+            INSERT INTO undo_log (workspace_id, chat_id, user_id, action, uid, created_at)
+            VALUES (?, ?, ?, 'insert', ?, ?)
+            """,
+            (resolved_ws_id or None, c_id, u_id, valid_uid, now_utc),
         )
         conn.commit()
 
-    logger.info(f"Recorded undo insert for UID {valid_uid} scoped to chat {c_id}, user {u_id}")
+    logger.info(f"Recorded undo insert for UID {valid_uid} scoped to workspace={resolved_ws_id}, chat={c_id}, user={u_id}")
     return True
 
 
@@ -116,53 +122,36 @@ def record_edit_action(
     previous_tx: dict,
     chat_id: int | None = None,
     user_id: int | None = None,
+    workspace_id: str | None = None,
 ) -> bool:
     """Backwards-compatibility stub for recording edit operations."""
-    return record_delete_action(previous_tx, chat_id=chat_id, user_id=user_id)
+    return record_delete_action(previous_tx, chat_id=chat_id, user_id=user_id, workspace_id=workspace_id)
 
 
-def get_last_action(chat_id: int | None = None, user_id: int | None = None) -> dict[str, Any] | None:
-    """Returns the most recent active (unused, unexpired) undo action without consuming it."""
-    c_id, u_id = _resolve_scope(chat_id, user_id)
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT id, chat_id, user_id, action, uid, created_at
-            FROM undo_log
-            WHERE chat_id = ? AND user_id = ? AND used_at IS NULL
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (c_id, u_id),
-        )
-        row = cursor.fetchone()
-        return dict(row) if row else None
-
-
-def perform_undo(
+def get_last_action(
     chat_id: int | None = None,
     user_id: int | None = None,
-) -> tuple[bool, str]:
-    """
-    Reverts the last action performed for (chat_id, user_id).
-    Enforces:
-      - Scope by (chat_id, user_id)
-      - Expiration after 10 minutes
-      - Exactly-once usage
-      - Restores deletes by permanent UID only
-      - Never recreates purged rows from snapshot
-    Returns (success: bool, message: str).
-    """
-    c_id, u_id = _resolve_scope(chat_id, user_id)
-
-    with LEDGER_LOCK:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            # Fetch latest unused undo record for this scope
+    workspace_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Returns the most recent active (unused, unexpired) undo action without consuming it."""
+    c_id, u_id, ws_id = _resolve_scope(chat_id, user_id, workspace_id)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if ws_id:
             cursor.execute(
                 """
-                SELECT id, chat_id, user_id, action, uid, created_at
+                SELECT id, workspace_id, chat_id, user_id, action, uid, created_at
+                FROM undo_log
+                WHERE (workspace_id = ? OR workspace_id IS NULL) AND user_id = ? AND used_at IS NULL
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (ws_id, u_id),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id, workspace_id, chat_id, user_id, action, uid, created_at
                 FROM undo_log
                 WHERE chat_id = ? AND user_id = ? AND used_at IS NULL
                 ORDER BY id DESC
@@ -170,6 +159,46 @@ def perform_undo(
                 """,
                 (c_id, u_id),
             )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def perform_undo(
+    chat_id: int | None = None,
+    user_id: int | None = None,
+    workspace_id: str | None = None,
+) -> tuple[bool, str]:
+    """
+    Reverts the last action performed for (workspace_id, chat_id, user_id).
+    Enforces tenant workspace boundaries, 10-minute expiry, and exactly-once consumption.
+    """
+    c_id, u_id, ws_id = _resolve_scope(chat_id, user_id, workspace_id)
+
+    with LEDGER_LOCK:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            if ws_id:
+                cursor.execute(
+                    """
+                    SELECT id, workspace_id, chat_id, user_id, action, uid, created_at
+                    FROM undo_log
+                    WHERE (workspace_id = ? OR workspace_id IS NULL) AND user_id = ? AND used_at IS NULL
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (ws_id, u_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, workspace_id, chat_id, user_id, action, uid, created_at
+                    FROM undo_log
+                    WHERE chat_id = ? AND user_id = ? AND used_at IS NULL
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (c_id, u_id),
+                )
             row = cursor.fetchone()
             if not row:
                 return False, "No recent action found to undo."
@@ -177,6 +206,7 @@ def perform_undo(
             rec_id = row['id']
             action = row['action']
             uid = row['uid']
+            rec_ws_id = row['workspace_id'] or ws_id
             created_at_str = row['created_at']
 
             # Check 10-minute expiration window
@@ -191,7 +221,6 @@ def perform_undo(
             now_iso = utc_now_iso()
 
             if age_seconds > 600:
-                # Expired: mark as consumed/expired
                 cursor.execute("UPDATE undo_log SET used_at = ? WHERE id = ?", (now_iso, rec_id))
                 conn.commit()
                 return False, "Undo action has expired (window is 10 minutes)."
@@ -205,12 +234,15 @@ def perform_undo(
                 return False, "Undo action has already been used."
             conn.commit()
 
-        # Execute undo action outside cursor transaction to allow sub-functions their own connection
+        # Execute undo action with strict workspace scoping
         if action == 'delete':
-            # Check if tombstone exists in transactions
-            tx = get_transaction_by_uid(uid)
+            tx = get_transaction_by_uid(uid, workspace_id=rec_ws_id) if rec_ws_id else get_transaction_by_uid(uid)
             if not tx:
-                return False, "Recovery is not possible: transaction record no longer exists."
+                return False, "Recovery is not possible: transaction record does not belong to this workspace or no longer exists."
+
+            # Verify workspace match
+            if ws_id and tx.get('workspace_id') and str(tx['workspace_id']) != str(ws_id):
+                return False, "Cross-workspace undo rejected: transaction does not belong to current workspace."
 
             if tx.get('deleted_at') is None:
                 return False, "Cannot restore transaction: transaction is already active."
@@ -218,6 +250,15 @@ def perform_undo(
             restored = restore_soft_deleted_transaction(uid=uid)
             if not restored:
                 return False, "Recovery is not possible: failed to restore transaction."
+
+            from services.audit_service import log_audit_event
+            log_audit_event(
+                workspace_id=rec_ws_id,
+                actor_user_id=u_id,
+                action="transaction_restored_undo",
+                resource=f"tx:{uid}"
+            )
+
 
             new_bal = get_balance_setting()
             try:
