@@ -584,7 +584,7 @@
             </div>
             <div class="badge-live">
                 <span class="pulse-dot"></span>
-                <span>Live Sync Active</span>
+                <span id="badge-workspace">Live Sync Active</span>
             </div>
         </header>
 
@@ -799,7 +799,11 @@
             currentMonth = data.month;
             allCurrentTransactions = data.recent_transactions || [];
 
-            // Header & Month
+            // Header & Month & Workspace Badge
+            if (data.workspace_name) {
+                const wsBadge = document.getElementById('badge-workspace');
+                if (wsBadge) wsBadge.textContent = data.workspace_name;
+            }
             document.getElementById('month-display').textContent = data.period_name;
             document.getElementById('sub-header').textContent = `${data.month_transactions_count || 0} monthly transactions recorded • Last synced ${new Date().toLocaleTimeString('en-IN')}`;
 

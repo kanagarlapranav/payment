@@ -20,7 +20,8 @@ from bot.commands import (
     setbalance_command, export_command, help_command, chatid_command, amount_command,
     insights_command, budget_command, setbudget_command, digest_command, dashboard_command, menu_command,
     cafestats_command, cafeedit_command, addmenu_command, delmenu_command, restore_command, undo_command,
-    geministatus_command, setmodel_command, backup_command, workspace_command, members_command, setrole_command
+    geministatus_command, setmodel_command, backup_command, workspace_command, members_command, setrole_command,
+    permissions_command
 )
 from bot.handlers import handle_image, handle_callback_query, handle_text, handle_document, handle_chat_migration
 from services.scheduler_service import register_scheduler_jobs
@@ -193,6 +194,7 @@ def build_application():
     app.add_handler(CommandHandler(["workspace", "workspaces"], workspace_command))
     app.add_handler(CommandHandler(["members", "team"], members_command))
     app.add_handler(CommandHandler("setrole", setrole_command))
+    app.add_handler(CommandHandler(["permissions", "roles", "users"], permissions_command))
 
     # Image handler (photos and documents)
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
@@ -410,7 +412,13 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                 'is_dirty': b_settings.get('is_dirty', '0') == '1'
             }
 
+            from database.queries import get_workspace_by_id
+            active_ws = get_workspace_by_id(ws_id) if ws_id else None
+            ws_title = active_ws.title if active_ws else "Default Workspace"
+
             payload = {
+                'workspace_id': ws_id,
+                'workspace_name': ws_title,
                 'year': year,
                 'month': month,
                 'period_name': period_str,
