@@ -1,14 +1,15 @@
 """
 Budget tracking and proactive alert service.
 Manages monthly budget targets, computes visual progress bars,
-and triggers threshold warnings at 50%, 80%, and 100%.
+and triggers threshold warnings at 50%, 80%, and 100%, with workspace scoping.
 """
+from typing import Optional
 from datetime import datetime
 from database.queries import get_budget_setting, set_budget_setting, get_monthly_spending
 from database.db import LEDGER_LOCK
 from utils.validation import parse_decimal_amount
 
-def set_budget(amount: float) -> str:
+def set_budget(amount: float, workspace_id: Optional[str] = None) -> str:
     """Sets the monthly spending budget target using Decimal validation and locking."""
     with LEDGER_LOCK:
         try:
@@ -17,19 +18,19 @@ def set_budget(amount: float) -> str:
             return f"❌ Invalid budget: {err}"
         
         float_amt = float(dec_amount)
-        set_budget_setting(float_amt)
+        set_budget_setting(float_amt, workspace_id=workspace_id)
         if float_amt == 0.0:
             return "✅ Monthly budget has been disabled (set to ₹0.00)."
         return f"✅ Monthly spending budget set to <b>₹{float_amt:,.2f}</b>."
 
-def get_budget_info(year: int = None, month: int = None) -> dict:
-    """Calculates current budget status metrics."""
+def get_budget_info(year: int = None, month: int = None, workspace_id: Optional[str] = None) -> dict:
+    """Calculates current budget status metrics for a workspace."""
     now = datetime.now()
     year = year or now.year
     month = month or now.month
     
-    budget = get_budget_setting()
-    spent = get_monthly_spending(year, month)
+    budget = get_budget_setting(workspace_id=workspace_id)
+    spent = get_monthly_spending(year, month, workspace_id=workspace_id)
     remaining = budget - spent
     percentage = (spent / budget * 100) if budget > 0 else 0.0
     
@@ -72,9 +73,9 @@ def get_budget_info(year: int = None, month: int = None) -> dict:
         "status_emoji": status_emoji
     }
 
-def format_budget_status(year: int = None, month: int = None) -> str:
+def format_budget_status(year: int = None, month: int = None, workspace_id: Optional[str] = None) -> str:
     """Formats the monthly budget status into a sleek HTML card for Telegram."""
-    info = get_budget_info(year, month)
+    info = get_budget_info(year, month, workspace_id=workspace_id)
     
     month_names = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
     m_name = month_names[info["month"]] if 1 <= info["month"] <= 12 else str(info["month"])
@@ -107,7 +108,7 @@ def format_budget_status(year: int = None, month: int = None) -> str:
     card += f"<i>Tip: Update anytime using /setbudget &lt;amount&gt;</i>"
     return card
 
-def check_budget_alert(new_tx_amount: float, tx_type: str = "SENT") -> str:
+def check_budget_alert(new_tx_amount: float, tx_type: str = "SENT", workspace_id: Optional[str] = None) -> str:
     """
     Checks if an outgoing transaction caused the spending to cross key thresholds (50%, 80%, 100%).
     Returns an alert snippet if a milestone was crossed, or empty string if not.
@@ -116,7 +117,7 @@ def check_budget_alert(new_tx_amount: float, tx_type: str = "SENT") -> str:
         return ""
         
     now = datetime.now()
-    info = get_budget_info(now.year, now.month)
+    info = get_budget_info(now.year, now.month, workspace_id=workspace_id)
     budget = info["budget"]
     if budget <= 0:
         return ""

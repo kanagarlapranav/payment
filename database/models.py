@@ -28,7 +28,9 @@ class Transaction:
     original_image_path: str = ""
     telegram_message_id: str = ""
     telegram_chat_id: str = ""
+    telegram_user_id: Optional[int] = None
     uid: Optional[str] = None
+    workspace_id: Optional[str] = None
     occurred_at: Optional[str] = None
     deleted_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
@@ -42,3 +44,27 @@ class TransactionSummary:
     net_change: float = 0.0
     transaction_count: int = 0
     current_balance: float = 0.0
+
+@dataclass
+class Workspace:
+    """Represents an isolated multi-tenant workspace anchored to a Telegram chat."""
+    id: str
+    chat_id: int
+    chat_type: str = "private"
+    title: str = ""
+    is_active: bool = True
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+@dataclass
+class WorkspaceMember:
+    """Represents a member with a role in a workspace."""
+    id: Optional[int] = None
+    workspace_id: str = ""
+    telegram_user_id: int = 0
+    username: str = ""
+    display_name: str = ""
+    role: str = "member"  # 'owner', 'admin', 'member', 'viewer'
+    is_active: bool = True
+    joined_at: Optional[str] = None
+    updated_at: Optional[str] = None

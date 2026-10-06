@@ -46,7 +46,7 @@ def parse_digest_time() -> time:
         return time(hour=22, minute=0, tzinfo=IST_TZ)
 
 
-def format_daily_digest(target_date_str: str = None) -> str:
+def format_daily_digest(target_date_str: str = None, workspace_id: str = None) -> str:
     """
     Formats the daily closing financial briefing into a structured HTML report
     with strict HTML safety escaping on all dynamic variables.
@@ -54,8 +54,8 @@ def format_daily_digest(target_date_str: str = None) -> str:
     if not target_date_str:
         target_date_str = get_current_ist_time().strftime("%Y-%m-%d")
 
-    stats = get_daily_summary_stats(target_date_str)
-    current_balance = get_balance_setting()
+    stats = get_daily_summary_stats(target_date_str, workspace_id=workspace_id)
+    current_balance = get_balance_setting(workspace_id=workspace_id)
 
     try:
         d_obj = datetime.strptime(target_date_str, "%Y-%m-%d")
@@ -107,9 +107,9 @@ def format_daily_digest(target_date_str: str = None) -> str:
                 summary += f"• 🔴 <b>-₹{amt:,.2f}</b> to <b>{name}</b> ({cat}) {icon}{time_tag}\n"
 
     now_ist = get_current_ist_time()
-    budget = get_budget_setting()
+    budget = get_budget_setting(workspace_id=workspace_id)
     if budget > 0:
-        monthly_spent = get_monthly_spending(now_ist.year, now_ist.month)
+        monthly_spent = get_monthly_spending(now_ist.year, now_ist.month, workspace_id=workspace_id)
         pct = (monthly_spent / budget * 100)
         summary += f"\n🎯 <b>Monthly Budget Pace:</b> ₹{monthly_spent:,.2f} / ₹{budget:,.2f} ({pct:.1f}%)\n"
 
@@ -132,48 +132,85 @@ def format_daily_digest(target_date_str: str = None) -> str:
     return header + summary
 
 
-async def send_daily_digest_with_retry(bot, target_chat_id: int | str, target_date_str: str) -> bool:
+async def send_daily_digest_with_retry(bot, target_chat_id: int | str, target_date_str: str, workspace_id: str = None) -> bool:
     """
     Sends the daily digest to target_chat_id with up to 3 retry attempts with exponential backoff.
-    Marks the date as sent in database settings ONLY after successful delivery.
+    Marks the date as sent in database settings / workspace_settings ONLY after successful delivery.
     """
-    digest_text = await asyncio.to_thread(format_daily_digest, target_date_str)
+    digest_text = await asyncio.to_thread(format_daily_digest, target_date_str, workspace_id=workspace_id)
     max_retries = 3
 
     for attempt in range(max_retries):
         try:
-            logger.info(f"Sending daily digest for {target_date_str} (attempt {attempt + 1}/{max_retries})...")
+            logger.info(f"Sending daily digest for {target_date_str} to chat {target_chat_id} (workspace={workspace_id}) (attempt {attempt + 1}/{max_retries})...")
             await send_safe_message(bot, target_chat_id, digest_text, parse_mode="HTML")
             
-            # Mark as successfully sent in settings
+            # Mark as successfully sent in settings and workspace_settings
             with LEDGER_LOCK:
                 with get_db_connection() as conn:
                     now_utc = utc_now_iso()
+                    if workspace_id:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at) VALUES (?, 'last_digest_sent_date', ?, ?)",
+                            (workspace_id, target_date_str, now_utc)
+                        )
                     conn.execute(
                         "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_digest_sent_date', ?, ?)",
                         (target_date_str, now_utc)
                     )
                     conn.commit()
 
-            logger.info(f"Successfully delivered daily digest for {target_date_str} to chat {target_chat_id}.")
+            logger.info(f"Successfully delivered daily digest for {target_date_str} to chat {target_chat_id} (workspace={workspace_id}).")
             return True
         except Exception as e:
-            logger.warning(f"Attempt {attempt + 1} to send daily digest failed: {e}")
+            logger.warning(f"Attempt {attempt + 1} to send daily digest for ws={workspace_id} to chat={target_chat_id} failed: {e}")
             if attempt < max_retries - 1:
                 await asyncio.sleep(2.0 * (attempt + 1))
 
-    logger.error(f"Failed to send daily digest for {target_date_str} after {max_retries} attempts.")
+    logger.error(f"Failed to send daily digest for {target_date_str} to chat {target_chat_id} after {max_retries} attempts.")
     return False
 
 
 async def daily_digest_job(context: ContextTypes.DEFAULT_TYPE):
-    """PTB JobQueue handler for daily financial digest."""
+    """PTB JobQueue handler for daily financial digest with multi-workspace fan-out and per-workspace failure isolation."""
+    today_str = get_current_ist_time().strftime("%Y-%m-%d")
+
+    # 1. Try fan-out to all active workspaces
+    from database.queries import get_active_workspaces, get_workspace_setting
+    active_workspaces = []
+    try:
+        active_workspaces = get_active_workspaces()
+    except Exception as e:
+        logger.warning(f"Failed to query active workspaces for digest: {e}")
+
+    if active_workspaces:
+        for ws in active_workspaces:
+            try:
+                ws_id = ws['id']
+                chat_id = ws['chat_id']
+                
+                # Check per-workspace enabled flag
+                if get_workspace_setting(ws_id, 'daily_digest_enabled') == '0':
+                    continue
+
+                last_sent = get_workspace_setting(ws_id, 'last_digest_sent_date')
+                if last_sent == today_str:
+                    logger.info(f"Daily digest for workspace {ws_id} already sent today. Skipping.")
+                    continue
+
+                await send_daily_digest_with_retry(context.bot, chat_id, today_str, workspace_id=ws_id)
+                # Jitter rate limiting (100ms) to respect Telegram API 30 msg/s ceiling
+                await asyncio.sleep(0.1)
+            except Exception as ws_err:
+                logger.error(f"Error executing daily digest for workspace {ws.get('id', '?')}: {ws_err}")
+                continue
+        return
+
+    # 2. Legacy fallback if no workspaces are found
     target_chat_id = TELEGRAM_GROUP_ID or TELEGRAM_USER_ID
     if not target_chat_id:
         logger.warning("Daily digest job skipped: no TELEGRAM_GROUP_ID or TELEGRAM_USER_ID configured.")
         return
-
-    today_str = get_current_ist_time().strftime("%Y-%m-%d")
 
     # Check if already sent today
     with get_db_connection() as conn:

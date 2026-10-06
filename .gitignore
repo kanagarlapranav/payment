@@ -33,7 +33,13 @@ htmlcov/
 # Audit & Security Reports
 audit_report.txt
 gitleaks_report.txt
-Codebase_Audit_Report.pdf
+*.pdf
+
+# Temporary files & process logs
+*.lock
+*.err
+*.out
+ocr/Saved Searches/
 
 # Large Binaries / Installers
 *.exe

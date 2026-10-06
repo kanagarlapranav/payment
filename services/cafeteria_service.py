@@ -95,29 +95,29 @@ ADD_ONS = {
     "Extra Spicy": 5.0
 }
 
-def get_all_menu_items() -> List[MenuItem]:
+def get_all_menu_items(workspace_id: Optional[str] = None) -> List[MenuItem]:
     """Returns the complete menu combining default items and custom user-added items from SQLite."""
     items = list(VEG_MENU)
     try:
-        from database.db import get_db_connection
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT name, price, category, is_veg FROM custom_menu_items ORDER BY id ASC")
-            for row in cursor.fetchall():
-                items.append(MenuItem(
-                    name=str(row['name']),
-                    price=float(row['price']),
-                    category=str(row['category'] or 'Snacks & Tea'),
-                    is_veg=bool(row['is_veg'])
-                ))
+        from database.db import get_custom_menu_items
+        for row in get_custom_menu_items(workspace_id=workspace_id):
+            items.append(MenuItem(
+                name=str(row['name']),
+                price=float(row['price']),
+                category=str(row['category'] or 'Snacks & Tea'),
+                is_veg=bool(row['is_veg'])
+            ))
     except Exception:
         pass
     return items
 
-def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea", is_veg: bool = True) -> Tuple[bool, str]:
+def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea", is_veg: bool = True, workspace_id: Optional[str] = None) -> Tuple[bool, str]:
     """Adds a new custom vegetarian item to the cafeteria menu database with validation and locking."""
     from database.db import LEDGER_LOCK, get_db_connection
     from utils.validation import parse_decimal_amount, validate_string_length
+    from database.queries import get_default_workspace_id
+
+    ws_id = workspace_id or get_default_workspace_id()
 
     with LEDGER_LOCK:
         try:
@@ -139,7 +139,7 @@ def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea"
             return False, "⚠️ Only vegetarian items are permitted in this cafeteria tracker."
 
         # Prevent duplicates
-        all_items = get_all_menu_items()
+        all_items = get_all_menu_items(workspace_id=ws_id)
         if any(it.name.lower() == name_clean.lower() for it in all_items):
             return False, f"Item '<b>{name_clean}</b>' already exists in the menu."
 
@@ -147,8 +147,8 @@ def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea"
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "INSERT OR REPLACE INTO custom_menu_items (name, price, category, is_veg) VALUES (?, ?, ?, 1)",
-                    (name_clean, price_val, category_clean)
+                    "INSERT OR REPLACE INTO custom_menu_items (name, price, category, is_veg, workspace_id) VALUES (?, ?, ?, 1, ?)",
+                    (name_clean, price_val, category_clean, ws_id)
                 )
                 from database.queries import increment_revision_and_mark_dirty
                 increment_revision_and_mark_dirty(conn)
@@ -163,14 +163,20 @@ def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea"
             return False, f"Database error: {e}"
 
 
-def delete_custom_menu_item(name: str) -> Tuple[bool, str]:
+def delete_custom_menu_item(name: str, workspace_id: Optional[str] = None) -> Tuple[bool, str]:
     """Deletes a custom item from the menu under LEDGER_LOCK."""
     from database.db import LEDGER_LOCK, get_db_connection
     with LEDGER_LOCK:
         try:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("DELETE FROM custom_menu_items WHERE lower(name) = lower(?)", (name.strip(),))
+                if workspace_id:
+                    cursor.execute(
+                        "DELETE FROM custom_menu_items WHERE lower(name) = lower(?) AND (workspace_id = ? OR workspace_id IS NULL)",
+                        (name.strip(), workspace_id)
+                    )
+                else:
+                    cursor.execute("DELETE FROM custom_menu_items WHERE lower(name) = lower(?)", (name.strip(),))
                 if cursor.rowcount > 0:
                     from database.queries import increment_revision_and_mark_dirty
                     increment_revision_and_mark_dirty(conn)
@@ -224,16 +230,16 @@ def find_combinations(amount: float, max_items: int = 2) -> List[str]:
 
     return combos[:8] # Limit to top 8 suggestions
 
-def get_menu_by_category() -> Dict[str, List[MenuItem]]:
+def get_menu_by_category(workspace_id: Optional[str] = None) -> Dict[str, List[MenuItem]]:
     """Groups the entire vegetarian menu by category."""
     cats = {}
-    for item in get_all_menu_items():
+    for item in get_all_menu_items(workspace_id=workspace_id):
         cats.setdefault(item.category, []).append(item)
     return cats
 
-def format_full_menu() -> str:
+def format_full_menu(workspace_id: Optional[str] = None) -> str:
     """Formats the complete vegetarian cafeteria menu into structured HTML for Telegram."""
-    cats = get_menu_by_category()
+    cats = get_menu_by_category(workspace_id=workspace_id)
     
     category_icons = {
         "Breakfast": "🥞",
@@ -262,7 +268,7 @@ def format_full_menu() -> str:
     text += "<i>Tip: When you pay Vikraman Nair, the bot will auto-suggest items matching your exact bill!</i>"
     return text
 
-def format_cafeteria_stats() -> str:
+def format_cafeteria_stats(workspace_id: Optional[str] = None) -> str:
     """Computes and formats cafeteria spending insights and top ordered veg items."""
     import html
     from database.queries import get_cafeteria_transactions
@@ -270,7 +276,7 @@ def format_cafeteria_stats() -> str:
     from collections import Counter
     import datetime
 
-    txs = get_cafeteria_transactions(limit=200)
+    txs = get_cafeteria_transactions(limit=200, workspace_id=workspace_id)
     if not txs:
         return (
             "🍽️ <b>CAFETERIA SPENDING INSIGHTS</b>\n"
