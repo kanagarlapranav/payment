@@ -1460,8 +1460,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         target_ws_id = parts[1]
         from bot.auth import set_user_active_workspace, get_effective_user_id
         from database.queries import get_workspace_by_id
-        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-        import html
         user_id = get_effective_user_id(update)
         target_ws = get_workspace_by_id(target_ws_id)
         if target_ws and user_id:
@@ -1470,20 +1468,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.answer(f"Switched to: {target_ws.title}")
             except Exception:
                 pass
-            await safe_edit_callback_message(
-                query,
-                f"✅ <b>Active Workspace Switched!</b>\n\n"
-                f"🏢 <b>Workspace:</b> <b>{html.escape(target_ws.title or 'Workspace')}</b>\n"
-                f"🆔 <code>{target_ws.id}</code>\n"
-                f"💬 <b>Type:</b> {target_ws.chat_type.title()}\n\n"
-                f"👉 <i>Commands (/history, /last5, /balance, /edit, /delete, /report) will now inspect and manage this workspace.</i>\n\n"
-                f"Type /workspaces anytime to switch again or reset.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Reset to Current Chat Default", callback_data="ws_reset")],
-                    [InlineKeyboardButton("🏢 Switch Workspace", callback_data="ws_reset_menu")]
-                ]),
-                parse_mode='HTML'
-            )
+            from bot.commands import render_workspaces_view
+            text, markup = render_workspaces_view(update)
+            await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
         else:
             await query.answer("❌ Workspace not found.", show_alert=True)
         return
@@ -1494,20 +1481,35 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if user_id:
             set_user_active_workspace(user_id, None)
         try:
-            await query.answer("Reset to default workspace.")
+            await query.answer("Reset to chat default!")
         except Exception:
             pass
-        if action == "ws_reset_menu":
-            from bot.commands import workspace_command
-            await workspace_command(update, context)
-        else:
-            await safe_edit_callback_message(
-                query,
-                "🔄 <b>Active workspace reset to default for this chat.</b>\n\n"
-                "You are back to your standard chat view.",
-                reply_markup=get_back_to_menu_keyboard(),
-                parse_mode='HTML'
-            )
+        from bot.commands import render_workspaces_view
+        text, markup = render_workspaces_view(update)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "ws_new_prompt":
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        prompt_text = (
+            "➕ <b>Create a New Ledger</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "You can create a standalone workspace anytime by typing in chat:\n\n"
+            "<code>/workspace create &lt;Name&gt;</code>\n\n"
+            "<i>Examples:</i>\n"
+            "• <code>/workspace create Goa Trip</code>\n"
+            "• <code>/workspace create Side Project</code>\n"
+            "• <code>/workspace create Shared Budget</code>\n\n"
+            "It will immediately create the workspace and switch your view to it."
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back to Workspaces", callback_data="ws_reset_menu")]
+        ])
+        await safe_edit_callback_message(query, prompt_text, reply_markup=markup, parse_mode='HTML')
         return
 
     # --- Access Request & Approval Callbacks ---

@@ -32,6 +32,7 @@ STRANGER_CHAT_ID = 88888888
 def setup_auth_env(monkeypatch):
     monkeypatch.setattr(config, "TELEGRAM_USER_ID", OWNER_ID)
     monkeypatch.setattr(config, "TELEGRAM_GROUP_ID", GROUP_ID)
+    monkeypatch.setattr(config, "ALLOW_PUBLIC_WORKSPACES", False)
 
 def make_mock_update(user_id=STRANGER_ID, chat_id=STRANGER_CHAT_ID, text="", callback_data=None):
     update = MagicMock(spec=Update)

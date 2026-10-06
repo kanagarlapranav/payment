@@ -270,7 +270,7 @@ def is_authorized_user(update: Update, workspace_id: Optional[str] = None) -> bo
         member = get_workspace_member(ws.id, user_id)
         if member and member.is_active:
             return True
-        return True
+        return False
 
     if getattr(config, 'ALLOW_PUBLIC_WORKSPACES', False):
         return True
@@ -344,10 +344,9 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
     )
 
     try:
-        # For private chats, check if user has switched active workspace
-        if chat_type == 'private':
-            active_ws_id = get_user_active_workspace(user_id)
-            if active_ws_id:
+        # Check if user has switched active workspace (applies to private DMs and group chats)
+        active_ws_id = get_user_active_workspace(user_id)
+        if active_ws_id:
                 switched_ws = get_workspace_by_id(active_ws_id)
                 if switched_ws:
                     is_global_owner = False
