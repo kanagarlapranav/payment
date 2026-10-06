@@ -1510,6 +1510,176 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
         return
 
+    # --- Access Request & Approval Callbacks ---
+    elif action == "auth_grant":
+        from bot.auth import is_owner
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can approve access.", show_alert=True)
+            return
+        target_uid = int(parts[1])
+        role = parts[2].lower() if len(parts) > 2 else "member"
+        from database.queries import (
+            get_access_request, set_user_permission_and_role,
+            get_workspace_by_chat_id, get_or_create_workspace, add_workspace_member
+        )
+        req = get_access_request(target_uid)
+        display_name = (req.get('display_name') if req else '') or str(target_uid)
+        username = (req.get('username') if req else '') or ''
+        chat_id = req.get('chat_id') if req else None
+        chat_type = req.get('chat_type', 'private') if req else 'private'
+
+        # Set user permission and approve
+        set_user_permission_and_role(target_uid, role, is_active=True)
+
+        # Provision personal workspace and membership
+        if chat_id:
+            ws = get_workspace_by_chat_id(chat_id)
+            if not ws:
+                ws = get_or_create_workspace(
+                    chat_id=chat_id,
+                    chat_type=chat_type,
+                    title=f"{display_name} (DM)",
+                    creator_user_id=target_uid,
+                    username=username,
+                    display_name=display_name
+                )
+            add_workspace_member(
+                ws.id, target_uid,
+                username=username,
+                display_name=display_name,
+                role=role
+            )
+
+        try:
+            await query.answer(f"✅ Approved as {role.title()}!")
+        except Exception:
+            pass
+
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        await safe_edit_callback_message(
+            query,
+            f"✅ <b>Access Approved!</b>\n\n"
+            f"👤 <b>User:</b> {html.escape(display_name)}\n"
+            f"💬 <b>Username:</b> @{html.escape(username) if username else 'N/A'}\n"
+            f"🆔 <b>User ID:</b> <code>{target_uid}</code>\n"
+            f"🛡️ <b>Role Granted:</b> <b>{role.upper()}</b>\n\n"
+            f"<i>The user has been notified and granted access.</i>",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⚙️ Manage Permissions", callback_data=f"perm_view:{target_uid}")],
+                [InlineKeyboardButton("👥 View All Users", callback_data="perm_list")]
+            ]),
+            parse_mode='HTML'
+        )
+
+        # Notify approved user
+        if chat_id:
+            try:
+                await context.bot.send_message(
+                    chat_id=int(chat_id),
+                    text=(
+                        f"🎉 <b>Access Approved!</b>\n\n"
+                        f"The owner has approved your access with <b>{role.title()}</b> permissions.\n\n"
+                        f"Send /start to begin tracking your expenses!"
+                    ),
+                    parse_mode='HTML'
+                )
+            except Exception as e:
+                logger.warning(f"Could not notify approved user {target_uid}: {e}")
+        return
+
+    elif action == "auth_deny":
+        from bot.auth import is_owner
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can deny access.", show_alert=True)
+            return
+        target_uid = int(parts[1])
+        from database.queries import get_access_request, set_user_permission_and_role
+        req = get_access_request(target_uid)
+        display_name = (req.get('display_name') if req else '') or str(target_uid)
+        chat_id = req.get('chat_id') if req else None
+
+        set_user_permission_and_role(target_uid, 'viewer', is_active=False)
+
+        try:
+            await query.answer("❌ Access Denied & Blocked.")
+        except Exception:
+            pass
+
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        await safe_edit_callback_message(
+            query,
+            f"❌ <b>Access Request Denied</b>\n\n"
+            f"👤 <b>User:</b> {html.escape(display_name)}\n"
+            f"🆔 <b>User ID:</b> <code>{target_uid}</code>\n\n"
+            f"<i>This user is blocked from interacting with the bot.</i>",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("👥 View All Users", callback_data="perm_list")]
+            ]),
+            parse_mode='HTML'
+        )
+
+        if chat_id:
+            try:
+                await context.bot.send_message(
+                    chat_id=int(chat_id),
+                    text=(
+                        "⛔ <b>Access Request Declined</b>\n\n"
+                        "Your request to access Payment Tracker was declined by the administrator."
+                    ),
+                    parse_mode='HTML'
+                )
+            except Exception:
+                pass
+        return
+
+    # --- Interactive Permissions & Roles Editor Callbacks ---
+    elif action == "perm_list":
+        from bot.auth import is_owner
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage permissions.", show_alert=True)
+            return
+        from bot.commands import render_permissions_list_payload
+        text, markup = render_permissions_list_payload()
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "perm_view":
+        from bot.auth import is_owner
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage permissions.", show_alert=True)
+            return
+        target_uid = int(parts[1])
+        from bot.commands import render_user_permission_card
+        text, markup = render_user_permission_card(target_uid)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "perm_set":
+        from bot.auth import is_owner
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage permissions.", show_alert=True)
+            return
+        target_uid = int(parts[1])
+        setting = parts[2].lower() if len(parts) > 2 else "member"
+        from database.queries import set_user_permission_and_role
+        if setting == "revoke":
+            set_user_permission_and_role(target_uid, "viewer", is_active=False)
+            try:
+                await query.answer("🚫 User access revoked & blocked!", show_alert=False)
+            except Exception:
+                pass
+        else:
+            set_user_permission_and_role(target_uid, setting, is_active=True)
+            try:
+                await query.answer(f"✅ Role set to {setting.upper()}!", show_alert=False)
+            except Exception:
+                pass
+
+        from bot.commands import render_user_permission_card
+        text, markup = render_user_permission_card(target_uid)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
     # --- 2. Quick Undo & Quick Add Actions ---
     elif action == "undo_tx":
         tx_id = int(parts[1])
@@ -2435,7 +2605,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.commands import (
         edit_command, delete_command, history_command, balance_command,
         date_command, search_command, monthly_command, filter_command, sort_command, details_command, amount_command,
-        undo_command, workspace_command, members_command, setrole_command
+        undo_command, workspace_command, members_command, setrole_command, permissions_command
     )
     cmd_lower = text.lower()
     
@@ -2443,6 +2613,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = text.split(maxsplit=1)
         context.args = parts[1].split() if len(parts) > 1 else []
         await workspace_command(update, context)
+        return
+    elif cmd_lower in (r'\permissions', 'permissions', '/permissions', r'\roles', 'roles', '/roles', r'\users', 'users', '/users'):
+        await permissions_command(update, context)
         return
     elif cmd_lower in (r'\members', 'members', '/members', r'\team', 'team', '/team'):
         await members_command(update, context)

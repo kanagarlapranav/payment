@@ -141,6 +141,21 @@ def setup_database():
                         updated_at TEXT
                     )
                 ''')
+
+                # User Access Requests Table (Owner Approval System)
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS access_requests (
+                        telegram_user_id INTEGER PRIMARY KEY,
+                        username TEXT DEFAULT '',
+                        display_name TEXT DEFAULT '',
+                        chat_id INTEGER NOT NULL,
+                        chat_type TEXT NOT NULL DEFAULT 'private',
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        requested_at TEXT NOT NULL,
+                        reviewed_at TEXT DEFAULT NULL,
+                        reviewed_by INTEGER DEFAULT NULL
+                    )
+                ''')
                 
                 # Custom Cafeteria Menu Items table (supports adding new veg dishes)
                 cursor.execute('''
@@ -379,8 +394,14 @@ def setup_database():
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('last_telegram_backup_at', '', now_utc))
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('last_drive_backup_at', '', now_utc))
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('database_initialized', '0', now_utc))
-                cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('backup_blocked', '0', now_utc))
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('schema_version', '4', now_utc))
+
+                # Ensure all legacy transactions have default workspace assigned
+                cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
+                def_ws_row = cursor.fetchone()
+                if def_ws_row and def_ws_row['value']:
+                    d_id = str(def_ws_row['value'])
+                    cursor.execute("UPDATE transactions SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''", (d_id,))
                 
                 # If transactions already exist, ensure database is marked initialized
                 cursor.execute("SELECT COUNT(*) FROM transactions")
