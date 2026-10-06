@@ -178,6 +178,156 @@ def get_all_active_workspaces() -> list[RowDict]:
         cursor.execute("SELECT * FROM workspaces WHERE is_active = 1 ORDER BY created_at ASC")
         return [RowDict(dict(r)) for r in cursor.fetchall()]
 
+def update_workspace_title(workspace_id: str, title: str) -> None:
+    """Updates the title of a workspace."""
+    if not workspace_id or not title:
+        return
+    with LEDGER_LOCK:
+        now_utc = utc_now_iso()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE workspaces SET title = ?, updated_at = ? WHERE id = ?",
+                (title.strip()[:200], now_utc, str(workspace_id))
+            )
+            conn.commit()
+
+def create_custom_workspace(
+    title: str,
+    creator_user_id: int | str,
+    username: str = "",
+    display_name: str = ""
+) -> RowDict:
+    """Creates a custom standalone workspace not bound to a telegram chat."""
+    import time
+    synthetic_chat_id = -abs(int(time.time() * 1000) % 2000000000 + 1000000000)
+    return get_or_create_workspace(
+        chat_id=synthetic_chat_id,
+        chat_type="group",
+        title=title,
+        creator_user_id=creator_user_id,
+        username=username,
+        display_name=display_name
+    )
+
+def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current_chat_id: Optional[int] = None) -> None:
+    """
+    Ensures that:
+    1. The owner and all known users/members have their personal DM workspaces provisioned.
+    2. Group chat workspace title reflects the real group title (e.g. Payment (Group) instead of Primary Workspace).
+    3. Global bot owner is an admin/owner of all workspaces so they can inspect and manage them.
+    """
+    import config
+    owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+    try:
+        owner_id = int(owner_id) if owner_id is not None else None
+    except (ValueError, TypeError):
+        owner_id = None
+
+    with LEDGER_LOCK:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # If current chat is a group, update generic title to actual chat title
+            if current_chat_id is not None and current_chat_title:
+                clean_title = current_chat_title.strip()
+                if not clean_title.endswith("(Group)"):
+                    clean_title = f"{clean_title} (Group)"
+                cursor.execute(
+                    "UPDATE workspaces SET title = ? WHERE chat_id = ? AND (title IN ('Primary Workspace', 'Workspace', '') OR title IS NULL)",
+                    (clean_title, int(current_chat_id))
+                )
+                conn.commit()
+
+            # Collect all known user IDs with their best display names / usernames
+            known_users: dict[int, tuple[str, str]] = {}
+            
+            # 1. Owner
+            if owner_id:
+                known_users[owner_id] = ("Pranav", "pranav")
+            
+            # 2. Known friend Nagendra
+            known_users[8343764796] = ("Nagendra", "nagendra")
+
+            # 3. From workspace_members
+            cursor.execute("SELECT telegram_user_id, display_name, username FROM workspace_members")
+            for r in cursor.fetchall():
+                try:
+                    uid = int(r['telegram_user_id'])
+                    dname = r['display_name'] or ""
+                    uname = r['username'] or ""
+                    if uid not in known_users or (not known_users[uid][0] and dname):
+                        known_users[uid] = (dname or f"User {uid}", uname)
+                except Exception:
+                    pass
+
+            # 4. From access_requests
+            cursor.execute("SELECT telegram_user_id, display_name, username FROM access_requests")
+            for r in cursor.fetchall():
+                try:
+                    uid = int(r['telegram_user_id'])
+                    dname = r['display_name'] or ""
+                    uname = r['username'] or ""
+                    if uid not in known_users or (not known_users[uid][0] and dname):
+                        known_users[uid] = (dname or f"User {uid}", uname)
+                except Exception:
+                    pass
+
+            # 5. From transactions
+            cursor.execute("SELECT DISTINCT telegram_user_id, person_name FROM transactions WHERE telegram_user_id IS NOT NULL")
+            for r in cursor.fetchall():
+                try:
+                    uid = int(r['telegram_user_id'])
+                    pname = r['person_name'] or ""
+                    if uid not in known_users:
+                        known_users[uid] = (pname or f"User {uid}", "")
+                except Exception:
+                    pass
+
+            # Now, for every known user, ensure a DM workspace exists (chat_id = uid, chat_type = 'dm')
+            now_utc = utc_now_iso()
+            for uid, (dname, uname) in known_users.items():
+                if uid <= 0:
+                    continue  # groups have negative chat_ids
+                cursor.execute("SELECT id, title FROM workspaces WHERE chat_id = ? AND is_active = 1", (uid,))
+                ws_row = cursor.fetchone()
+                clean_name = dname if dname and not dname.startswith("User ") else ("Pranav" if uid == owner_id else ("Nagendra" if uid == 8343764796 else (uname or f"User {uid}")))
+                ws_title = f"{clean_name} (Personal)"
+
+                if not ws_row:
+                    ws_id = str(uuid.uuid4())
+                    cursor.execute("""
+                        INSERT INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
+                        VALUES (?, ?, 'dm', ?, 1, ?, ?)
+                    """, (ws_id, uid, ws_title, now_utc, now_utc))
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO workspace_members 
+                        (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
+                        VALUES (?, ?, ?, ?, 'owner', 1, ?, ?)
+                    """, (ws_id, uid, uname, clean_name, now_utc, now_utc))
+                    if owner_id and owner_id != uid:
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO workspace_members 
+                            (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
+                            VALUES (?, ?, 'owner', 'Owner', 'owner', 1, ?, ?)
+                        """, (ws_id, owner_id, now_utc, now_utc))
+                else:
+                    curr_title = ws_row['title'] or ""
+                    if curr_title in ("Workspace", "Primary Workspace", "") or curr_title == str(uid):
+                        cursor.execute(
+                            "UPDATE workspaces SET title = ?, updated_at = ? WHERE id = ?",
+                            (ws_title, now_utc, ws_row['id'])
+                        )
+                    if owner_id and owner_id != uid:
+                        cursor.execute("SELECT id FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (ws_row['id'], owner_id))
+                        if not cursor.fetchone():
+                            cursor.execute("""
+                                INSERT OR REPLACE INTO workspace_members 
+                                (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
+                                VALUES (?, ?, 'owner', 'Owner', 'owner', 1, ?, ?)
+                            """, (ws_row['id'], owner_id, now_utc, now_utc))
+
+            conn.commit()
+
 def get_user_workspaces(telegram_user_id: int | str) -> list[RowDict]:
     """Fetches all workspaces where the given user is an active member."""
     if not telegram_user_id:
