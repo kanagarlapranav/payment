@@ -9,7 +9,7 @@ import re
 from datetime import datetime, timedelta, date
 from config import TELEGRAM_USER_ID, IMAGE_DIR, logger
 from bot.auth import (
-    require_authorized, require_admin, require_member, is_owner, is_authorized_user,
+    require_authorized, require_admin, require_owner, require_member, is_owner, is_authorized_user,
     get_callback_policy, ADMIN_CALLBACK_ACTIONS, READ_ONLY_CALLBACK_ACTIONS,
     get_workspace_context, resolve_workspace_context
 )
@@ -572,7 +572,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     ws_ctx = get_workspace_context(update)
-    if policy in ('admin', 'owner'):
+    if policy == 'owner':
+        if not await require_owner(update):
+            return
+    elif policy == 'admin':
         if not await require_admin(update):
             return
     elif policy in ('read_only', 'viewer'):
@@ -2561,7 +2564,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "cafe_del_item":
         item_id = int(parts[1])
         from database.db import delete_custom_menu_item_by_id
-        success, name = delete_custom_menu_item_by_id(item_id)
+        success, name = delete_custom_menu_item_by_id(item_id, workspace_id=ws_id)
         if success:
             await query.edit_message_text(f"✅ Removed custom item: <b>{html.escape(name)}</b> from cafeteria menu.", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         else:

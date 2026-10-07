@@ -718,12 +718,16 @@ async def require_member(update: Update, silent: bool = False) -> bool:
 
     chat_id = get_effective_chat_id(update)
     user_id = get_effective_user_id(update)
-    if chat_id is not None and user_id is not None:
+    if user_id is not None:
         from database.queries import get_workspace_by_chat_id, get_workspace_member
-        ws = get_workspace_by_chat_id(chat_id)
-        if ws:
-            member = get_workspace_member(ws.id, user_id)
-            if member and member.role in ('member', 'admin', 'owner'):
+        ws_id = get_user_active_workspace(user_id)
+        if not ws_id and chat_id is not None:
+            ws = get_workspace_by_chat_id(chat_id)
+            if ws:
+                ws_id = ws.id
+        if ws_id:
+            member = get_workspace_member(ws_id, user_id)
+            if member and member.role in ('member', 'admin', 'owner') and member.is_active and getattr(member, 'status', 'active') == 'active':
                 return True
 
     if silent:
@@ -758,12 +762,19 @@ async def require_admin(update: Update, silent: bool = False) -> bool:
 
     chat_id = get_effective_chat_id(update)
     user_id = get_effective_user_id(update)
-    if chat_id is not None and user_id is not None:
+    if user_id == 8343764796:
+        # Nagendra is strictly member-only
+        pass
+    elif user_id is not None:
         from database.queries import get_workspace_by_chat_id, get_workspace_member
-        ws = get_workspace_by_chat_id(chat_id)
-        if ws:
-            member = get_workspace_member(ws.id, user_id)
-            if member and member.role in ('admin', 'owner'):
+        ws_id = get_user_active_workspace(user_id)
+        if not ws_id and chat_id is not None:
+            ws = get_workspace_by_chat_id(chat_id)
+            if ws:
+                ws_id = ws.id
+        if ws_id:
+            member = get_workspace_member(ws_id, user_id)
+            if member and member.role in ('admin', 'owner') and member.is_active and getattr(member, 'status', 'active') == 'active':
                 return True
 
     if silent:
@@ -805,7 +816,7 @@ async def require_owner(update: Update, silent: bool = False) -> bool:
     increment_metric("auth_denials")
     logger.warning(f"Owner-only action blocked for user={user_id}, chat={chat_id}")
 
-    refusal_text = "⛔ <b>Owner Only:</b> This command is strictly reserved for the Bot Owner."
+    refusal_text = "⛔ <b>Owner Only:</b> Access restricted — this command is strictly reserved for the Bot Owner."
     msg_target = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
     if update.callback_query:
         try:

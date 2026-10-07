@@ -368,11 +368,15 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
 
             # 4. Clean up any personal workspace for owner (Pranav) - user requested Payment (Group) only
             if owner_id:
+                cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
+                d_row = cursor.fetchone()
+                default_ws_id = str(d_row['value']) if d_row and d_row['value'] else get_default_workspace_id()
+
                 cursor.execute("SELECT id FROM workspaces WHERE chat_id = ?", (owner_id,))
                 owner_personal_rows = cursor.fetchall()
                 for op_row in owner_personal_rows:
                     op_id = op_row['id']
-                    cursor.execute("DELETE FROM transactions WHERE workspace_id = ?", (op_id,))
+                    cursor.execute("UPDATE transactions SET workspace_id = ? WHERE workspace_id = ?", (default_ws_id, op_id))
                     cursor.execute("DELETE FROM workspace_members WHERE workspace_id = ?", (op_id,))
                     cursor.execute("DELETE FROM workspaces WHERE id = ?", (op_id,))
                 cursor.execute("DELETE FROM workspace_settings WHERE key = ?", (f"user_active_ws:{owner_id}",))
@@ -497,7 +501,13 @@ def remove_workspace_member(workspace_id: str, telegram_user_id: int | str) -> b
                 (str(workspace_id), uid)
             )
             conn.commit()
-            return cursor.rowcount > 0
+            removed = cursor.rowcount > 0
+    try:
+        from bot.auth import set_user_active_workspace
+        set_user_active_workspace(uid, None)
+    except Exception:
+        pass
+    return removed
 
 def get_access_request(telegram_user_id: int) -> RowDict | None:
     """Fetches access request for a user."""
@@ -892,7 +902,7 @@ def get_transactions_by_date(target_date, workspace_id: str = None):
         cursor = conn.cursor()
         cursor.execute(
             f"SELECT * FROM transactions WHERE {ws_filter} AND transaction_date = ? AND deleted_at IS NULL ORDER BY occurred_at ASC, created_at ASC, id ASC",
-            (ws_id, target_date)
+            (ws_id, str(target_date))
         )
         return [dict(row) for row in cursor.fetchall()]
 

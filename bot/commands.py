@@ -1253,7 +1253,8 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=get_delete_confirm_keyboard(tx_id), parse_mode='Markdown')
 
 async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_admin(update): return
+    from bot.auth import require_owner
+    if not await require_owner(update): return
     import asyncio
     from services.balance_service import set_explicit_balance
     from services.backup_service import backup_to_telegram

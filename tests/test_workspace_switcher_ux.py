@@ -189,10 +189,8 @@ def test_custom_workspace_creation():
 def test_owner_uses_payment_group_workspace_directly():
     """Verifies that owner does not create a personal duplicate workspace and uses Payment (Group) directly in private DMs."""
     from database.queries import (
-        get_default_workspace_id, get_workspace_by_chat_id, remove_workspace_member,
-        get_all_workspace_members, update_workspace_member_role
+        get_default_workspace_id, get_workspace_by_chat_id
     )
-    from bot.commands import removemember_command
 
     owner_id = 8379948573
 
@@ -217,7 +215,7 @@ def test_nagendra_is_strictly_member_and_cannot_be_owner():
     """Verifies that Nagendra is restricted to member only across all contexts."""
     from bot.auth import is_owner
     from database.queries import (
-        get_workspace_member, update_workspace_member_role,
+        update_workspace_member_role,
         add_workspace_member, get_default_workspace_id
     )
 
@@ -244,7 +242,7 @@ def test_remove_workspace_member():
     """Verifies that workspace members can be removed via queries and /removemember command."""
     from database.queries import (
         add_workspace_member, get_workspace_member,
-        remove_workspace_member, get_default_workspace_id, get_workspace_by_id
+        remove_workspace_member, get_default_workspace_id
     )
     from bot.commands import removemember_command
 

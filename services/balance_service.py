@@ -42,10 +42,12 @@ def recalculate_in_connection(conn: sqlite3.Connection, workspace_id: str = None
         raise ValueError(f"Invalid initial_balance in settings: {init_val_str!r} ({err})")
 
     # 2. Fetch all live transactions for this workspace in strict chronological order
-    cursor.execute('''
+    default_ws = get_default_workspace_id()
+    ws_filter = "(workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')" if ws_id == default_ws else "workspace_id = ?"
+    cursor.execute(f'''
         SELECT id, transaction_type, amount, occurred_at, created_at
         FROM transactions
-        WHERE (workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')
+        WHERE {ws_filter}
           AND deleted_at IS NULL
         ORDER BY occurred_at ASC, created_at ASC, id ASC
     ''', (ws_id,))
@@ -119,20 +121,13 @@ def set_explicit_balance(new_balance: float, workspace_id: str = None) -> float:
         dec_new = parse_decimal_amount(new_balance, allow_zero=True)
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            if target_ws:
-                cursor.execute('''
-                    SELECT id, transaction_type, amount
-                    FROM transactions
-                    WHERE (workspace_id = ? OR workspace_id IS NULL) AND deleted_at IS NULL
-                    ORDER BY occurred_at ASC, created_at ASC, id ASC
-                ''', (target_ws,))
-            else:
-                cursor.execute('''
-                    SELECT id, transaction_type, amount
-                    FROM transactions
-                    WHERE deleted_at IS NULL
-                    ORDER BY occurred_at ASC, created_at ASC, id ASC
-                ''')
+            ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if target_ws == default_ws else "workspace_id = ?"
+            cursor.execute(f'''
+                SELECT id, transaction_type, amount
+                FROM transactions
+                WHERE {ws_filter} AND deleted_at IS NULL
+                ORDER BY occurred_at ASC, created_at ASC, id ASC
+            ''', (target_ws,))
             txs = cursor.fetchall()
             net_delta = Decimal('0.00')
             for tx in txs:
@@ -205,13 +200,16 @@ def get_today_summary(workspace_id: str = None) -> TransactionSummary:
     today = get_current_time_in_tz().date()
     ws_id = workspace_id or get_default_workspace_id()
 
+    default_ws = get_default_workspace_id()
+    ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT transaction_type, amount 
             FROM transactions 
             WHERE transaction_date = ? 
-              AND (workspace_id = ? OR workspace_id IS NULL)
+              AND {ws_filter}
               AND deleted_at IS NULL
         """, (str(today), ws_id))
         rows = cursor.fetchall()
@@ -247,12 +245,15 @@ def get_overall_summary(workspace_id: str = None) -> TransactionSummary:
     from database.queries import get_default_workspace_id
     ws_id = workspace_id or get_default_workspace_id()
 
+    default_ws = get_default_workspace_id()
+    ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT transaction_type, amount 
             FROM transactions 
-            WHERE (workspace_id = ? OR workspace_id IS NULL) 
+            WHERE {ws_filter} 
               AND deleted_at IS NULL
         """, (ws_id,))
         rows = cursor.fetchall()

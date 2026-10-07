@@ -527,18 +527,24 @@ def get_custom_menu_items(workspace_id: str = None) -> list:
             cursor.execute("SELECT id, name, price, category, is_veg, created_at FROM custom_menu_items ORDER BY id ASC")
         return [dict(row) for row in cursor.fetchall()]
 
-def delete_custom_menu_item_by_id(item_id: int):
-    """Deletes a custom cafeteria menu item by its ID. Returns (success, item_name)."""
+def delete_custom_menu_item_by_id(item_id: int, workspace_id: str = None):
+    """Deletes a custom cafeteria menu item by its ID with optional workspace scoping. Returns (success, item_name)."""
     with LEDGER_LOCK:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT name FROM custom_menu_items WHERE id = ?", (item_id,))
+            if workspace_id:
+                cursor.execute("SELECT name FROM custom_menu_items WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL)", (item_id, str(workspace_id)))
+            else:
+                cursor.execute("SELECT name FROM custom_menu_items WHERE id = ?", (item_id,))
             row = cursor.fetchone()
             if not row:
                 return False, "Item not found"
             name = row['name']
             from database.queries import increment_revision_and_mark_dirty
-            cursor.execute("DELETE FROM custom_menu_items WHERE id = ?", (item_id,))
+            if workspace_id:
+                cursor.execute("DELETE FROM custom_menu_items WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL)", (item_id, str(workspace_id)))
+            else:
+                cursor.execute("DELETE FROM custom_menu_items WHERE id = ?", (item_id,))
             increment_revision_and_mark_dirty(conn)
             conn.commit()
         try:
