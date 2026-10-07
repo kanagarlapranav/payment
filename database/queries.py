@@ -232,7 +232,24 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
             cursor.execute("SELECT id, chat_id, title FROM workspaces WHERE (chat_type IN ('group', 'supergroup') OR chat_id < 0) AND is_active = 1")
             group_workspaces_list = cursor.fetchall()
             if not group_workspaces_list and current_chat_id is not None and int(current_chat_id) < 0:
-                new_grp_id = str(uuid.uuid4())
+                cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
+                d_row = cursor.fetchone()
+                if d_row and d_row['value']:
+                    new_grp_id = str(d_row['value'])
+                else:
+                    cursor.execute("""
+                        SELECT workspace_id, COUNT(*) as cnt 
+                        FROM transactions 
+                        WHERE workspace_id IS NOT NULL AND workspace_id != '' 
+                        GROUP BY workspace_id 
+                        ORDER BY cnt DESC LIMIT 1
+                    """)
+                    top_tx = cursor.fetchone()
+                    if top_tx and top_tx['workspace_id']:
+                        new_grp_id = str(top_tx['workspace_id'])
+                    else:
+                        new_grp_id = "d2b59f0c-e09a-40cf-9497-819cecfe4173"
+
                 c_title = (current_chat_title or "Payment").strip()
                 if not c_title.endswith("(Group)"):
                     c_title = f"{c_title} (Group)"
@@ -242,11 +259,51 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                 """, (new_grp_id, int(current_chat_id), c_title, now_utc, now_utc))
                 group_workspaces_list = [{'id': new_grp_id, 'chat_id': int(current_chat_id), 'title': c_title}]
 
+            # Determine canonical default group workspace
+            canonical_default_ws_id = None
+            if current_chat_id is not None and int(current_chat_id) < 0:
+                for g_row in group_workspaces_list:
+                    if g_row['chat_id'] == int(current_chat_id):
+                        canonical_default_ws_id = g_row['id']
+                        break
+
+            if not canonical_default_ws_id:
+                import config
+                tg_grp = getattr(config, 'TELEGRAM_GROUP_ID', None)
+                if tg_grp:
+                    for g_row in group_workspaces_list:
+                        if g_row['chat_id'] == int(tg_grp):
+                            canonical_default_ws_id = g_row['id']
+                            break
+
+            if not canonical_default_ws_id:
+                for g_row in group_workspaces_list:
+                    if g_row.get('title') and 'Payment' in g_row['title']:
+                        canonical_default_ws_id = g_row['id']
+                        break
+
+            if not canonical_default_ws_id and group_workspaces_list:
+                canonical_default_ws_id = group_workspaces_list[0]['id']
+
+            if not canonical_default_ws_id:
+                canonical_default_ws_id = "d2b59f0c-e09a-40cf-9497-819cecfe4173"
+
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('default_workspace_id', ?, ?)", (canonical_default_ws_id, now_utc))
+
+            # Adopt all legacy, orphaned, or unassigned transactions into the canonical default group workspace:
+            cursor.execute("""
+                UPDATE transactions 
+                SET workspace_id = ? 
+                WHERE workspace_id IS NULL 
+                   OR workspace_id = '' 
+                   OR workspace_id = '39648d95-f24d-4459-be59-40c62e13df85'
+                   OR workspace_id NOT IN (SELECT id FROM workspaces)
+            """, (canonical_default_ws_id,))
+
             for g_row in group_workspaces_list:
                 grp_id = g_row['id']
                 grp_chat_id = g_row['chat_id']
-                if current_chat_id is not None and int(current_chat_id) < 0 and grp_chat_id == int(current_chat_id):
-                    cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('default_workspace_id', ?, ?)", (grp_id, now_utc))
+
                 if current_chat_id is not None and current_chat_title and grp_chat_id == int(current_chat_id):
                     clean_title = current_chat_title.strip()
                     if not clean_title.endswith("(Group)"):
@@ -270,8 +327,10 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                             (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
                             VALUES (?, ?, 'pranav', 'Pranav', 'owner', 1, ?, ?)
                         """, (grp_id, owner_id, now_utc, now_utc))
+                    else:
+                        cursor.execute("UPDATE workspace_members SET role = 'owner', is_active = 1 WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, owner_id))
 
-                # Ensure Nagendra is in the group workspace
+                # Ensure Nagendra is in the group workspace as a member
                 cursor.execute("SELECT id FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, 8343764796))
                 if not cursor.fetchone():
                     cursor.execute("""
@@ -279,6 +338,8 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                         (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
                         VALUES (?, ?, 'nagendra', 'Nagendra', 'member', 1, ?, ?)
                     """, (grp_id, 8343764796, now_utc, now_utc))
+                else:
+                    cursor.execute("UPDATE workspace_members SET role = 'member', is_active = 1 WHERE workspace_id = ? AND telegram_user_id = 8343764796", (grp_id,))
 
             # 2. Collect all known user IDs with their best display names / usernames
             known_users: dict[int, tuple[str, str]] = {}
@@ -331,7 +392,7 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                 ws_row = cursor.fetchone()
                 clean_name = "Nagendra" if uid == 8343764796 else (dname if dname and not dname.startswith("User ") else (uname or f"User {uid}"))
                 ws_title = f"{clean_name} (Personal)"
-                user_role = 'member' if uid == 8343764796 else 'member'
+                user_role = 'member'
 
                 if not ws_row:
                     ws_id = str(uuid.uuid4())
@@ -367,22 +428,29 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                             """, (ws_row['id'], owner_id, now_utc, now_utc))
 
             # 4. Clean up any personal workspace for owner (Pranav) - user requested Payment (Group) only
-            if owner_id:
-                cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
-                d_row = cursor.fetchone()
-                default_ws_id = str(d_row['value']) if d_row and d_row['value'] else get_default_workspace_id()
+            cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
+            d_row = cursor.fetchone()
+            default_ws_id = str(d_row['value']) if d_row and d_row['value'] else get_default_workspace_id()
 
+            if owner_id:
                 cursor.execute("SELECT id FROM workspaces WHERE chat_id = ?", (owner_id,))
-                owner_personal_rows = cursor.fetchall()
-                for op_row in owner_personal_rows:
-                    op_id = op_row['id']
-                    cursor.execute("UPDATE transactions SET workspace_id = ? WHERE workspace_id = ?", (default_ws_id, op_id))
-                    cursor.execute("DELETE FROM workspace_members WHERE workspace_id = ?", (op_id,))
-                    cursor.execute("DELETE FROM workspaces WHERE id = ?", (op_id,))
+                personal_rows = cursor.fetchall()
+                for p_row in personal_rows:
+                    p_id = p_row['id']
+                    cursor.execute("UPDATE transactions SET workspace_id = ? WHERE workspace_id = ?", (default_ws_id, p_id))
+                    cursor.execute("DELETE FROM workspace_members WHERE workspace_id = ?", (p_id,))
+                    cursor.execute("DELETE FROM workspaces WHERE id = ?", (p_id,))
                 cursor.execute("DELETE FROM workspace_settings WHERE key = ?", (f"user_active_ws:{owner_id}",))
 
             # 5. Enforce Nagendra (8343764796) is strictly a member across all workspaces
             cursor.execute("UPDATE workspace_members SET role = 'member' WHERE telegram_user_id = 8343764796")
+
+            # 6. Recalculate balance for default workspace
+            from services.balance_service import recalculate_in_connection
+            try:
+                recalculate_in_connection(conn, workspace_id=default_ws_id)
+            except Exception as b_err:
+                logger.warning(f"ensure_all_user_workspaces balance recalculation notice: {b_err}")
 
             conn.commit()
 

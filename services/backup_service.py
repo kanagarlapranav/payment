@@ -96,6 +96,14 @@ def export_database_to_json(output_path: Path = None) -> dict:
                     else:
                         budgets = []
 
+                    # Fetch workspaces, members, and workspace_settings
+                    cursor.execute("SELECT * FROM workspaces")
+                    workspaces = [dict(row) for row in cursor.fetchall()]
+                    cursor.execute("SELECT * FROM workspace_members")
+                    workspace_members = [dict(row) for row in cursor.fetchall()]
+                    cursor.execute("SELECT * FROM workspace_settings")
+                    workspace_settings = [dict(row) for row in cursor.fetchall()]
+
                     # Fetch live transactions count and derived balance
                     cursor.execute("SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL")
                     live_count = cursor.fetchone()[0]
@@ -140,6 +148,9 @@ def export_database_to_json(output_path: Path = None) -> dict:
                     "settings": settings,
                     "custom_menu_items": menu_items,
                     "budgets": budgets,
+                    "workspaces": workspaces,
+                    "workspace_members": workspace_members,
+                    "workspace_settings": workspace_settings,
                     "transactions": tx_rows,
                     "checksum": checksum,
                 }
@@ -815,7 +826,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                             workspace_id = excluded.workspace_id
                     ''', (dish_name, dish_price, dish_cat, int(dish.get('is_veg', 1)), menu_ws))
 
-                # Restore initial_balance and monthly_budget from settings if present
+                # Restore settings
                 now_utc = utc_now_iso()
                 for k, v in settings.items():
                     if k in ('initial_balance', 'monthly_budget'):
@@ -833,6 +844,28 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                                 cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))
                         except Exception:
                             pass
+                    elif k in ('default_workspace_id', 'database_id'):
+                        cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)", (k, str(v), now_utc))
+
+                # Restore workspaces, members, and workspace_settings if present
+                for w in data_dict.get("workspaces", []):
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (w.get('id'), w.get('chat_id'), w.get('chat_type', 'group'), w.get('title', 'Workspace'), w.get('is_active', 1), w.get('created_at', now_utc), w.get('updated_at', now_utc)))
+
+                for m in data_dict.get("workspace_members", []):
+                    m_role = 'member' if int(m.get('telegram_user_id', 0)) == 8343764796 else m.get('role', 'member')
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO workspace_members (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (m.get('workspace_id'), m.get('telegram_user_id'), m.get('username', ''), m.get('display_name', ''), m_role, m.get('is_active', 1), m.get('joined_at', now_utc), m.get('updated_at', now_utc)))
+
+                for ws in data_dict.get("workspace_settings", []):
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at)
+                        VALUES (?, ?, ?, ?)
+                    """, (ws.get('workspace_id'), ws.get('key'), ws.get('value'), ws.get('updated_at', now_utc)))
 
                 # Step 8: Recalculate balance chain over live rows inside the same connection
                 from services.balance_service import recalculate_in_connection

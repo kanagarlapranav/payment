@@ -9,7 +9,7 @@ import html
 import threading
 from datetime import datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackQueryHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID, logger, BASE_DIR, DASHBOARD_TOKEN
 from database.db import setup_database
 from telegram.request import HTTPXRequest
@@ -103,6 +103,12 @@ async def on_startup(app):
             grp_id = int(TELEGRAM_GROUP_ID) if TELEGRAM_GROUP_ID else None
             ensure_all_user_workspaces(current_chat_title="Payment", current_chat_id=grp_id)
             logger.info("Ensured all user workspaces and ledger memberships on startup.")
+            from services.backup_service import export_database_to_json, backup_to_telegram
+            export_database_to_json()
+            try:
+                await backup_to_telegram(app.bot, timeout=10.0)
+            except Exception as b_err:
+                logger.warning(f"Startup backup sync notice: {b_err}")
         except Exception as e:
             logger.warning(f"ensure_all_user_workspaces startup notice: {e}")
 
@@ -144,11 +150,25 @@ async def on_stop(app):
     except Exception as e:
         logger.warning(f"Shutdown backup notice: {e}")
 
+async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Logs uncaught exceptions and sends a helpful message to the user."""
+    logger.error(f"Global exception while handling update: {context.error}", exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                "⚠️ An unexpected error occurred while processing your request. Please try again or use /workspace to check your active ledger."
+            )
+        except Exception:
+            pass
+
 def build_application():
     """Builds and configures the Telegram Application."""
     setup_database()
     req = HTTPXRequest(read_timeout=60.0, write_timeout=60.0, connect_timeout=30.0, pool_timeout=60.0)
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(req).post_init(on_startup).post_stop(on_stop).build()
+
+    # Register error handler
+    app.add_error_handler(global_error_handler)
 
     # Register PTB JobQueue background jobs (Daily Digest, Backup Retry, Tombstone Purge)
     register_scheduler_jobs(app)
