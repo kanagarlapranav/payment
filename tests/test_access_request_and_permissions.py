@@ -162,3 +162,66 @@ async def test_role_aware_help_hides_admin_and_owner_sections_from_member():
     assert "Owner Controls & Governance" not in help_body
     assert "/gemini" not in help_body
     assert "/permissions" not in help_body
+
+
+@pytest.mark.anyio
+async def test_owner_can_set_admin_role_for_member_including_nagendra():
+    """Verifies that clicking 'Admin' button in /permissions successfully assigns admin role and updates card."""
+    owner_uid = 8379948573
+    target_uid = 8343764796  # Nagendra
+    group_chat_id = -1009999999999
+
+    ws = get_or_create_workspace(
+        chat_id=group_chat_id,
+        chat_type="supergroup",
+        title="Test Workspace",
+        creator_user_id=owner_uid
+    )
+    add_workspace_member(ws.id, target_uid, username="nagendra", display_name="Nagendra", role="member")
+
+    # 1. Verify initial card shows Member
+    card_text, markup = cmd_module.render_user_permission_card(target_uid)
+    assert "MEMBER" in card_text
+    # Find Admin button callback
+    admin_btn = None
+    for row in markup.inline_keyboard:
+        for btn in row:
+            if "Admin" in btn.text:
+                admin_btn = btn
+    assert admin_btn is not None
+    assert admin_btn.callback_data == f"perm_set:{target_uid}:admin"
+
+    # 2. Simulate owner clicking 'Admin' button
+    update = MagicMock(spec=Update)
+    query = MagicMock(spec=CallbackQuery)
+    query.data = f"perm_set:{target_uid}:admin"
+    query.answer = AsyncMock()
+    query.message = MagicMock()
+    query.message.reply_markup = markup
+    query.edit_message_text = AsyncMock()
+
+    user = MagicMock(spec=User)
+    user.id = owner_uid
+    user.username = "owner"
+    query.from_user = user
+    update.callback_query = query
+    update.effective_user = user
+    update.effective_chat = MagicMock()
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+
+    await handlers_module.handle_callback_query(update, context)
+
+    # Verify query.answer was called with success message
+    query.answer.assert_called()
+    call_args = query.answer.call_args[0]
+    assert len(call_args) > 0 and "ADMIN" in call_args[0]
+
+    # Verify message was updated with ADMIN card
+    query.edit_message_text.assert_called()
+    updated_card = query.edit_message_text.call_args[0][0]
+    assert "ADMIN" in updated_card
+    assert "🛡️" in updated_card
+
+    # Verify member in database is now admin
+    member = get_workspace_member(ws.id, target_uid)
+    assert member.role == "admin"
