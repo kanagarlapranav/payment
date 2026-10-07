@@ -9,6 +9,7 @@ import html
 import threading
 from datetime import datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID, logger, BASE_DIR, DASHBOARD_TOKEN
 from database.db import setup_database

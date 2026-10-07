@@ -165,9 +165,17 @@ def get_workspace_by_chat_id(chat_id: int | str) -> RowDict | None:
     """Fetches a workspace by Telegram chat ID."""
     if chat_id is None:
         return None
+    try:
+        c_int = int(chat_id)
+    except (ValueError, TypeError):
+        c_int = None
+    c_str = str(chat_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM workspaces WHERE chat_id = ? AND is_active = 1", (int(chat_id),))
+        if c_int is not None:
+            cursor.execute("SELECT * FROM workspaces WHERE (chat_id = ? OR chat_id = ?) AND is_active = 1", (c_int, c_str))
+        else:
+            cursor.execute("SELECT * FROM workspaces WHERE chat_id = ? AND is_active = 1", (c_str,))
         row = cursor.fetchone()
         return RowDict(dict(row)) if row else None
 
@@ -712,18 +720,23 @@ def set_user_permission_and_role(telegram_user_id: int, role: str, is_active: bo
                 WHERE telegram_user_id = ?
             """, (clean_role, active_val, now_utc, int(telegram_user_id)))
 
-            if cursor.rowcount == 0 and is_active:
-                cursor.execute("SELECT username, display_name FROM access_requests WHERE telegram_user_id = ?", (int(telegram_user_id),))
-                ar_row = cursor.fetchone()
-                uname = ar_row['username'] if ar_row and ar_row['username'] else ""
-                dname = ar_row['display_name'] if ar_row and ar_row['display_name'] else ""
+            if is_active:
                 def_ws_id = get_default_workspace_id()
                 if def_ws_id:
-                    cursor.execute("""
-                        INSERT OR REPLACE INTO workspace_members 
-                        (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (def_ws_id, int(telegram_user_id), uname, dname, clean_role, active_val, now_utc, now_utc))
+                    cursor.execute(
+                        "SELECT id FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?",
+                        (def_ws_id, int(telegram_user_id))
+                    )
+                    if not cursor.fetchone():
+                        cursor.execute("SELECT username, display_name FROM access_requests WHERE telegram_user_id = ?", (int(telegram_user_id),))
+                        ar_row = cursor.fetchone()
+                        uname = ar_row['username'] if ar_row and ar_row['username'] else ""
+                        dname = ar_row['display_name'] if ar_row and ar_row['display_name'] else ""
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO workspace_members 
+                            (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (def_ws_id, int(telegram_user_id), uname, dname, clean_role, active_val, now_utc, now_utc))
 
             req_status = 'approved' if is_active else 'rejected'
             cursor.execute("""
@@ -922,14 +935,25 @@ def get_transaction_author_id(tx_id: int | str) -> Optional[int]:
         cursor.execute("PRAGMA table_info(transactions)")
         cols = [r[1] for r in cursor.fetchall()]
         if "telegram_user_id" in cols:
-            cursor.execute("SELECT telegram_user_id FROM transactions WHERE id = ?", (tx_id,))
+            cursor.execute("SELECT telegram_user_id, uid FROM transactions WHERE id = ?", (tx_id,))
             row = cursor.fetchone()
-            if row and row['telegram_user_id']:
-                return int(row['telegram_user_id'])
-        cursor.execute("SELECT user_id FROM undo_log WHERE transaction_id = ? AND action_type = 'INSERT' ORDER BY id ASC LIMIT 1", (tx_id,))
-        row = cursor.fetchone()
-        if row and row['user_id']:
-            return int(row['user_id'])
+            if row:
+                if row['telegram_user_id']:
+                    return int(row['telegram_user_id'])
+                t_uid = row['uid']
+                if t_uid:
+                    cursor.execute("SELECT user_id FROM undo_log WHERE uid = ? ORDER BY id ASC LIMIT 1", (t_uid,))
+                    u_row = cursor.fetchone()
+                    if u_row and u_row['user_id']:
+                        return int(u_row['user_id'])
+        else:
+            cursor.execute("SELECT uid FROM transactions WHERE id = ?", (tx_id,))
+            row = cursor.fetchone()
+            if row and row['uid']:
+                cursor.execute("SELECT user_id FROM undo_log WHERE uid = ? ORDER BY id ASC LIMIT 1", (row['uid'],))
+                u_row = cursor.fetchone()
+                if u_row and u_row['user_id']:
+                    return int(u_row['user_id'])
     return None
 
 def can_user_modify_transaction(tx_id: int | str, user_id: int, user_role: str) -> bool:

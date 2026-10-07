@@ -359,7 +359,7 @@ MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles incoming images with Gemini Vision AI first, RapidOCR + Heuristic Parser fallback."""
-    if not (await require_admin(update) or await require_member(update)): return
+    if not (await require_admin(update, silent=True) or await require_member(update)): return
     
     message = update.message
     chat_id = str(message.chat_id)
@@ -2868,7 +2868,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'waiting_quick_text', 'waiting_cafe_custom_amount'
         }
         if pending_action in member_actions:
-            if not (await require_admin(update) or await require_member(update)):
+            if not await require_member(update):
                 return
         else:
             if not await require_admin(update):
@@ -3331,7 +3331,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check short text entry: e.g. "120 dosa", "+500 salary", "-45 tea", "coffee 15"
     short_parsed = parse_short_entry(text)
     if short_parsed:
-        if not (await require_admin(update) or await require_member(update)):
+        if not await require_member(update):
             return
         amt, tx_type, name = short_parsed
         from database.models import Transaction
@@ -3388,7 +3388,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         transaction, confidence = process_transaction(text, "", message_id, chat_id)
         if transaction.amount and transaction.amount > 0 and transaction.transaction_type:
-            if not (await require_admin(update) or await require_member(update)):
+            if not await require_member(update):
                 return
             if ws_id:
                 transaction.workspace_id = ws_id
