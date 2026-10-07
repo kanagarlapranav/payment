@@ -1709,8 +1709,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             return
         target_uid = int(parts[1])
         setting = parts[2].lower() if len(parts) > 2 else "member"
-        if target_uid == 8343764796 and setting in ('owner', 'admin'):
-            await query.answer("⛔ Nagendra is restricted to member only.", show_alert=True)
+        import config
+        owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+        if owner_id and target_uid == int(owner_id) and setting in ('viewer', 'revoke'):
+            await query.answer("⛔ The workspace owner's access cannot be revoked.", show_alert=True)
+            return
+        if setting == 'owner' and owner_id and target_uid != int(owner_id):
+            await query.answer("⛔ Only the primary bot owner can hold the owner role.", show_alert=True)
             return
         from database.queries import set_user_permission_and_role
         if setting == "revoke":

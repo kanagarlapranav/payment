@@ -330,16 +330,18 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                     else:
                         cursor.execute("UPDATE workspace_members SET role = 'owner', is_active = 1 WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, owner_id))
 
-                # Ensure Nagendra is in the group workspace as a member
-                cursor.execute("SELECT id FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, 8343764796))
-                if not cursor.fetchone():
+                # Ensure Nagendra is in the group workspace
+                cursor.execute("SELECT id, role FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, 8343764796))
+                nag_row = cursor.fetchone()
+                if not nag_row:
                     cursor.execute("""
                         INSERT OR REPLACE INTO workspace_members 
                         (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
                         VALUES (?, ?, 'nagendra', 'Nagendra', 'member', 1, ?, ?)
                     """, (grp_id, 8343764796, now_utc, now_utc))
                 else:
-                    cursor.execute("UPDATE workspace_members SET role = 'member', is_active = 1 WHERE workspace_id = ? AND telegram_user_id = 8343764796", (grp_id,))
+                    if nag_row['role'] == 'owner':
+                        cursor.execute("UPDATE workspace_members SET role = 'member', is_active = 1 WHERE workspace_id = ? AND telegram_user_id = 8343764796", (grp_id,))
 
             # 2. Collect all known user IDs with their best display names / usernames
             known_users: dict[int, tuple[str, str]] = {}
@@ -442,8 +444,8 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                     cursor.execute("DELETE FROM workspaces WHERE id = ?", (p_id,))
                 cursor.execute("DELETE FROM workspace_settings WHERE key = ?", (f"user_active_ws:{owner_id}",))
 
-            # 5. Enforce Nagendra (8343764796) is strictly a member across all workspaces
-            cursor.execute("UPDATE workspace_members SET role = 'member' WHERE telegram_user_id = 8343764796")
+            # 5. Enforce Nagendra (8343764796) is never owner across all workspaces
+            cursor.execute("UPDATE workspace_members SET role = 'member' WHERE telegram_user_id = 8343764796 AND role = 'owner'")
 
             # 6. Recalculate balance for default workspace
             from services.balance_service import recalculate_in_connection
@@ -508,7 +510,7 @@ def add_workspace_member(
     """
     valid_roles = {'owner', 'admin', 'member', 'viewer'}
     clean_role = role.lower() if role and role.lower() in valid_roles else 'member'
-    if int(telegram_user_id) == 8343764796 and clean_role in ('owner', 'admin'):
+    if int(telegram_user_id) == 8343764796 and clean_role == 'owner':
         clean_role = 'member'
     now_utc = utc_now_iso()
     with LEDGER_LOCK:
@@ -541,8 +543,8 @@ def update_workspace_member_role(workspace_id: str, telegram_user_id: int, new_r
     valid_roles = {'owner', 'admin', 'member', 'viewer'}
     if not new_role or new_role.lower() not in valid_roles:
         raise ValueError(f"Invalid role: {new_role}. Allowed: {sorted(valid_roles)}")
-    if int(telegram_user_id) == 8343764796 and new_role.lower() in ('owner', 'admin'):
-        raise ValueError("Nagendra is restricted to member only and cannot be assigned admin or owner role.")
+    if int(telegram_user_id) == 8343764796 and new_role.lower() == 'owner':
+        raise ValueError("Nagendra cannot be assigned the owner role.")
     now_utc = utc_now_iso()
     with LEDGER_LOCK:
         with get_db_connection() as conn:

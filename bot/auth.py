@@ -176,9 +176,6 @@ class RequestContext:
 
     def has_role(self, required_role: str) -> bool:
         """Evaluates whether caller meets or exceeds the required role level."""
-        # Nagendra (8343764796) is strictly a member only, never admin or owner
-        if self.user_id == 8343764796 and required_role in ('owner', 'admin'):
-            return False
         caller_level = WORKSPACE_ROLE_HIERARCHY.get(self.role, 0)
         req_level = WORKSPACE_ROLE_HIERARCHY.get(required_role, 2)
         return caller_level >= req_level
@@ -391,7 +388,7 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
                 member = get_workspace_member(switched_ws.id, user_id)
                 if is_super_admin(user_id) or is_global_owner or member:
                     caller_role = 'owner' if (is_super_admin(user_id) or is_global_owner) else (member.role if member else 'member')
-                    if user_id == 8343764796:
+                    if user_id == 8343764796 and caller_role == 'owner':
                         caller_role = 'member'
                     return RequestContext(
                         workspace_id=switched_ws.id,
@@ -478,7 +475,7 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
                 if owner_id is not None and user_id == int(owner_id):
                     caller_role = 'owner'
 
-        if user_id == 8343764796:
+        if user_id == 8343764796 and caller_role == 'owner':
             caller_role = 'member'
 
 
@@ -762,10 +759,7 @@ async def require_admin(update: Update, silent: bool = False) -> bool:
 
     chat_id = get_effective_chat_id(update)
     user_id = get_effective_user_id(update)
-    if user_id == 8343764796:
-        # Nagendra is strictly member-only
-        pass
-    elif user_id is not None:
+    if user_id is not None:
         from database.queries import get_workspace_by_chat_id, get_workspace_member
         ws_id = get_user_active_workspace(user_id)
         if not ws_id and chat_id is not None:

@@ -2170,8 +2170,8 @@ async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Member '{target_identifier}' not found in this workspace.")
         return
 
-    if target_uid == 8343764796 and new_role in ('owner', 'admin'):
-        await update.message.reply_text("⛔ Nagendra cannot be assigned admin or owner role. He is restricted to member only.")
+    if target_uid == 8343764796 and new_role == 'owner':
+        await update.message.reply_text("⛔ Nagendra cannot be assigned the owner role.")
         return
 
     try:

@@ -212,10 +212,10 @@ def test_owner_uses_payment_group_workspace_directly():
 
 
 def test_nagendra_is_strictly_member_and_cannot_be_owner():
-    """Verifies that Nagendra is restricted to member only across all contexts."""
+    """Verifies that Nagendra cannot be owner, but can be promoted to admin by owner."""
     from bot.auth import is_owner
     from database.queries import (
-        update_workspace_member_role,
+        update_workspace_member_role, get_workspace_member,
         add_workspace_member, get_default_workspace_id
     )
 
@@ -226,14 +226,17 @@ def test_nagendra_is_strictly_member_and_cannot_be_owner():
     up = make_mock_update(user_id=nagendra_id, chat_id=-1004310685141, chat_type="supergroup")
     assert not is_owner(up, workspace_id=ws_id)
 
-    # In database queries
-    with pytest.raises(ValueError, match="Nagendra is restricted to member only"):
-        update_workspace_member_role(ws_id, nagendra_id, "admin")
+    # In database queries: admin role is allowed
+    success = update_workspace_member_role(ws_id, nagendra_id, "admin")
+    assert success is True
+    m = get_workspace_member(ws_id, nagendra_id)
+    assert m.role == 'admin'
 
-    with pytest.raises(ValueError, match="Nagendra is restricted to member only"):
+    # Owner role is rejected
+    with pytest.raises(ValueError, match="Nagendra cannot be assigned the owner role"):
         update_workspace_member_role(ws_id, nagendra_id, "owner")
 
-    # Add member caps at member
+    # Add member caps at member if role='owner' attempted
     m = add_workspace_member(ws_id, nagendra_id, role="owner")
     assert m.role == 'member'
 

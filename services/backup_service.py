@@ -855,7 +855,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                     """, (w.get('id'), w.get('chat_id'), w.get('chat_type', 'group'), w.get('title', 'Workspace'), w.get('is_active', 1), w.get('created_at', now_utc), w.get('updated_at', now_utc)))
 
                 for m in data_dict.get("workspace_members", []):
-                    m_role = 'member' if int(m.get('telegram_user_id', 0)) == 8343764796 else m.get('role', 'member')
+                    m_role = 'member' if (int(m.get('telegram_user_id', 0)) == 8343764796 and m.get('role') == 'owner') else m.get('role', 'member')
                     cursor.execute("""
                         INSERT OR REPLACE INTO workspace_members (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
