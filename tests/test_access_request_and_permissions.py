@@ -225,3 +225,39 @@ async def test_owner_can_set_admin_role_for_member_including_nagendra():
     # Verify member in database is now admin
     member = get_workspace_member(ws.id, target_uid)
     assert member.role == "admin"
+
+
+@pytest.mark.anyio
+async def test_admin_role_precedence_over_member_in_permissions_card():
+    """Verifies that a user having admin role in one workspace is displayed as ADMIN in permissions, not masked by alphabetical member."""
+    target_uid = 777111222
+    ws1 = get_or_create_workspace(chat_id="11111", chat_type="group", title="WS1", creator_user_id=8379948573)
+    ws2 = get_or_create_workspace(chat_id="22222", chat_type="group", title="WS2", creator_user_id=8379948573)
+
+    add_workspace_member(ws1.id, target_uid, username="test_user", role="member")
+    add_workspace_member(ws2.id, target_uid, username="test_user", role="admin")
+
+    users = get_all_users_for_permissions()
+    target_user = next((u for u in users if u['telegram_user_id'] == target_uid), None)
+    assert target_user is not None
+    assert target_user['role'] == "admin"
+
+    card_text, markup = cmd_module.render_user_permission_card(target_uid)
+    assert "ADMIN" in card_text
+
+
+@pytest.mark.anyio
+async def test_is_owner_always_true_for_global_owner_in_private_dm():
+    """Verifies that global bot owner (TELEGRAM_USER_ID) is recognized as owner even in private DM with no personal workspace."""
+    owner_id = 8379948573
+    update = MagicMock(spec=Update)
+    user = MagicMock(spec=User)
+    user.id = owner_id
+    chat = MagicMock(spec=Chat)
+    chat.id = owner_id
+    chat.type = "private"
+    update.effective_user = user
+    update.effective_chat = chat
+    update.callback_query = None
+
+    assert is_owner(update) is True

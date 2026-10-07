@@ -232,23 +232,24 @@ def is_owner(update: Update, workspace_id: Optional[str] = None) -> bool:
     if is_super_admin(user_id):
         return True
 
-    # Legacy mode gate
-    if getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False) or getattr(config, 'WORKSPACE_MIGRATION_COMPATIBILITY', False):
-        owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
-        if owner_id is not None:
-            try:
-                return user_id == int(owner_id)
-            except (ValueError, TypeError):
-                return False
-        return False
+    # Global bot owner (configured via TELEGRAM_USER_ID) always has owner privileges
+    owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+    if owner_id is not None:
+        try:
+            if int(user_id) == int(owner_id):
+                return True
+        except (ValueError, TypeError):
+            pass
 
-    from database.queries import get_workspace_member, get_workspace_by_chat_id
+    from database.queries import get_workspace_member, get_workspace_by_chat_id, get_default_workspace_id
     chat_id = get_effective_chat_id(update)
     ws_id = workspace_id or get_user_active_workspace(user_id)
     if not ws_id and chat_id is not None:
         ws = get_workspace_by_chat_id(chat_id)
         if ws:
             ws_id = ws.id
+        else:
+            ws_id = get_default_workspace_id()
     if ws_id:
         member = get_workspace_member(ws_id, user_id)
         if member and member.role == 'owner' and member.is_active and getattr(member, 'status', 'active') == 'active':
