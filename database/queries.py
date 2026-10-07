@@ -231,9 +231,22 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
             now_utc = utc_now_iso()
             cursor.execute("SELECT id, chat_id, title FROM workspaces WHERE (chat_type IN ('group', 'supergroup') OR chat_id < 0) AND is_active = 1")
             group_workspaces_list = cursor.fetchall()
+            if not group_workspaces_list and current_chat_id is not None and int(current_chat_id) < 0:
+                new_grp_id = str(uuid.uuid4())
+                c_title = (current_chat_title or "Payment").strip()
+                if not c_title.endswith("(Group)"):
+                    c_title = f"{c_title} (Group)"
+                cursor.execute("""
+                    INSERT INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
+                    VALUES (?, ?, 'supergroup', ?, 1, ?, ?)
+                """, (new_grp_id, int(current_chat_id), c_title, now_utc, now_utc))
+                group_workspaces_list = [{'id': new_grp_id, 'chat_id': int(current_chat_id), 'title': c_title}]
+
             for g_row in group_workspaces_list:
                 grp_id = g_row['id']
                 grp_chat_id = g_row['chat_id']
+                if current_chat_id is not None and int(current_chat_id) < 0 and grp_chat_id == int(current_chat_id):
+                    cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('default_workspace_id', ?, ?)", (grp_id, now_utc))
                 if current_chat_id is not None and current_chat_title and grp_chat_id == int(current_chat_id):
                     clean_title = current_chat_title.strip()
                     if not clean_title.endswith("(Group)"):
@@ -309,13 +322,16 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                     pass
 
             # 3. For every known user, ensure a DM personal workspace exists (chat_id = uid, chat_type = 'dm')
+            # NOTE: Owner (Pranav) explicitly uses Payment (Group) only - skip personal workspace creation for owner.
             for uid, (dname, uname) in known_users.items():
-                if uid <= 0:
-                    continue  # groups have negative chat_ids
+                if uid <= 0 or (owner_id and uid == owner_id):
+                    continue  # groups have negative chat_ids; owner only uses Payment (Group)
+
                 cursor.execute("SELECT id, title FROM workspaces WHERE chat_id = ? AND is_active = 1", (uid,))
                 ws_row = cursor.fetchone()
-                clean_name = dname if dname and not dname.startswith("User ") else ("Pranav" if uid == owner_id else ("Nagendra" if uid == 8343764796 else (uname or f"User {uid}")))
+                clean_name = "Nagendra" if uid == 8343764796 else (dname if dname and not dname.startswith("User ") else (uname or f"User {uid}"))
                 ws_title = f"{clean_name} (Personal)"
+                user_role = 'member' if uid == 8343764796 else 'member'
 
                 if not ws_row:
                     ws_id = str(uuid.uuid4())
@@ -326,8 +342,8 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                     cursor.execute("""
                         INSERT OR REPLACE INTO workspace_members 
                         (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
-                        VALUES (?, ?, ?, ?, 'owner', 1, ?, ?)
-                    """, (ws_id, uid, uname, clean_name, now_utc, now_utc))
+                        VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                    """, (ws_id, uid, uname, clean_name, user_role, now_utc, now_utc))
                     if owner_id and owner_id != uid:
                         cursor.execute("""
                             INSERT OR REPLACE INTO workspace_members 
@@ -350,48 +366,19 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                                 VALUES (?, ?, 'owner', 'Owner', 'owner', 1, ?, ?)
                             """, (ws_row['id'], owner_id, now_utc, now_utc))
 
-            # 4. If owner personal workspace has 0 transactions, backfill historical transactions into it
+            # 4. Clean up any personal workspace for owner (Pranav) - user requested Payment (Group) only
             if owner_id:
-                cursor.execute("SELECT id FROM workspaces WHERE chat_id = ? AND is_active = 1", (owner_id,))
-                owner_ws_row = cursor.fetchone()
-                if owner_ws_row:
-                    owner_ws_id = owner_ws_row['id']
-                    cursor.execute("SELECT COUNT(*) FROM transactions WHERE workspace_id = ? AND deleted_at IS NULL", (owner_ws_id,))
-                    owner_tx_count = cursor.fetchone()[0]
-                    if owner_tx_count == 0:
-                        default_ws_id = get_default_workspace_id()
-                        if default_ws_id and default_ws_id != owner_ws_id:
-                            cursor.execute("""
-                                SELECT * FROM transactions 
-                                WHERE (workspace_id = ? OR workspace_id IS NULL)
-                                  AND (telegram_user_id IS NULL OR telegram_user_id = ?)
-                                  AND deleted_at IS NULL
-                                ORDER BY occurred_at ASC, id ASC
-                            """, (default_ws_id, owner_id))
-                            legacy_rows = cursor.fetchall()
-                            if legacy_rows:
-                                from services.balance_service import recalculate_in_connection
-                                for tx in legacy_rows:
-                                    new_uid = uuid.uuid4().hex
-                                    cursor.execute("""
-                                        INSERT INTO transactions (
-                                            transaction_type, amount, person_name, sender_name, recipient_name,
-                                            upi_id, phone_number, transaction_date, transaction_time, reference_number,
-                                            transaction_id, payment_app, bank_name, bank_account, payment_status,
-                                            category, balance_before, balance_after, ocr_text, original_image_path,
-                                            telegram_message_id, telegram_chat_id, uid, workspace_id, occurred_at,
-                                            deleted_at, created_at, updated_at, telegram_user_id
-                                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
-                                    """, (
-                                        tx['transaction_type'], tx['amount'], tx['person_name'], tx['sender_name'], tx['recipient_name'],
-                                        tx['upi_id'], tx['phone_number'], tx['transaction_date'], tx['transaction_time'], tx['reference_number'],
-                                        tx['transaction_id'], tx['payment_app'], tx['bank_name'], tx['bank_account'], tx['payment_status'],
-                                        tx['category'], tx['balance_before'], tx['balance_after'], tx['ocr_text'], tx['original_image_path'],
-                                        tx['telegram_message_id'], str(owner_id), new_uid, owner_ws_id, tx['occurred_at'],
-                                        tx['created_at'], now_utc, owner_id
-                                    ))
-                                recalculate_in_connection(conn, workspace_id=owner_ws_id)
-                                logger.info(f"Auto-backfilled {len(legacy_rows)} historical transactions into owner personal workspace {owner_ws_id}")
+                cursor.execute("SELECT id FROM workspaces WHERE chat_id = ?", (owner_id,))
+                owner_personal_rows = cursor.fetchall()
+                for op_row in owner_personal_rows:
+                    op_id = op_row['id']
+                    cursor.execute("DELETE FROM transactions WHERE workspace_id = ?", (op_id,))
+                    cursor.execute("DELETE FROM workspace_members WHERE workspace_id = ?", (op_id,))
+                    cursor.execute("DELETE FROM workspaces WHERE id = ?", (op_id,))
+                cursor.execute("DELETE FROM workspace_settings WHERE key = ?", (f"user_active_ws:{owner_id}",))
+
+            # 5. Enforce Nagendra (8343764796) is strictly a member across all workspaces
+            cursor.execute("UPDATE workspace_members SET role = 'member' WHERE telegram_user_id = 8343764796")
 
             conn.commit()
 
@@ -449,6 +436,8 @@ def add_workspace_member(
     """
     valid_roles = {'owner', 'admin', 'member', 'viewer'}
     clean_role = role.lower() if role and role.lower() in valid_roles else 'member'
+    if int(telegram_user_id) == 8343764796 and clean_role in ('owner', 'admin'):
+        clean_role = 'member'
     now_utc = utc_now_iso()
     with LEDGER_LOCK:
         with get_db_connection() as conn:
@@ -480,6 +469,8 @@ def update_workspace_member_role(workspace_id: str, telegram_user_id: int, new_r
     valid_roles = {'owner', 'admin', 'member', 'viewer'}
     if not new_role or new_role.lower() not in valid_roles:
         raise ValueError(f"Invalid role: {new_role}. Allowed: {sorted(valid_roles)}")
+    if int(telegram_user_id) == 8343764796 and new_role.lower() in ('owner', 'admin'):
+        raise ValueError("Nagendra is restricted to member only and cannot be assigned admin or owner role.")
     now_utc = utc_now_iso()
     with LEDGER_LOCK:
         with get_db_connection() as conn:
@@ -489,6 +480,22 @@ def update_workspace_member_role(workspace_id: str, telegram_user_id: int, new_r
                 SET role = ?, updated_at = ? 
                 WHERE workspace_id = ? AND telegram_user_id = ? AND is_active = 1
             """, (new_role.lower(), now_utc, str(workspace_id), int(telegram_user_id)))
+            conn.commit()
+            return cursor.rowcount > 0
+
+def remove_workspace_member(workspace_id: str, telegram_user_id: int | str) -> bool:
+    """Removes a user from a workspace and clears any active workspace override."""
+    if not workspace_id or not telegram_user_id:
+        return False
+    uid = int(telegram_user_id)
+    with LEDGER_LOCK:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM workspace_settings WHERE key = ?", (f"user_active_ws:{uid}",))
+            cursor.execute(
+                "DELETE FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?",
+                (str(workspace_id), uid)
+            )
             conn.commit()
             return cursor.rowcount > 0
 

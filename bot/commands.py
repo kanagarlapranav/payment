@@ -1926,6 +1926,14 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
             seen.add(w.id)
             unique_workspaces.append(w)
 
+    import config
+    owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+    owner_int = int(owner_id) if owner_id else None
+    unique_workspaces = [
+        w for w in unique_workspaces
+        if not (owner_int and w.chat_id == owner_int) and not (w.title and w.title.startswith('Pranav (Personal)'))
+    ]
+
     group_workspaces = [w for w in unique_workspaces if w.chat_type != 'dm']
     dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm']
 
@@ -2101,13 +2109,20 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     lines.append(f"<i>Total: {len(members)} active members</i>")
-    await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    from bot.auth import is_owner
+    markup = None
+    if ctx.role in ('owner', 'admin') or is_owner(update):
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚙️ Manage / Remove Members", callback_data="perm_list")]
+        ])
+    await update.message.reply_text("\n".join(lines), reply_markup=markup, parse_mode='HTML')
 
 
 async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sets a workspace member's role (Owner only). Usage: /setrole <user_id_or_@username> <role>"""
     if not await require_admin(update): return
-    from bot.auth import get_workspace_context
+    from bot.auth import get_workspace_context, is_owner
     from database.queries import get_all_workspace_members, update_workspace_member_role
     ctx = get_workspace_context(update)
     if not ctx:
@@ -2154,7 +2169,16 @@ async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Member '{target_identifier}' not found in this workspace.")
         return
 
-    success = update_workspace_member_role(ctx.workspace_id, target_uid, new_role)
+    if target_uid == 8343764796 and new_role in ('owner', 'admin'):
+        await update.message.reply_text("⛔ Nagendra cannot be assigned admin or owner role. He is restricted to member only.")
+        return
+
+    try:
+        success = update_workspace_member_role(ctx.workspace_id, target_uid, new_role)
+    except ValueError as val_err:
+        await update.message.reply_text(f"❌ {val_err}")
+        return
+
     if success:
         target_display = f"@{target_member.username}" if target_member.username else (target_member.display_name or str(target_uid))
         await update.message.reply_text(
@@ -2163,6 +2187,69 @@ async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await update.message.reply_text("❌ Failed to update member role.")
+
+
+async def removemember_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Removes a member from the current workspace (Admin/Owner only). Usage: /removemember <user_id_or_@username>"""
+    from bot.auth import require_admin, get_workspace_context, is_owner
+    from database.queries import get_all_workspace_members, remove_workspace_member
+    import config
+
+    if not await require_admin(update): return
+    ctx = get_workspace_context(update)
+    if not ctx:
+        await update.message.reply_text("❌ Current workspace context could not be determined.")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "<b>Usage:</b> <code>/removemember &lt;user_id or @username&gt;</code>\n\n"
+            "<i>Example:</i> <code>/removemember @username</code> or <code>/removemember 123456789</code>",
+            parse_mode='HTML'
+        )
+        return
+
+    target_identifier = context.args[0].strip()
+    members = get_all_workspace_members(ctx.workspace_id)
+    target_member = None
+    target_uid = None
+
+    if target_identifier.lstrip('-').isdigit():
+        target_uid = int(target_identifier)
+        for m in members:
+            if m.telegram_user_id == target_uid:
+                target_member = m
+                break
+    else:
+        uname = target_identifier.lstrip('@').lower()
+        for m in members:
+            if m.username and m.username.lower() == uname:
+                target_member = m
+                target_uid = m.telegram_user_id
+                break
+
+    if not target_uid:
+        await update.message.reply_text(f"❌ User '{target_identifier}' not found in this workspace.")
+        return
+
+    owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+    if owner_id and target_uid == int(owner_id):
+        await update.message.reply_text("⛔ You cannot remove the workspace owner.")
+        return
+
+    if target_member and target_member.role == 'owner' and not is_owner(update):
+        await update.message.reply_text("⛔ Only an owner can remove another owner.")
+        return
+
+    success = remove_workspace_member(ctx.workspace_id, target_uid)
+    if success:
+        target_display = f"@{target_member.username}" if (target_member and target_member.username) else ((target_member.display_name if target_member else None) or str(target_uid))
+        await update.message.reply_text(
+            f"✅ <b>{html.escape(target_display)}</b> (<code>{target_uid}</code>) was removed from this workspace.",
+            parse_mode='HTML'
+        )
+    else:
+        await update.message.reply_text("❌ Failed to remove member.")
 
 
 def render_permissions_list_payload() -> tuple[str, Any]:
@@ -2237,6 +2324,9 @@ def render_user_permission_card(target_uid: int) -> tuple[str, Any]:
             InlineKeyboardButton(f"{'✅ ' if role == 'viewer' and is_active else ''}👁️ Viewer", callback_data=f"perm_set:{target_uid}:viewer"),
             InlineKeyboardButton("🚫 Revoke / Block" if is_active else "🟢 Re-activate Member", 
                                  callback_data=f"perm_set:{target_uid}:revoke" if is_active else f"perm_set:{target_uid}:member")
+        ],
+        [
+            InlineKeyboardButton("❌ Remove From Workspace", callback_data=f"perm_remove:{target_uid}")
         ],
         [InlineKeyboardButton("⬅️ Back to Users", callback_data="perm_list")]
     ]
