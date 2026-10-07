@@ -270,9 +270,10 @@ def is_authorized_user(update: Update, workspace_id: Optional[str] = None) -> bo
     if is_super_admin(user_id):
         return True
 
+    if is_owner(update, workspace_id=workspace_id):
+        return True
+
     if getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False) or getattr(config, 'WORKSPACE_MIGRATION_COMPATIBILITY', False):
-        if is_owner(update, workspace_id=workspace_id):
-            return True
         group_id = getattr(config, 'TELEGRAM_GROUP_ID', None)
         if group_id is not None:
             try:
@@ -283,7 +284,9 @@ def is_authorized_user(update: Update, workspace_id: Optional[str] = None) -> bo
 
     # Multi-tenant mode: Check membership in current workspace
     from database.queries import get_workspace_by_chat_id, get_workspace_member
-    ws_id = workspace_id or get_user_active_workspace(user_id)
+    chat = getattr(update, 'effective_chat', None)
+    chat_type = getattr(chat, 'type', 'private') if chat else 'private'
+    ws_id = workspace_id or (get_user_active_workspace(user_id) if chat_type == 'private' else None)
     if not ws_id:
         ws = get_workspace_by_chat_id(chat_id)
         if ws:
@@ -718,7 +721,9 @@ async def require_member(update: Update, silent: bool = False) -> bool:
     user_id = get_effective_user_id(update)
     if user_id is not None:
         from database.queries import get_workspace_by_chat_id, get_workspace_member
-        ws_id = get_user_active_workspace(user_id)
+        chat = getattr(update, 'effective_chat', None)
+        chat_type = getattr(chat, 'type', 'private') if chat else 'private'
+        ws_id = get_user_active_workspace(user_id) if chat_type == 'private' else None
         if not ws_id and chat_id is not None:
             ws = get_workspace_by_chat_id(chat_id)
             if ws:
@@ -762,7 +767,9 @@ async def require_admin(update: Update, silent: bool = False) -> bool:
     user_id = get_effective_user_id(update)
     if user_id is not None:
         from database.queries import get_workspace_by_chat_id, get_workspace_member
-        ws_id = get_user_active_workspace(user_id)
+        chat = getattr(update, 'effective_chat', None)
+        chat_type = getattr(chat, 'type', 'private') if chat else 'private'
+        ws_id = get_user_active_workspace(user_id) if chat_type == 'private' else None
         if not ws_id and chat_id is not None:
             ws = get_workspace_by_chat_id(chat_id)
             if ws:
