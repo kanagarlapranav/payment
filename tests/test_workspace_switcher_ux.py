@@ -25,6 +25,13 @@ from bot.handlers import handle_callback_query
 @pytest.fixture(autouse=True)
 def init_db():
     setup_database()
+    from bot.auth import _USER_ACTIVE_WORKSPACES
+    _USER_ACTIVE_WORKSPACES.clear()
+    from database.db import get_db_connection
+    with get_db_connection() as conn:
+        conn.execute("DELETE FROM workspace_settings WHERE key LIKE 'user_active_ws:%'")
+        conn.execute("DELETE FROM settings WHERE key LIKE 'user_active_ws:%'")
+        conn.commit()
 
 
 def make_mock_update(user_id: int, chat_id: int, chat_type: str = "supergroup", text: str = "", chat_title: str = "Payment"):
@@ -81,9 +88,10 @@ def test_auto_provisioning_and_friend_workspace_discovery():
     # Verify group workspace renamed cleanly to Payment (Group)
     assert any("Payment (Group)" in t for t in titles)
 
-    # Verify Pranav (Personal) and Nagendra (Personal) exist
-    assert any("Pranav (Personal)" in t for t in titles)
+    # Verify Nagendra (Personal) exists and Nagendra is strictly member
     assert any("Nagendra (Personal)" in t for t in titles)
+    # Verify Pranav personal workspace was skipped/removed per user requirement
+    assert not any("Pranav (Personal)" in t for t in titles)
 
 
 def test_group_chat_workspace_switching_and_reset():
@@ -137,7 +145,7 @@ def test_workspaces_ui_rendering_no_raw_uuids():
         assert "Personal Ledgers:" in text
         assert "Payment (Group)" in text
         assert "Nagendra (Personal)" in text
-        assert "Pranav (Personal)" in text
+        assert "Pranav (Personal)" not in text
 
         # Verify no 36-character UUID strings in user-facing text
         import re
@@ -178,39 +186,101 @@ def test_custom_workspace_creation():
     asyncio.run(_test())
 
 
-def test_owner_historical_transactions_auto_backfill_to_personal_workspace():
-    """Verifies that owner's personal workspace inherits historical group transactions so it is not empty."""
+def test_owner_uses_payment_group_workspace_directly():
+    """Verifies that owner does not create a personal duplicate workspace and uses Payment (Group) directly in private DMs."""
     from database.queries import (
-        get_default_workspace_id, get_transactions_paginated,
-        get_workspace_by_chat_id, get_balance_setting
+        get_default_workspace_id, get_workspace_by_chat_id, remove_workspace_member,
+        get_all_workspace_members, update_workspace_member_role
     )
-    from database.db import get_db_connection
-    from utils.dates import utc_now_iso
-    import uuid
+    from bot.commands import removemember_command
 
     owner_id = 8379948573
-    default_ws_id = get_default_workspace_id()
-
-    # Insert a dummy transaction into default workspace
-    now_utc = utc_now_iso()
-    with get_db_connection() as conn:
-        conn.execute("""
-            INSERT INTO transactions (
-                transaction_type, amount, person_name, transaction_date,
-                category, balance_before, balance_after, uid, workspace_id, occurred_at, created_at, updated_at
-            ) VALUES ('SENT', 500.0, 'Sai Akhil', '2026-10-01', 'General', 2000.0, 1500.0, ?, ?, ?, ?, ?)
-        """, (uuid.uuid4().hex, default_ws_id, now_utc, now_utc, now_utc))
-        conn.commit()
 
     with patch("config.TELEGRAM_USER_ID", owner_id):
         ensure_all_user_workspaces(current_chat_title="Payment", current_chat_id=-1004310685141)
 
-    owner_ws = get_workspace_by_chat_id(owner_id)
-    assert owner_ws is not None
-    assert owner_ws.id != default_ws_id
+    default_ws_id = get_default_workspace_id()
 
-    # Verify transactions in owner personal workspace
-    tx_data = get_transactions_paginated(workspace_id=owner_ws.id)
-    assert tx_data['total_count'] >= 1
-    assert any(t['person_name'] == 'Sai Akhil' for t in tx_data['transactions'])
+    # Verify no personal workspace exists for owner
+    owner_ws = get_workspace_by_chat_id(owner_id)
+    assert owner_ws is None
+
+    # Verify DM context for owner routes directly to group workspace
+    up_dm = make_mock_update(user_id=owner_id, chat_id=owner_id, chat_type="private")
+    with patch("config.TELEGRAM_USER_ID", owner_id):
+        ctx = get_workspace_context(up_dm)
+        assert ctx.workspace_id == default_ws_id
+        assert ctx.role == 'owner'
+
+
+def test_nagendra_is_strictly_member_and_cannot_be_owner():
+    """Verifies that Nagendra is restricted to member only across all contexts."""
+    from bot.auth import is_owner
+    from database.queries import (
+        get_workspace_member, update_workspace_member_role,
+        add_workspace_member, get_default_workspace_id
+    )
+
+    nagendra_id = 8343764796
+    ws_id = get_default_workspace_id()
+
+    # In auth check
+    up = make_mock_update(user_id=nagendra_id, chat_id=-1004310685141, chat_type="supergroup")
+    assert not is_owner(up, workspace_id=ws_id)
+
+    # In database queries
+    with pytest.raises(ValueError, match="Nagendra is restricted to member only"):
+        update_workspace_member_role(ws_id, nagendra_id, "admin")
+
+    with pytest.raises(ValueError, match="Nagendra is restricted to member only"):
+        update_workspace_member_role(ws_id, nagendra_id, "owner")
+
+    # Add member caps at member
+    m = add_workspace_member(ws_id, nagendra_id, role="owner")
+    assert m.role == 'member'
+
+
+def test_remove_workspace_member():
+    """Verifies that workspace members can be removed via queries and /removemember command."""
+    from database.queries import (
+        add_workspace_member, get_workspace_member,
+        remove_workspace_member, get_default_workspace_id, get_workspace_by_id
+    )
+    from bot.commands import removemember_command
+
+    ws_id = get_default_workspace_id()
+    test_user_id = 999888777
+
+    # Add member
+    add_workspace_member(ws_id, test_user_id, username="testuser", display_name="Test User", role="member")
+    assert get_workspace_member(ws_id, test_user_id) is not None
+
+    # Remove member via query
+    assert remove_workspace_member(ws_id, test_user_id) is True
+    assert get_workspace_member(ws_id, test_user_id) is None
+
+    # Test /removemember command
+    async def _test_cmd():
+        ws = get_workspace_by_id(ws_id)
+        chat_id = ws.chat_id if (ws and ws.chat_id) else -1004310685141
+        from database.db import get_db_connection
+        with get_db_connection() as conn:
+            conn.execute("UPDATE workspaces SET chat_id = ? WHERE id = ?", (chat_id, ws_id))
+            conn.commit()
+
+        owner_id = 8379948573
+        add_workspace_member(ws_id, owner_id, username="pranav", display_name="Pranav", role="owner")
+        add_workspace_member(ws_id, test_user_id, username="testuser", display_name="Test User", role="member")
+        up = make_mock_update(user_id=owner_id, chat_id=chat_id, chat_type="supergroup")
+        ctx_mock = MagicMock()
+        ctx_mock.args = ["999888777"]
+
+        with patch("config.TELEGRAM_USER_ID", owner_id):
+            await removemember_command(up, ctx_mock)
+            assert get_workspace_member(ws_id, test_user_id) is None
+            up.message.reply_text.assert_called()
+            reply = up.message.reply_text.call_args[0][0]
+            assert "removed from this workspace" in reply
+
+    asyncio.run(_test_cmd())
 

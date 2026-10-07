@@ -1706,6 +1706,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             return
         target_uid = int(parts[1])
         setting = parts[2].lower() if len(parts) > 2 else "member"
+        if target_uid == 8343764796 and setting in ('owner', 'admin'):
+            await query.answer("⛔ Nagendra is restricted to member only.", show_alert=True)
+            return
         from database.queries import set_user_permission_and_role
         if setting == "revoke":
             set_user_permission_and_role(target_uid, "viewer", is_active=False)
@@ -1723,6 +1726,54 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.commands import render_user_permission_card
         text, markup = render_user_permission_card(target_uid)
         await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "perm_remove":
+        from bot.auth import is_owner
+        if not is_owner(update):
+            await query.answer("⛔ Only the owner can remove members.", show_alert=True)
+            return
+        target_uid = int(parts[1])
+        import config
+        owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+        if owner_id and target_uid == int(owner_id):
+            await query.answer("⛔ You cannot remove the workspace owner.", show_alert=True)
+            return
+        from database.queries import get_all_users_for_permissions
+        users = get_all_users_for_permissions()
+        target_user = next((u for u in users if u['telegram_user_id'] == target_uid), None)
+        display = (target_user['display_name'] if target_user else None) or f"User {target_uid}"
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        confirm_markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("❌ Yes, Remove", callback_data=f"perm_remove_confirm:{target_uid}"),
+                InlineKeyboardButton("Cancel", callback_data=f"perm_view:{target_uid}")
+            ]
+        ])
+        await safe_edit_callback_message(
+            query,
+            f"⚠️ <b>Confirm Member Removal</b>\n\nAre you sure you want to remove <b>{html.escape(display)}</b> (<code>{target_uid}</code>) from this workspace?\n\nThey will lose access to records in this workspace.",
+            reply_markup=confirm_markup,
+            parse_mode='HTML'
+        )
+        return
+
+    elif action == "perm_remove_confirm":
+        from bot.auth import is_owner
+        if not is_owner(update):
+            await query.answer("⛔ Only the owner can remove members.", show_alert=True)
+            return
+        target_uid = int(parts[1])
+        from database.queries import remove_workspace_member, get_default_workspace_id
+        target_ws_id = ws_id or get_default_workspace_id()
+        success = remove_workspace_member(target_ws_id, target_uid)
+        if success:
+            await query.answer("✅ Member removed from workspace!", show_alert=True)
+            from bot.commands import render_permissions_list_payload
+            text, markup = render_permissions_list_payload()
+            await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        else:
+            await query.answer("❌ Failed to remove member.", show_alert=True)
         return
 
     # --- 2. Quick Undo & Quick Add Actions ---

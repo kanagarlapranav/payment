@@ -81,7 +81,7 @@ ADMIN_CALLBACK_ACTIONS = {
     # AI & Model Controls (Admin Only)
     "refresh_gemini", "set_model",
     # Access Approval & Permissions (Admin/Owner Only)
-    "auth_grant", "auth_deny", "perm_set",
+    "auth_grant", "auth_deny", "perm_set", "perm_remove", "perm_remove_confirm",
     # Receipt Card Actions & Pending Edits
     "save_p", "force_save_p", "edit_p", "ep_field", "ep_back", "cat_p", "set_pcat", "cancel_p",
     # Undo & Quick Add & Duplicate
@@ -142,6 +142,7 @@ CALLBACK_ROLE_POLICY = {
     "cafe_del_item": "admin", "cafe_del_cancel": "admin", "backup_now": "admin",
     "rec_paid": "admin", "rec_skip": "admin", "rec_pause": "admin",
     "rec_resume": "admin", "rec_del": "admin", "close_month": "admin", "set_model": "admin",
+    "perm_remove": "admin", "perm_remove_confirm": "admin",
 
     # Owner only
     "restore_confirm": "owner", "restore_cancel": "owner",
@@ -175,6 +176,9 @@ class RequestContext:
 
     def has_role(self, required_role: str) -> bool:
         """Evaluates whether caller meets or exceeds the required role level."""
+        # Nagendra (8343764796) is strictly a member only, never admin or owner
+        if self.user_id == 8343764796 and required_role in ('owner', 'admin'):
+            return False
         caller_level = WORKSPACE_ROLE_HIERARCHY.get(self.role, 0)
         req_level = WORKSPACE_ROLE_HIERARCHY.get(required_role, 2)
         return caller_level >= req_level
@@ -224,6 +228,9 @@ def is_owner(update: Update, workspace_id: Optional[str] = None) -> bool:
     """
     user_id = get_effective_user_id(update)
     if user_id is None:
+        return False
+    # Nagendra (8343764796) is strictly a member only, never owner
+    if int(user_id) == 8343764796:
         return False
     if is_super_admin(user_id):
         return True
@@ -299,15 +306,24 @@ def get_user_active_workspace(user_id: int) -> Optional[str]:
     """Retrieves the active workspace ID override for a user in private DM."""
     if not user_id:
         return None
+    from database.queries import get_workspace_setting, get_default_workspace_id, get_workspace_by_id
     ws_id = _USER_ACTIVE_WORKSPACES.get(user_id)
     if ws_id:
-        return ws_id
+        # Verify cached workspace still exists in DB
+        if get_workspace_by_id(str(ws_id)):
+            return ws_id
+        _USER_ACTIVE_WORKSPACES.pop(user_id, None)
+
     try:
-        from database.queries import get_workspace_setting, get_default_workspace_id
         val = get_workspace_setting(get_default_workspace_id(), f"user_active_ws:{user_id}")
         if val:
-            _USER_ACTIVE_WORKSPACES[user_id] = str(val)
-            return str(val)
+            if get_workspace_by_id(str(val)):
+                _USER_ACTIVE_WORKSPACES[user_id] = str(val)
+                return str(val)
+            else:
+                # Stale or deleted workspace reference: clean up immediately
+                _USER_ACTIVE_WORKSPACES.pop(user_id, None)
+                set_user_active_workspace(user_id, None)
     except Exception:
         pass
     return None
@@ -355,45 +371,56 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
     from database.queries import (
         get_workspace_by_chat_id, get_or_create_workspace,
         get_workspace_member, add_workspace_member, get_all_workspace_members,
-        get_workspace_setting, get_workspace_by_id
+        get_workspace_setting, get_workspace_by_id, get_default_workspace_id
     )
 
     try:
+        is_global_owner = False
+        owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+        if owner_id is not None:
+            try:
+                is_global_owner = (int(user_id) == int(owner_id))
+            except (ValueError, TypeError):
+                pass
+
         # Check if user has switched active workspace (applies to private DMs and group chats)
         active_ws_id = get_user_active_workspace(user_id)
         if active_ws_id:
-                switched_ws = get_workspace_by_id(active_ws_id)
-                if switched_ws:
-                    is_global_owner = False
-                    owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
-                    if owner_id is not None:
-                        try:
-                            is_global_owner = (user_id == int(owner_id))
-                        except (ValueError, TypeError):
-                            pass
-                    
-                    member = get_workspace_member(switched_ws.id, user_id)
-                    if is_super_admin(user_id) or is_global_owner or member:
-                        caller_role = 'owner' if (is_super_admin(user_id) or is_global_owner) else (member.role if member else 'member')
-                        return RequestContext(
-                            workspace_id=switched_ws.id,
-                            chat_id=chat_id,
-                            chat_type=chat_type,
-                            user_id=user_id,
-                            username=username,
-                            display_name=display_name,
-                            role=caller_role,
-                            workspace=switched_ws,
-                            member=member,
-                            telegram_user_id=user_id
-                        )
+            switched_ws = get_workspace_by_id(active_ws_id)
+            if switched_ws:
+                member = get_workspace_member(switched_ws.id, user_id)
+                if is_super_admin(user_id) or is_global_owner or member:
+                    caller_role = 'owner' if (is_super_admin(user_id) or is_global_owner) else (member.role if member else 'member')
+                    if user_id == 8343764796:
+                        caller_role = 'member'
+                    return RequestContext(
+                        workspace_id=switched_ws.id,
+                        chat_id=chat_id,
+                        chat_type=chat_type,
+                        user_id=user_id,
+                        username=username,
+                        display_name=display_name,
+                        role=caller_role,
+                        workspace=switched_ws,
+                        member=member,
+                        telegram_user_id=user_id
+                    )
 
-        ws = get_workspace_by_chat_id(chat_id)
+        ws = None
+        # User requested: for Pranav (owner), in private DMs, use Payment (Group) directly
+        if chat_type == 'private' and is_global_owner:
+            def_ws_id = get_default_workspace_id()
+            if def_ws_id:
+                ws = get_workspace_by_id(def_ws_id)
+
+        if ws is None:
+            ws = get_workspace_by_chat_id(chat_id)
+
         if ws is None:
             if not is_authorized_user(update):
                 return None
             creator_id = user_id
-            if getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False):
+            if getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False) or is_global_owner:
                 legacy_owner = getattr(config, 'TELEGRAM_USER_ID', None)
                 if legacy_owner:
                     try:
@@ -413,7 +440,7 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
         if member is None:
             if is_super_admin(user_id):
                 caller_role = 'owner'
-            elif getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False):
+            elif getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False) or is_global_owner:
                 owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
                 if owner_id is not None and user_id == int(owner_id):
                     caller_role = 'owner'
@@ -435,9 +462,9 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
                     ws.id, user_id,
                     username=username,
                     display_name=display_name,
-                    role='owner'
+                    role='member' if user_id == 8343764796 else 'owner'
                 )
-                caller_role = 'owner'
+                caller_role = 'member' if user_id == 8343764796 else 'owner'
             else:
                 return None
         else:
@@ -446,10 +473,13 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
             caller_role = member.role
             if is_super_admin(user_id):
                 caller_role = 'owner'
-            elif getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False):
+            elif getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False) or is_global_owner:
                 owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
                 if owner_id is not None and user_id == int(owner_id):
                     caller_role = 'owner'
+
+        if user_id == 8343764796:
+            caller_role = 'member'
 
 
         return RequestContext(
