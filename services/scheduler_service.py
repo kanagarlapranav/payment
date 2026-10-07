@@ -154,10 +154,12 @@ async def send_daily_digest_with_retry(bot, target_chat_id: int | str, target_da
                             "INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at) VALUES (?, 'last_digest_sent_date', ?, ?)",
                             (workspace_id, target_date_str, now_utc)
                         )
-                    conn.execute(
-                        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_digest_sent_date', ?, ?)",
-                        (target_date_str, now_utc)
-                    )
+                    from database.queries import get_default_workspace_id
+                    if not workspace_id or workspace_id == get_default_workspace_id():
+                        conn.execute(
+                            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_digest_sent_date', ?, ?)",
+                            (target_date_str, now_utc)
+                        )
                     conn.commit()
 
             logger.info(f"Successfully delivered daily digest for {target_date_str} to chat {target_chat_id} (workspace={workspace_id}).")

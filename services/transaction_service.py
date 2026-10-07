@@ -112,7 +112,8 @@ def commit_transaction(transaction: Transaction, allow_duplicate: bool = False) 
 
             if allow_duplicate and transaction.reference_number:
                 from database.queries import get_transaction_by_reference
-                if get_transaction_by_reference(transaction.reference_number):
+                ws_id = getattr(transaction, 'workspace_id', None)
+                if get_transaction_by_reference(transaction.reference_number, workspace_id=ws_id):
                     import uuid
                     transaction.reference_number = f"{transaction.reference_number}-dup-{uuid.uuid4().hex[:4]}"
                 
