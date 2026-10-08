@@ -75,6 +75,7 @@ async def on_startup(app):
                         conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('database_initialized', '1', ?)", (now_utc,))
                         conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('backup_blocked', '0', ?)", (now_utc,))
                         conn.commit()
+                export_database_to_json()
             else:
                 # Path 3: Restore failed on empty database -> set backup_blocked=true
                 logger.warning("Startup path taken: [RESTORE FAILED ON EMPTY DB] - No valid cloud or local backup available. Setting backup_blocked=true.")

@@ -244,7 +244,8 @@ def setup_database():
                         price REAL NOT NULL,
                         category TEXT DEFAULT 'Snacks & Tea',
                         is_veg INTEGER DEFAULT 1,
-                        created_at TEXT
+                        created_at TEXT,
+                        UNIQUE(workspace_id, name)
                     )
                 ''')
                 

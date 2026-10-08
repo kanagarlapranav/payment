@@ -955,12 +955,28 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                     for r in cursor.fetchall():
                         if r[0]:
                             touched_workspaces.add(str(r[0]))
-                    touched_workspaces.add(fallback_ws)
+                    # Check updated default_workspace_id from settings or backup
+                    cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
+                    cur_def_row = cursor.fetchone()
+                    active_default_ws = str(cur_def_row['value']) if cur_def_row and cur_def_row['value'] else fallback_ws
+                    if active_default_ws:
+                        touched_workspaces.add(active_default_ws)
 
-                for ws in touched_workspaces:
+                for ws in list(touched_workspaces):
+                    cursor.execute("SELECT 1 FROM workspaces WHERE id = ?", (ws,))
+                    if not cursor.fetchone():
+                        logger.warning(f"Skipping balance recalculation for workspace {ws} (not present in workspaces table).")
+                        continue
                     recalculate_in_connection(conn, workspace_id=ws)
 
-                derived_bal = recalculate_in_connection(conn, workspace_id=target_ws or fallback_ws)
+                effective_ws = target_ws or (active_default_ws if 'active_default_ws' in locals() else fallback_ws)
+                cursor.execute("SELECT 1 FROM workspaces WHERE id = ?", (effective_ws,))
+                if not cursor.fetchone():
+                    cursor.execute("SELECT id FROM workspaces WHERE is_active = 1 LIMIT 1")
+                    first_ws = cursor.fetchone()
+                    effective_ws = first_ws['id'] if first_ws else None
+
+                derived_bal = recalculate_in_connection(conn, workspace_id=effective_ws) if effective_ws else 0.0
 
                 # Step 9: Compare recalculated balance with backup's balance
                 stored_bal = data_dict.get('balance')
