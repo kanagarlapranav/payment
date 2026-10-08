@@ -1304,6 +1304,8 @@ def restore_local_fallback_if_valid() -> bool:
                 if res.get('success'):
                     logger.info(f"Restored database successfully from local backup file: {cand}")
                     return True
+                else:
+                    logger.warning(f"Local backup import from {cand} returned failure: {res.get('error')}")
             except Exception as e:
                 logger.warning(f"Error reading local backup fallback from {cand}: {e}")
     return False
