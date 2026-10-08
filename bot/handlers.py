@@ -62,11 +62,16 @@ def parse_float_arg(parts: list, index: int) -> float | None:
 
 def _prune_pending_transactions():
     now = time.time()
-    cutoff = now - (7 * 86400)
+    cutoff = now - 86400  # 24 hours TTL
     expired_keys = [k for k, t in _pending_transactions_timestamps.items() if t < cutoff]
     for k in expired_keys:
         _pending_transactions_timestamps.pop(k, None)
         pending_transactions.pop(k, None)
+    if len(pending_transactions) > 1000:
+        sorted_keys = sorted(_pending_transactions_timestamps.items(), key=lambda x: x[1])
+        for k, _ in sorted_keys[:len(pending_transactions) - 1000]:
+            _pending_transactions_timestamps.pop(k, None)
+            pending_transactions.pop(k, None)
 
 def set_pending_transaction(pending_id: str, transaction, workspace_id: str = None) -> None:
     """Stores pending transaction in memory and persists to SQLite database with workspace scoping."""
@@ -842,12 +847,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 from services.recurring_service import get_upcoming_recurring
                 from bot.commands import render_recurring_overview_text
                 from bot.keyboards import get_recurring_menu_keyboard
-                upcoming = await asyncio.to_thread(get_upcoming_recurring, 30)
-                text = render_recurring_overview_text()
+                upcoming = await asyncio.to_thread(get_upcoming_recurring, 30, workspace_id=ws_id)
+                text = render_recurring_overview_text(workspace_id=ws_id)
                 await query.edit_message_text(text, reply_markup=get_recurring_menu_keyboard(upcoming_items=upcoming), parse_mode='HTML')
             elif nav_target == "rec_all":
                 from bot.commands import render_all_recurring_text
-                text = render_all_recurring_text()
+                text = render_all_recurring_text(workspace_id=ws_id)
                 await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
             elif nav_target == "rec_add":
                 context.user_data['action'] = 'waiting_rec_add'
@@ -871,12 +876,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 from bot.commands import render_monthly_closing_summary_text
                 from bot.keyboards import get_monthly_closing_keyboard
                 from services.monthly_review_service import get_monthly_review
-                rev = await asyncio.to_thread(get_monthly_review, y, m)
-                text = await asyncio.to_thread(render_monthly_closing_summary_text, y, m)
+                rev = await asyncio.to_thread(get_monthly_review, y, m, workspace_id=ws_id)
+                text = await asyncio.to_thread(render_monthly_closing_summary_text, y, m, workspace_id=ws_id)
                 await query.edit_message_text(text, reply_markup=get_monthly_closing_keyboard(y, m, is_closed=bool(rev)), parse_mode='HTML')
             elif nav_target == "stats":
                 now_dt = get_current_time_in_tz()
-                stats = get_monthly_summary(now_dt.year, now_dt.month)
+                stats = get_monthly_summary(now_dt.year, now_dt.month, workspace_id=ws_id)
                 from datetime import date
                 month_name = date(now_dt.year, now_dt.month, 1).strftime("%B %Y")
                 top_p_text = "N/A"
@@ -895,23 +900,23 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             elif nav_target == "budget":
                 from services.budget_service import format_budget_status
                 now_dt = get_current_time_in_tz()
-                text = format_budget_status(now_dt.year, now_dt.month)
+                text = format_budget_status(now_dt.year, now_dt.month, workspace_id=ws_id)
                 from bot.keyboards import get_budget_keyboard
                 await query.edit_message_text(text, reply_markup=get_budget_keyboard(), parse_mode='HTML')
             elif nav_target == "insights":
                 from services.category_service import format_spending_insights
                 now_dt = get_current_time_in_tz()
-                text = format_spending_insights(now_dt.year, now_dt.month)
+                text = format_spending_insights(now_dt.year, now_dt.month, workspace_id=ws_id)
                 from bot.keyboards import get_insights_keyboard
                 await query.edit_message_text(text, reply_markup=get_insights_keyboard(), parse_mode='HTML')
             elif nav_target == "digest":
                 from services.scheduler_service import format_daily_digest
-                text = format_daily_digest(None)
+                text = format_daily_digest(None, workspace_id=ws_id)
                 from bot.keyboards import get_digest_keyboard
                 await query.edit_message_text(text, reply_markup=get_digest_keyboard(), parse_mode='HTML')
             elif nav_target == "cafe":
                 from services.cafeteria_service import format_cafeteria_stats
-                text = format_cafeteria_stats()
+                text = format_cafeteria_stats(workspace_id=ws_id)
                 from bot.keyboards import get_cafestats_keyboard
                 await query.edit_message_text(text, reply_markup=get_cafestats_keyboard(), parse_mode='HTML')
             elif nav_target in ("gemini", "gemini_status"):
@@ -930,16 +935,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         from services.monthly_review_service import close_and_record_monthly_review
         from bot.commands import render_monthly_closing_summary_text
         from bot.keyboards import get_monthly_closing_keyboard
-        await asyncio.to_thread(close_and_record_monthly_review, y, m)
-        text = await asyncio.to_thread(render_monthly_closing_summary_text, y, m)
+        await asyncio.to_thread(close_and_record_monthly_review, y, m, workspace_id=ws_id)
+        text = await asyncio.to_thread(render_monthly_closing_summary_text, y, m, workspace_id=ws_id)
         await query.edit_message_text(text, reply_markup=get_monthly_closing_keyboard(y, m, is_closed=True), parse_mode='HTML')
         return
 
     elif action == "rec_paid":
         rec_id = int(parts[1])
         from services.recurring_service import mark_recurring_paid, get_recurring_by_id
-        tx_id, next_due = await asyncio.to_thread(mark_recurring_paid, rec_id)
-        rec = await asyncio.to_thread(get_recurring_by_id, rec_id)
+        tx_id, next_due = await asyncio.to_thread(mark_recurring_paid, rec_id, None, ws_id)
+        rec = await asyncio.to_thread(get_recurring_by_id, rec_id, ws_id)
         text = (
             f"✅ <b>Recurring Payment Logged to Ledger!</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -955,8 +960,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "rec_skip":
         rec_id = int(parts[1])
         from services.recurring_service import skip_recurring_due, get_recurring_by_id
-        next_due = await asyncio.to_thread(skip_recurring_due, rec_id)
-        rec = await asyncio.to_thread(get_recurring_by_id, rec_id)
+        next_due = await asyncio.to_thread(skip_recurring_due, rec_id, ws_id)
+        rec = await asyncio.to_thread(get_recurring_by_id, rec_id, ws_id)
         text = (
             f"⏭️ <b>Recurring Cycle Skipped</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -970,23 +975,24 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "rec_pause":
         rec_id = int(parts[1])
         from services.recurring_service import update_recurring_status
-        await asyncio.to_thread(update_recurring_status, rec_id, 'PAUSED')
+        await asyncio.to_thread(update_recurring_status, rec_id, 'PAUSED', ws_id)
         await query.edit_message_text("⏸️ <b>Recurring payment paused.</b>", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         return
 
     elif action == "rec_resume":
         rec_id = int(parts[1])
         from services.recurring_service import update_recurring_status
-        await asyncio.to_thread(update_recurring_status, rec_id, 'ACTIVE')
+        await asyncio.to_thread(update_recurring_status, rec_id, 'ACTIVE', ws_id)
         await query.edit_message_text("▶️ <b>Recurring payment resumed.</b>", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         return
 
     elif action == "rec_del":
         rec_id = int(parts[1])
         from services.recurring_service import delete_recurring_payment
-        await asyncio.to_thread(delete_recurring_payment, rec_id)
+        await asyncio.to_thread(delete_recurring_payment, rec_id, ws_id)
         await query.edit_message_text("🗑️ <b>Recurring payment deleted.</b>", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         return
+
 
     elif action == "restore_confirm":
         from services.backup_service import import_database_from_json, backup_to_telegram
@@ -3408,14 +3414,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from services.recurring_service import add_recurring_payment, get_upcoming_recurring
         from bot.commands import render_recurring_overview_text
         from bot.keyboards import get_recurring_menu_keyboard
-        rec_id = add_recurring_payment(payee, amt, frequency=freq)
-        upcoming = get_upcoming_recurring(30)
+        rec_id = add_recurring_payment(payee, amt, frequency=freq, workspace_id=ws_id)
+        upcoming = get_upcoming_recurring(30, workspace_id=ws_id)
         await update.message.reply_text(
             f"✅ <b>Recurring Payment #{rec_id} Created!</b>\n"
             f"• <b>Payee:</b> {html.escape(payee)}\n"
             f"• <b>Amount:</b> {format_currency(amt)}\n"
             f"• <b>Frequency:</b> {freq.capitalize()}\n\n"
-            f"{render_recurring_overview_text()}",
+            f"{render_recurring_overview_text(workspace_id=ws_id)}",
             reply_markup=get_recurring_menu_keyboard(upcoming_items=upcoming),
             parse_mode='HTML'
         )
