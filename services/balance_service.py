@@ -26,10 +26,10 @@ def recalculate_in_connection(conn: sqlite3.Connection, workspace_id: str = None
     from database.queries import get_default_workspace_id
     ws_id = workspace_id or get_default_workspace_id()
 
-    # 1. Fetch initial_balance anchor from workspace_settings, fallback to settings
+    # 1. Fetch initial_balance anchor from workspace_settings, fallback to settings only for default workspace
     cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'initial_balance'", (ws_id,))
     row = cursor.fetchone()
-    if not row:
+    if not row and ws_id == get_default_workspace_id():
         cursor.execute("SELECT value FROM settings WHERE key = 'initial_balance'")
         row = cursor.fetchone()
     init_val_str = row['value'] if row and row['value'] is not None else '0.0'

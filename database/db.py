@@ -313,15 +313,21 @@ def setup_database():
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS undo_log (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        workspace_id TEXT DEFAULT NULL,
                         chat_id INTEGER NOT NULL,
                         user_id INTEGER NOT NULL,
                         action TEXT NOT NULL,
                         uid TEXT NOT NULL,
+                        snapshot_json TEXT DEFAULT NULL,
                         created_at TEXT NOT NULL,
                         used_at TEXT DEFAULT NULL
                     )
                 ''')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_undo_chat_user ON undo_log(chat_id, user_id, used_at, created_at)')
+                cursor.execute("PRAGMA table_info(undo_log)")
+                _u_cols = [c['name'] for c in cursor.fetchall()]
+                if "snapshot_json" not in _u_cols:
+                    cursor.execute("ALTER TABLE undo_log ADD COLUMN snapshot_json TEXT DEFAULT NULL")
 
                 # Monthly Reviews & Closing Table
                 cursor.execute('''
@@ -379,6 +385,9 @@ def setup_database():
                     t_cols = [row[1] for row in cursor.fetchall()]
                     if "workspace_id" not in t_cols:
                         cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN workspace_id TEXT")
+
+                cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_ws_ym ON monthly_reviews(workspace_id, year, month)')
+                cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_cmi_ws_name ON custom_menu_items(workspace_id, name)')
 
                 # Idempotent Schema Migration v3: Backfill occurred_at and set updated_at to migration time in UTC
                 from utils.dates import build_occurred_at, utc_now_iso

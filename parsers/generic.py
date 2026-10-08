@@ -32,9 +32,10 @@ class GenericParser(BasePaymentParser):
         # Ignore 10-digit phone numbers, 11-18 digit ref/transaction numbers, or > 10 crores without words
         if val_int >= 100000000 or len(str(val_int)) in (10, 11, 12, 13, 14, 15, 16):
             return True
-        # Ignore years
+        # Ignore years only when there's no currency marker
         if val_int in range(2023, 2035):
-            return True
+            if not any(c in line_str for c in ('₹', 'Rs', 'RS', 'INR', 'inr', '$', '€', '£', '¥')):
+                return True
         # Ignore UPI ID lines with @
         if '@' in line_str:
             return True
@@ -325,7 +326,14 @@ class GenericParser(BasePaymentParser):
             from utils.dates import get_current_time_in_tz
             t.transaction_date = get_current_time_in_tz().date()
 
-        t.payment_status = "SUCCESS" if t.transaction_type else "UNKNOWN"
+        # Check explicit failure or pending status from receipt text
+        text_l = (self.raw_text or "").lower()
+        if any(w in text_l for w in ('payment failed', 'failed', 'declined', 'unsuccessful', 'reversed', 'cancelled', 'canceled')):
+            t.payment_status = "FAILED"
+        elif any(w in text_l for w in ('pending', 'processing', 'in progress', 'payment initiated')):
+            t.payment_status = "PENDING"
+        else:
+            t.payment_status = "SUCCESS" if t.transaction_type else "UNKNOWN"
         t.payment_app = "Generic"
         
         return t

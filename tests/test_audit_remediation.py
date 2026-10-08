@@ -575,3 +575,67 @@ def test_html_error_response_escaping():
     escaped = html.escape(malicious_input)
     assert "<script>" not in escaped
     assert "&lt;script&gt;" in escaped
+
+
+# ---------------------------------------------------------------------------
+# Test 21: Authorized Group Member Private DM History Access
+# ---------------------------------------------------------------------------
+
+def test_authorized_group_member_dm_history_access():
+    """Authorized group members (including admin Nagendra) can access workspace and view history in private DM."""
+    async def _run():
+        from bot.auth import is_authorized_user, get_workspace_context
+        from bot.commands import history_command
+        from database.queries import (
+            get_default_workspace_id, get_or_create_workspace, add_workspace_member
+        )
+
+        ws_id = get_default_workspace_id()
+        # Ensure test member exists as admin in default workspace
+        member_id = 8343764796
+        add_workspace_member(ws_id, member_id, role="admin", username="nagendra", display_name="Nagendra")
+
+        # Mock DM Update
+        u_dm = MagicMock()
+        u_dm.effective_user.id = member_id
+        u_dm.effective_user.username = "nagendra"
+        u_dm.effective_user.first_name = "Nagendra"
+        u_dm.effective_chat.id = member_id
+        u_dm.effective_chat.type = "private"
+        u_dm.effective_chat.title = ""
+        u_dm.message.text = "/history"
+        u_dm.message.reply_text = AsyncMock()
+        u_dm.callback_query = None
+
+        assert is_authorized_user(u_dm) is True
+        ctx = get_workspace_context(u_dm)
+        assert ctx is not None
+        assert ctx.workspace_id == ws_id
+        assert ctx.role == "admin"
+
+        cmd_ctx = MagicMock()
+        cmd_ctx.args = []
+        await history_command(u_dm, cmd_ctx)
+        assert u_dm.message.reply_text.called is True
+
+    import asyncio
+    asyncio.run(_run())
+
+
+def test_stranger_dm_access_rejected():
+    """Unregistered strangers in private DM are rejected from workspace context."""
+    from bot.auth import is_authorized_user, get_workspace_context
+
+    stranger_id = 777666555444
+    u_stranger = MagicMock()
+    u_stranger.effective_user.id = stranger_id
+    u_stranger.effective_user.username = "stranger"
+    u_stranger.effective_user.first_name = "Stranger"
+    u_stranger.effective_chat.id = stranger_id
+    u_stranger.effective_chat.type = "private"
+    u_stranger.effective_chat.title = ""
+    u_stranger.callback_query = None
+
+    assert is_authorized_user(u_stranger) is False
+    assert get_workspace_context(u_stranger) is None
+

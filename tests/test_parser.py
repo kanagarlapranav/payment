@@ -527,6 +527,13 @@ class TestParsers(unittest.TestCase):
         from services.cafeteria_service import is_cafeteria_payment
         self.assertTrue(is_cafeteria_payment(t.person_name, t.upi_id, t.ocr_text))
 
+    def test_generic_year_range_amount_not_rejected(self):
+        """P0-13 / P1-39: Verify amounts in 2023-2035 are not rejected as years when currency symbol is present."""
+        text = "Paid ₹2,030 to Ramesh"
+        parser = GenericParser(text)
+        t = parser.parse()
+        self.assertEqual(t.amount, 2030.0)
+
 if __name__ == '__main__':
     unittest.main()
 

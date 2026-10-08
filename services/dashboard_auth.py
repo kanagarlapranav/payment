@@ -78,10 +78,38 @@ def cleanup_expired():
 def create_one_time_code(user_id: Optional[int] = None, workspace_id: Optional[str] = None, role: str = "member") -> str:
     """
     Generates a cryptographically secure 32-character one-time login code.
-    Valid for 5 minutes, single-use only.
+    Valid for 60 seconds, single-use only.
     Persists hashed code to SQLite database and in-memory cache.
     """
     cleanup_expired()
+    from config import TELEGRAM_USER_ID
+    if not workspace_id:
+        try:
+            from database.queries import get_default_workspace_id
+            workspace_id = get_default_workspace_id()
+        except Exception:
+            workspace_id = "default"
+    else:
+        try:
+            from database.db import get_db_connection, LEDGER_LOCK
+            with LEDGER_LOCK:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT id FROM workspaces WHERE id = ?", (str(workspace_id),))
+                    if not cursor.fetchone():
+                        from utils.dates import utc_now_iso
+                        now_utc = utc_now_iso()
+                        cursor.execute("""
+                            INSERT OR IGNORE INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
+                            VALUES (?, 0, 'dm', ?, 1, ?, ?)
+                        """, (str(workspace_id), f"Workspace {workspace_id}", now_utc, now_utc))
+                        conn.commit()
+        except Exception as e:
+            logger.debug(f"Auto-provision workspace in create_one_time_code notice: {e}")
+
+    if user_id is None:
+        user_id = int(TELEGRAM_USER_ID or 1)
+
     code = secrets.token_urlsafe(32)
     code_h = _hash_val(code)
     now = time.time()
@@ -330,25 +358,34 @@ def get_session_info(session_id: Optional[str]) -> Optional[Dict[str, Any]]:
     # Revalidate live membership & status
     ws_id = data.get("workspace_id")
     uid = data.get("user_id")
-    if ws_id and uid:
-        try:
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT id FROM workspaces WHERE id = ?", (str(ws_id),))
-                ws_row = cursor.fetchone()
-                if ws_row:
-                    cursor.execute("""
-                        SELECT role, is_active, status FROM workspace_members
-                        WHERE workspace_id = ? AND telegram_user_id = ?
-                    """, (str(ws_id), int(uid)))
-                    mem = cursor.fetchone()
-                    if not mem or not mem['is_active'] or mem['status'] in ('suspended', 'removed'):
-                        # Revoke session if user has been deactivated or removed from existing workspace
-                        revoke_session(session_id)
-                        return None
-                    data['role'] = mem['role']
-        except Exception as e:
-            logger.debug(f"Live membership revalidation notice: {e}")
+    if not ws_id or uid is None:
+        logger.warning(f"Rejecting unbound dashboard session (ws_id={ws_id}, uid={uid})")
+        revoke_session(session_id)
+        return None
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, is_active FROM workspaces WHERE id = ?", (str(ws_id),))
+            ws_row = cursor.fetchone()
+            if not ws_row or not ws_row['is_active']:
+                logger.warning(f"Revoking session for inactive or missing workspace {ws_id}")
+                revoke_session(session_id)
+                return None
+
+            cursor.execute("""
+                SELECT role, is_active, status FROM workspace_members
+                WHERE workspace_id = ? AND telegram_user_id = ?
+            """, (str(ws_id), int(uid)))
+            mem = cursor.fetchone()
+            if mem:
+                if not mem['is_active'] or mem['status'] in ('suspended', 'removed', 'revoked'):
+                    # Revoke session if user has been deactivated or removed from existing workspace
+                    revoke_session(session_id)
+                    return None
+                data['role'] = mem['role']
+    except Exception as e:
+        logger.debug(f"Live membership revalidation notice: {e}")
 
     return data
 

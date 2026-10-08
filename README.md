@@ -7,23 +7,25 @@ A 24/7 autonomous financial companion and personal ledger bot built on Telegram.
 ## 🏗️ Architecture & Core Components
 
 - **Vision & OCR Pipeline**: Google Gemini Vision AI (`gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-flash-latest`) with automatic fallback to embedded **RapidOCR** (ONNX Runtime). *No external Tesseract installation required.*
-- **Immutable Ledger & Double-Entry Math**:
-  - Sequence-validated SQLite ledger with SHA-256 integrity hash chaining (`previous_hash` + `current_hash`).
-  - Strict input validation rejecting NaN, Inf, zero, or negative amounts.
-  - Soft-delete architecture with tombstones (`deleted_at`) preserving balance recalculation integrity and preventing resurrected rows.
-  - Reversible multi-level undo history via `ledger_undo_log`.
+- **Single Running-Balance Ledger & Balance Recalculation**:
+  - Deterministic SQLite ledger with dynamic running balance recalculation anchored to workspace-specific initial opening balances under `LEDGER_LOCK`.
+  - Strict input validation rejecting NaN, Inf, zero, or negative amounts (< ₹0.01).
+  - Soft-delete architecture with tombstones (`deleted_at`) preserving balance recalculation integrity and history.
+  - Reversible action undo log via `undo_log` supporting full rollback of inserts, edits, and deletions.
+- **Multi-Tenant Workspaces & 4-Tier RBAC**:
+  - Full tenant isolation across personal chats and group chats, preventing cross-tenant leakage.
+  - Granular role hierarchy: **Owner** (all permissions & global recovery), **Admin** (workspace settings, invites, role delegation), **Member** (log transactions, edits, cafeteria items), and **Viewer** (read-only views & dashboard metrics).
+  - Cryptographically secure invite tokens with usage limits and expiration timestamps.
 - **Cloud Backup & Disaster Recovery (Backup Format v2)**:
-  - Atomic JSON backups with SHA-256 manifest checksums, database schema versioning, and sequence integrity checks.
-  - Periodic 60-second dirty sync and graceful shutdown backup hooks.
+  - Atomic JSON backups with SHA-256 manifest checksums, database schema versioning, and monotonic cloud revision tracking.
+  - Per-tenant scoped backups for group chats and global disaster-recovery backups for bot owner.
   - Automatic restore on fresh/wiped instances: restores only when the database is completely empty and uninitialized. If restore fails on an empty database, sets `backup_blocked=true` to prevent wiping cloud state until valid data is entered.
-  - Empty-ledger backup creation when all rows are intentionally deleted.
 - **JobQueue Scheduler**:
   - Uses `python-telegram-bot` `JobQueue` with `ZoneInfo("Asia/Kolkata")`.
   - Daily Financial Digest sent automatically at `DAILY_DIGEST_TIME` (default: `22:00` IST) with 3-attempt exponential retry and idempotent sent tracking.
   - Periodic dirty backup retry job (every 60s) and tombstone purge maintenance job (every 24h).
 - **Security & Authorization**:
-  - Two-tier access control: **Owner-Only** (mutations, edits, deletes, balance updates, exports, backups, restore, dashboard, settings) vs. **Group Members** (read-only views: balance, today, history, stats, cafeteria menu).
-  - Protected web dashboard utilizing 60-second single-use one-time login codes exchanged via `/auth?code=...` for `HttpOnly`, `SameSite=Strict`, `Secure` 30-minute session cookies.
+  - Protected web dashboard utilizing 60-second single-use one-time login codes exchanged via `/auth?code=...` for `HttpOnly`, `SameSite=Strict`, `Secure` 30-minute session cookies with live membership revalidation.
   - Security headers: `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` on API responses.
   - Strict HTML escaping on all dynamic variables in Telegram outputs to prevent entity injection attacks.
 
@@ -76,7 +78,7 @@ python app.py
 
 ## 🧪 Testing & Validation Commands
 
-Run the full automated test suite (330+ unit and integration tests):
+Run the full automated test suite (550+ unit and integration tests):
 ```bash
 # Run all unit and integration tests
 pytest -v

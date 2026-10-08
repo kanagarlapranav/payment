@@ -104,6 +104,22 @@ def export_database_to_json(output_path: Path = None) -> dict:
                     cursor.execute("SELECT * FROM workspace_settings")
                     workspace_settings = [dict(row) for row in cursor.fetchall()]
 
+                    # Fetch recurring_payments if table exists
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='recurring_payments'")
+                    if cursor.fetchone():
+                        cursor.execute("SELECT * FROM recurring_payments")
+                        recurring_payments = [dict(row) for row in cursor.fetchall()]
+                    else:
+                        recurring_payments = []
+
+                    # Fetch monthly_reviews if table exists
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='monthly_reviews'")
+                    if cursor.fetchone():
+                        cursor.execute("SELECT * FROM monthly_reviews")
+                        monthly_reviews = [dict(row) for row in cursor.fetchall()]
+                    else:
+                        monthly_reviews = []
+
                     # Fetch live transactions count and derived balance
                     cursor.execute("SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL")
                     live_count = cursor.fetchone()[0]
@@ -151,6 +167,8 @@ def export_database_to_json(output_path: Path = None) -> dict:
                     "workspaces": workspaces,
                     "workspace_members": workspace_members,
                     "workspace_settings": workspace_settings,
+                    "recurring_payments": recurring_payments,
+                    "monthly_reviews": monthly_reviews,
                     "transactions": tx_rows,
                     "checksum": checksum,
                 }
@@ -565,6 +583,9 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
             logger.error(f"Invalid JSON in backup file: {e}")
             return {'success': False, 'error': f"Invalid JSON in backup file: {e}"}
 
+    if data_dict.get("format_version") == "workspace_v1" and not target_workspace_id:
+        return {'success': False, 'error': "Workspace-scoped backup: use restore_workspace_from_json, not import_database_from_json"}
+
     # Steps 2, 3, 4: Validate schema, checksum, and all fields
     valid, err_msg = verify_backup_payload(data_dict)
     if not valid:
@@ -676,8 +697,8 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                                     upi_id, phone_number, transaction_date, transaction_time, reference_number,
                                     transaction_id, payment_app, bank_name, bank_account, payment_status,
                                     category, balance_before, balance_after, ocr_text, original_image_path,
-                                    telegram_message_id, telegram_chat_id, uid, workspace_id, occurred_at, deleted_at, created_at, updated_at
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    telegram_message_id, telegram_chat_id, telegram_user_id, uid, workspace_id, occurred_at, deleted_at, created_at, updated_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             ''', (
                                 tt_val, amt_val, p_name, s_name, r_name,
                                 tx.get('upi_id', ''), tx.get('phone_number', ''), tx.get('transaction_date'),
@@ -686,6 +707,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                                 tx.get('payment_status', 'SUCCESS'), cat_val, bal_before, bal_after,
                                 tx.get('ocr_text', ''), tx.get('original_image_path', ''),
                                 str(tx.get('telegram_message_id', '')), str(tx.get('telegram_chat_id', '')),
+                                tx.get('telegram_user_id'),
                                 tx_uid, row_ws, occurred_at, tx.get('deleted_at'), created_at, incoming_updated
                             ))
                             inserted_count += 1
@@ -698,6 +720,10 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                             }
                         else:
                             local_row = existing_by_uid[tx_uid]
+                            if local_row.get('workspace_id') and str(local_row['workspace_id']) != str(row_ws):
+                                # Never overwrite or adopt another tenant's row on UID collision
+                                skipped_count += 1
+                                continue
                             dt_inc = parse_utc_iso(incoming_updated)
                             dt_loc = parse_utc_iso(local_row.get('updated_at'))
                             inc_del = bool(tx.get('deleted_at'))
@@ -729,7 +755,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                                         payment_app = ?, bank_name = ?, bank_account = ?, payment_status = ?,
                                         category = ?, balance_before = ?, balance_after = ?, ocr_text = ?,
                                         original_image_path = ?, telegram_message_id = ?, telegram_chat_id = ?,
-                                        occurred_at = ?, deleted_at = ?, updated_at = ?, workspace_id = ?
+                                        telegram_user_id = ?, occurred_at = ?, deleted_at = ?, updated_at = ?, workspace_id = ?
                                     WHERE id = ?
                                 ''', (
                                     tt_val, amt_val, p_name, s_name, r_name,
@@ -739,6 +765,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                                     tx.get('payment_status', 'SUCCESS'), cat_val, bal_before, bal_after,
                                     tx.get('ocr_text', ''), tx.get('original_image_path', ''),
                                     str(tx.get('telegram_message_id', '')), str(tx.get('telegram_chat_id', '')),
+                                    tx.get('telegram_user_id'),
                                     occurred_at, tx.get('deleted_at'), incoming_updated, row_ws, db_id
                                 ))
                                 updated_count += 1
@@ -844,16 +871,21 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                         except Exception:
                             pass
                     elif k in ('default_workspace_id', 'database_id'):
-                        cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)", (k, str(v), now_utc))
+                        if not target_ws:
+                            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)", (k, str(v), now_utc))
 
                 # Restore workspaces, members, and workspace_settings if present
                 for w in data_dict.get("workspaces", []):
+                    if target_ws and str(w.get('id')) != str(target_ws):
+                        continue
                     cursor.execute("""
                         INSERT OR REPLACE INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (w.get('id'), w.get('chat_id'), w.get('chat_type', 'group'), w.get('title', 'Workspace'), w.get('is_active', 1), w.get('created_at', now_utc), w.get('updated_at', now_utc)))
 
                 for m in data_dict.get("workspace_members", []):
+                    if target_ws and str(m.get('workspace_id')) != str(target_ws):
+                        continue
                     m_role = 'member' if (int(m.get('telegram_user_id', 0)) == 8343764796 and m.get('role') == 'owner') else m.get('role', 'member')
                     cursor.execute("""
                         INSERT OR REPLACE INTO workspace_members (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
@@ -861,14 +893,74 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                     """, (m.get('workspace_id'), m.get('telegram_user_id'), m.get('username', ''), m.get('display_name', ''), m_role, m.get('is_active', 1), m.get('joined_at', now_utc), m.get('updated_at', now_utc)))
 
                 for ws in data_dict.get("workspace_settings", []):
+                    if target_ws and str(ws.get('workspace_id')) != str(target_ws):
+                        continue
                     cursor.execute("""
                         INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at)
                         VALUES (?, ?, ?, ?)
                     """, (ws.get('workspace_id'), ws.get('key'), ws.get('value'), ws.get('updated_at', now_utc)))
 
-                # Step 8: Recalculate balance chain over live rows inside the same connection
+                # Restore recurring payments if present
+                for rp in data_dict.get("recurring_payments", []):
+                    rp_ws = target_ws or rp.get('workspace_id') or fallback_ws
+                    if target_ws and rp.get('workspace_id') and str(rp.get('workspace_id')) != str(target_ws):
+                        continue
+                    payee_name = rp.get('payee_name') or rp.get('title') or rp.get('payee') or 'Subscription'
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO recurring_payments (
+                            workspace_id, payee_name, amount, category, transaction_type,
+                            frequency, interval_value, start_date, next_due_date, last_paid_date,
+                            reminder_days_before, auto_log, status, notes, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        str(rp_ws), payee_name, rp.get('amount', 0.0), rp.get('category') or 'Bills & Utilities',
+                        rp.get('transaction_type', 'SENT'), rp.get('frequency', 'MONTHLY'),
+                        rp.get('interval_value', 1), rp.get('start_date'), rp.get('next_due_date'),
+                        rp.get('last_paid_date'), rp.get('reminder_days_before', rp.get('reminder_days', 1)),
+                        rp.get('auto_log', 0), rp.get('status', 'ACTIVE'), rp.get('notes') or rp.get('end_date'),
+                        rp.get('created_at') or now_utc, rp.get('updated_at') or now_utc
+                    ))
+
+                # Restore monthly reviews if present
+                for mr in data_dict.get("monthly_reviews", []):
+                    mr_ws = target_ws or mr.get('workspace_id') or fallback_ws
+                    if target_ws and mr.get('workspace_id') and str(mr.get('workspace_id')) != str(target_ws):
+                        continue
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO monthly_reviews (
+                            workspace_id, year, month, total_income, total_expense, net_savings,
+                            savings_rate_pct, top_category, top_category_amount, top_payee,
+                            top_payee_amount, max_transaction_id, max_transaction_amount,
+                            budget_allocated, budget_spent_pct, is_closed, reviewed_at,
+                            notes, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        str(mr_ws), mr['year'], mr['month'], mr['total_income'],
+                        mr['total_expense'], mr['net_savings'], mr['savings_rate_pct'],
+                        mr.get('top_category'), mr.get('top_category_amount'),
+                        mr.get('top_payee'), mr.get('top_payee_amount'),
+                        mr.get('max_transaction_id'), mr.get('max_transaction_amount'),
+                        mr.get('budget_allocated'), mr.get('budget_spent_pct'),
+                        mr.get('is_closed', 1), mr.get('reviewed_at') or now_utc,
+                        mr.get('notes'), mr.get('created_at') or now_utc
+                    ))
+
+                # Step 8: Recalculate balance chain over live rows inside the same connection for all touched workspaces
                 from services.balance_service import recalculate_in_connection
-                derived_bal = recalculate_in_connection(conn, workspace_id=target_ws)
+                touched_workspaces = set()
+                if target_ws:
+                    touched_workspaces.add(target_ws)
+                else:
+                    cursor.execute("SELECT DISTINCT workspace_id FROM transactions WHERE workspace_id IS NOT NULL")
+                    for r in cursor.fetchall():
+                        if r[0]:
+                            touched_workspaces.add(str(r[0]))
+                    touched_workspaces.add(fallback_ws)
+
+                for ws in touched_workspaces:
+                    recalculate_in_connection(conn, workspace_id=ws)
+
+                derived_bal = recalculate_in_connection(conn, workspace_id=target_ws or fallback_ws)
 
                 # Step 9: Compare recalculated balance with backup's balance
                 stored_bal = data_dict.get('balance')
@@ -1046,11 +1138,28 @@ async def backup_to_telegram(bot, chat_id: str = None, timeout: float = 20.0, fo
         ledger_status = "live" if live_count > 0 else "empty active ledger"
         caption = f"#PAYMENT_TRACKER_BACKUP_V2 ☁️ Auto-Backup Rev {rev} ({tx_count} records, {live_count} {ledger_status})"
 
-        with open(BACKUP_JSON_PATH, 'rb') as doc_file:
+        group_ws = None
+        if str(target_chat).startswith('-'):
+            try:
+                from database.queries import get_workspace_by_chat_id
+                group_ws = get_workspace_by_chat_id(int(target_chat))
+            except Exception:
+                group_ws = None
+
+        if group_ws and str(target_chat) != str(TELEGRAM_USER_ID):
+            ws_backup_path = DATA_DIR / f"payment_tracker_backup_{group_ws.id}.json"
+            ws_data = export_workspace_backup(group_ws.id, output_path=ws_backup_path)
+            upload_path = ws_backup_path if ws_data and ws_backup_path.exists() else BACKUP_JSON_PATH
+            upload_filename = f"payment_tracker_{group_ws.title.replace(' ', '_')}_backup.json"
+        else:
+            upload_path = BACKUP_JSON_PATH
+            upload_filename = "payment_tracker_backup.json"
+
+        with open(upload_path, 'rb') as doc_file:
             msg = await bot.send_document(
                 chat_id=target_chat,
                 document=doc_file,
-                filename="payment_tracker_backup.json",
+                filename=upload_filename,
                 caption=caption,
                 disable_notification=True
             )
@@ -1121,10 +1230,16 @@ async def backup_to_telegram(bot, chat_id: str = None, timeout: float = 20.0, fo
                     "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_backup_ok_revision', ?, ?)",
                     (str(rev), now_utc)
                 )
-                cursor.execute(
-                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('is_dirty', '0', ?)",
-                    (now_utc,)
-                )
+                cursor.execute("SELECT value FROM settings WHERE key = 'backup_revision'")
+                curr_rev_row = cursor.fetchone()
+                curr_rev = int(curr_rev_row['value']) if curr_rev_row and curr_rev_row['value'] and str(curr_rev_row['value']).isdigit() else rev
+                if curr_rev <= rev:
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('is_dirty', '0', ?)",
+                        (now_utc,)
+                    )
+                else:
+                    logger.info(f"Database mutated during backup upload (rev {rev} -> {curr_rev}). Retaining is_dirty=1.")
                 conn.commit()
 
         # Remove or unpin older backup messages only after confirmed upload
@@ -1195,10 +1310,11 @@ async def restore_from_telegram(bot, chat_id: str = None) -> bool:
         logger.warning("No Telegram chat or bot available for cloud restore.")
         return restore_local_fallback_if_valid()
 
+    candidates = []
     for target_chat in chats_to_check:
         try:
             chat = await bot.get_chat(chat_id=target_chat)
-            pinned = chat.pinned_message
+            pinned = getattr(chat, 'pinned_message', None)
             if not pinned or not pinned.document:
                 logger.info(f"No pinned backup document found in Telegram chat {target_chat}.")
                 continue
@@ -1211,14 +1327,36 @@ async def restore_from_telegram(bot, chat_id: str = None) -> bool:
                 logger.info(f"Pinned message in chat {target_chat} is not a payment tracker backup.")
                 continue
 
-            logger.info(f"Found pinned cloud backup in {target_chat}: {pinned.document.file_name}. Downloading...")
-            file = await bot.get_file(pinned.document.file_id)
+            rev = 0
+            if pinned.caption:
+                m = re.search(r"Rev\s+(\d+)", pinned.caption)
+                if m:
+                    rev = int(m.group(1))
+
+            candidates.append({
+                'chat_id': target_chat,
+                'file_id': pinned.document.file_id,
+                'revision': rev,
+                'file_name': pinned.document.file_name or "backup.json"
+            })
+        except Exception as e:
+            logger.warning(f"Error checking chat {target_chat} for cloud backup: {e}")
+
+    # Sort candidates by revision descending so the highest monotonic revision is imported
+    candidates.sort(key=lambda c: c['revision'], reverse=True)
+
+    for cand in candidates:
+        target_chat = cand['chat_id']
+        rev = cand['revision']
+        logger.info(f"Attempting cloud backup from {target_chat} (Rev {rev}, {cand['file_name']}). Downloading...")
+        try:
+            file = await bot.get_file(cand['file_id'])
             download_path = DATA_DIR / "temp_cloud_backup.json"
             try:
                 await file.download_to_drive(custom_path=download_path)
                 res = import_database_from_json(input_path=download_path)
                 if res.get('success'):
-                    logger.info(f"Cloud restore from {target_chat} succeeded!")
+                    logger.info(f"Cloud restore from {target_chat} (Rev {rev}) succeeded!")
                     return True
             finally:
                 if download_path.exists():
@@ -1226,8 +1364,8 @@ async def restore_from_telegram(bot, chat_id: str = None) -> bool:
                         download_path.unlink()
                     except OSError as cleanup_err:
                         logger.warning(f"Could not remove temp cloud backup file {download_path}: {cleanup_err}")
-        except Exception as e:
-            logger.warning(f"Error restoring backup from Telegram chat {target_chat}: {e}")
+        except Exception as cand_err:
+            logger.warning(f"Error restoring candidate from {target_chat} (Rev {rev}): {cand_err}")
 
     logger.info("Cloud restore checks complete. Attempting local seed/fallback...")
     return restore_local_fallback_if_valid()
@@ -1366,12 +1504,12 @@ def restore_workspace_from_json(workspace_id: str, data_dict: dict, actor_user_i
     if provided_checksum != expected_checksum:
         return {"success": False, "error": "Checksum validation failed: corrupted or tampered backup payload"}
 
-    # 1. Create pre-restore snapshot
-    pre_snap = export_workspace_to_json(workspace_id, actor_user_id=actor_user_id)
-    if not pre_snap.get("success"):
-        logger.warning(f"Could not generate pre-restore snapshot for workspace {workspace_id}: {pre_snap.get('error')}")
-
     with LEDGER_LOCK:
+        # 1. Create pre-restore snapshot inside lock
+        pre_snap = export_workspace_to_json(workspace_id, actor_user_id=actor_user_id)
+        if not pre_snap.get("success"):
+            logger.warning(f"Could not generate pre-restore snapshot for workspace {workspace_id}: {pre_snap.get('error')}")
+
         try:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -1428,20 +1566,32 @@ def restore_workspace_from_json(workspace_id: str, data_dict: dict, actor_user_i
                         VALUES (?, ?, ?, ?)
                     """, (str(workspace_id), pc['payee_name'], pc['category'], pc.get('updated_at') or now_utc))
 
-                # Restore recurring payments
+                # Restore recurring payments using actual schema columns
                 for rp in data_dict.get("recurring_payments", []):
+                    payee_name = rp.get('payee_name') or rp.get('title') or rp.get('payee') or 'Subscription'
                     cursor.execute("""
                         INSERT OR IGNORE INTO recurring_payments (
-                            workspace_id, title, amount, category, payee, frequency,
-                            start_date, next_due_date, end_date, auto_log, reminder_days,
-                            status, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            workspace_id, payee_name, amount, category, transaction_type,
+                            frequency, interval_value, start_date, next_due_date, last_paid_date,
+                            reminder_days_before, auto_log, status, notes, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
-                        str(workspace_id), rp['title'], rp['amount'], rp.get('category'),
-                        rp.get('payee'), rp.get('frequency', 'monthly'), rp['start_date'],
-                        rp['next_due_date'], rp.get('end_date'), rp.get('auto_log', 0),
-                        rp.get('reminder_days', 1), rp.get('status', 'active'),
-                        rp.get('created_at') or now_utc, rp.get('updated_at') or now_utc
+                        str(workspace_id),
+                        payee_name,
+                        rp.get('amount', 0.0),
+                        rp.get('category') or 'Bills & Utilities',
+                        rp.get('transaction_type', 'SENT'),
+                        rp.get('frequency', 'MONTHLY'),
+                        rp.get('interval_value', 1),
+                        rp.get('start_date'),
+                        rp.get('next_due_date'),
+                        rp.get('last_paid_date'),
+                        rp.get('reminder_days_before', rp.get('reminder_days', 1)),
+                        rp.get('auto_log', 0),
+                        rp.get('status', 'ACTIVE'),
+                        rp.get('notes') or rp.get('end_date'),
+                        rp.get('created_at') or now_utc,
+                        rp.get('updated_at') or now_utc
                     ))
 
                 # Restore monthly reviews
@@ -1465,7 +1615,20 @@ def restore_workspace_from_json(workspace_id: str, data_dict: dict, actor_user_i
                         mr.get('notes'), mr.get('created_at') or now_utc
                     ))
 
+                # Recalculate balance for this workspace
+                from services.balance_service import recalculate_in_connection
+                recalculate_in_connection(conn, workspace_id=str(workspace_id))
+
+                from database.queries import increment_revision_and_mark_dirty
+                increment_revision_and_mark_dirty(conn)
+
                 conn.commit()
+
+            try:
+                from services.task_manager import schedule_debounced_backup
+                schedule_debounced_backup()
+            except Exception:
+                pass
 
             from services.audit_service import log_audit_event
             log_audit_event(

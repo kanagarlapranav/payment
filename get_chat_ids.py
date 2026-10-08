@@ -15,9 +15,6 @@ def main():
     load_dotenv()
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token and len(sys.argv) > 1:
-        token = sys.argv[1]
-
     if not token:
         print("TELEGRAM_BOT_TOKEN is not set in .env.")
         token = input("Enter your Telegram Bot Token from @BotFather: ").strip()

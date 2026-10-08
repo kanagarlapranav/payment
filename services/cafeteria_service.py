@@ -3,6 +3,7 @@ Cafeteria Menu Database & Smart Item Recommender.
 Contains vegetarian menu items, prices, add-on charges (packing, extra spicy),
 and automatic matching algorithms for payments made to Vikraman Nair / Cafeteria.
 """
+import html
 from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional
 
@@ -256,9 +257,9 @@ def format_full_menu(workspace_id: Optional[str] = None) -> str:
     
     for cat_name, items in cats.items():
         icon = category_icons.get(cat_name, "🍽️")
-        text += f"{icon} <b>{cat_name.upper()}</b>\n"
+        text += f"{icon} <b>{html.escape(cat_name.upper())}</b>\n"
         for item in items:
-            text += f"• {item.name} — <b>₹{item.price:.0f}</b>\n"
+            text += f"• {html.escape(item.name)} — <b>₹{item.price:.0f}</b>\n"
         text += "\n"
         
     text += "📦 <b>ADD-ONS / EXTRAS:</b>\n"

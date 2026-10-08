@@ -32,12 +32,23 @@ def run_migration(dry_run: bool = False, db_path: Path = None):
         return False
 
     # 1. Pre-migration backup if not dry run
+    active_db = target_db
     if not dry_run:
         backup_path = target_db.with_suffix(".sqlite3.backup-v5")
+        try:
+            chk_conn = sqlite3.connect(str(target_db), timeout=30.0)
+            chk_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            chk_conn.close()
+        except Exception as e:
+            print(f"Warning: WAL checkpoint before backup returned: {e}")
         shutil.copy2(target_db, backup_path)
         print(f"Pre-migration snapshot saved to: {backup_path}")
+    else:
+        active_db = target_db.with_name(f"{target_db.stem}_dryrun_tmp_{os.getpid()}.sqlite3")
+        if target_db.exists():
+            shutil.copy2(target_db, active_db)
 
-    conn = sqlite3.connect(str(target_db), timeout=30.0)
+    conn = sqlite3.connect(str(active_db), timeout=30.0)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
@@ -180,7 +191,7 @@ def run_migration(dry_run: bool = False, db_path: Path = None):
         # 9. Re-table custom_menu_items for composite UNIQUE (workspace_id, name)
         cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='custom_menu_items'")
         cmi_sql_row = cursor.fetchone()
-        if cmi_sql_row and "name TEXT UNIQUE" in cmi_sql_row['sql']:
+        if cmi_sql_row and "UNIQUE(workspace_id, name)" not in cmi_sql_row['sql'] and "UNIQUE (workspace_id, name)" not in cmi_sql_row['sql']:
             print("Rebuilding 'custom_menu_items' with composite UNIQUE (workspace_id, name)...")
             cursor.execute("""
                 CREATE TABLE custom_menu_items_v5 (
@@ -204,7 +215,7 @@ def run_migration(dry_run: bool = False, db_path: Path = None):
         # 10. Re-table monthly_reviews for composite UNIQUE (workspace_id, year, month)
         cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='monthly_reviews'")
         mr_sql_row = cursor.fetchone()
-        if mr_sql_row and "UNIQUE(year, month)" in mr_sql_row['sql']:
+        if mr_sql_row and "UNIQUE(workspace_id, year, month)" not in mr_sql_row['sql'] and "UNIQUE (workspace_id, year, month)" not in mr_sql_row['sql']:
             print("Rebuilding 'monthly_reviews' with composite UNIQUE (workspace_id, year, month)...")
             cursor.execute("""
                 CREATE TABLE monthly_reviews_v5 (
@@ -248,7 +259,9 @@ def run_migration(dry_run: bool = False, db_path: Path = None):
             cursor.execute("DROP TABLE monthly_reviews")
             cursor.execute("ALTER TABLE monthly_reviews_v5 RENAME TO monthly_reviews")
 
-        # 11. Backfill any null workspace_id in undo_log
+        # 11. Backfill any null workspace_id in undo_log and recurring_payments
+        print("Backfilling any null workspace_id in 'recurring_payments'...")
+        cursor.execute("UPDATE recurring_payments SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''", (default_ws_id,))
         print("Backfilling any null workspace_id in 'undo_log'...")
         cursor.execute("UPDATE undo_log SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''", (default_ws_id,))
 
@@ -283,6 +296,11 @@ def run_migration(dry_run: bool = False, db_path: Path = None):
         return False
     finally:
         conn.close()
+        if dry_run and active_db != target_db and active_db.exists():
+            try:
+                active_db.unlink()
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

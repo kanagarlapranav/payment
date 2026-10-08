@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-CLI tool to verify Test Isolation & Zero-Data-Loss guarantee.
-Ensures running the test suite NEVER touches, mutates, creates, or pollutes production data.
+CLI tool to verify Test Isolation & Zero-Data-Loss guarantee for primary database and backup files.
+Ensures running the test suite NEVER touches, mutates, creates, or pollutes primary production database and backup files.
 
 Monitored Production Files:
   - data/database.sqlite3
@@ -11,8 +11,8 @@ Monitored Production Files:
 
 Usage: python tools/verify_test_isolation.py
 Exit codes:
-  0: Isolation verified (production data untouched)
-  1: Isolation failure (production data altered by tests)
+  0: Isolation verified (production primary DB & backup files untouched)
+  1: Isolation failure (production primary DB & backup files altered by tests)
 """
 
 import sys

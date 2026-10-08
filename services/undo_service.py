@@ -5,6 +5,7 @@ expiring after 10 minutes, and enforcing exactly-once consumption.
 Undo of a delete restores by permanent UID only without ever recreating purged rows from snapshots.
 """
 import html
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -124,8 +125,53 @@ def record_edit_action(
     user_id: int | None = None,
     workspace_id: str | None = None,
 ) -> bool:
-    """Backwards-compatibility stub for recording edit operations."""
-    return record_delete_action(previous_tx, chat_id=chat_id, user_id=user_id, workspace_id=workspace_id)
+    """
+    Records an edit action in undo_log, saving previous transaction state in snapshot_json.
+    Scoped by (workspace_id, chat_id, user_id).
+    """
+    if not previous_tx:
+        return False
+
+    uid = previous_tx.get('uid')
+    if not uid and previous_tx.get('id'):
+        row = get_transaction_by_id(previous_tx['id'])
+        if row:
+            uid = row.get('uid')
+
+    if not uid:
+        logger.warning(f"Cannot record undo edit for transaction without uid: {previous_tx}")
+        return False
+
+    ws_id = workspace_id or previous_tx.get('workspace_id') or ""
+    valid_uid = validate_uid(uid)
+    c_id, u_id, resolved_ws_id = _resolve_scope(chat_id, user_id, ws_id)
+    now_utc = utc_now_iso()
+
+    snapshot = {
+        'amount': previous_tx.get('amount'),
+        'person_name': previous_tx.get('person_name'),
+        'transaction_type': previous_tx.get('transaction_type'),
+        'transaction_date': previous_tx.get('transaction_date'),
+        'reference_number': previous_tx.get('reference_number'),
+        'category': previous_tx.get('category'),
+        'sender_name': previous_tx.get('sender_name'),
+        'recipient_name': previous_tx.get('recipient_name')
+    }
+    snapshot_json = json.dumps(snapshot)
+
+    with LEDGER_LOCK, get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO undo_log (workspace_id, chat_id, user_id, action, uid, snapshot_json, created_at)
+            VALUES (?, ?, ?, 'edit', ?, ?, ?)
+            """,
+            (resolved_ws_id or None, c_id, u_id, valid_uid, snapshot_json, now_utc),
+        )
+        conn.commit()
+
+    logger.info(f"Recorded undo edit for UID {valid_uid} scoped to workspace={resolved_ws_id}, chat={c_id}, user={u_id}")
+    return True
 
 
 def get_last_action(
@@ -140,7 +186,7 @@ def get_last_action(
         if ws_id:
             cursor.execute(
                 """
-                SELECT id, workspace_id, chat_id, user_id, action, uid, created_at
+                SELECT id, workspace_id, chat_id, user_id, action, uid, snapshot_json, created_at
                 FROM undo_log
                 WHERE (workspace_id = ? OR workspace_id IS NULL) AND user_id = ? AND used_at IS NULL
                 ORDER BY id DESC
@@ -151,7 +197,7 @@ def get_last_action(
         else:
             cursor.execute(
                 """
-                SELECT id, workspace_id, chat_id, user_id, action, uid, created_at
+                SELECT id, workspace_id, chat_id, user_id, action, uid, snapshot_json, created_at
                 FROM undo_log
                 WHERE chat_id = ? AND user_id = ? AND used_at IS NULL
                 ORDER BY id DESC
@@ -180,7 +226,7 @@ def perform_undo(
             if ws_id:
                 cursor.execute(
                     """
-                    SELECT id, workspace_id, chat_id, user_id, action, uid, created_at
+                    SELECT id, workspace_id, chat_id, user_id, action, uid, snapshot_json, created_at
                     FROM undo_log
                     WHERE (workspace_id = ? OR workspace_id IS NULL) AND user_id = ? AND used_at IS NULL
                     ORDER BY id DESC
@@ -191,7 +237,7 @@ def perform_undo(
             else:
                 cursor.execute(
                     """
-                    SELECT id, workspace_id, chat_id, user_id, action, uid, created_at
+                    SELECT id, workspace_id, chat_id, user_id, action, uid, snapshot_json, created_at
                     FROM undo_log
                     WHERE chat_id = ? AND user_id = ? AND used_at IS NULL
                     ORDER BY id DESC
@@ -225,15 +271,6 @@ def perform_undo(
                 conn.commit()
                 return False, "Undo action has expired (window is 10 minutes)."
 
-            # Consume record exactly once
-            cursor.execute(
-                "UPDATE undo_log SET used_at = ? WHERE id = ? AND used_at IS NULL",
-                (now_iso, rec_id),
-            )
-            if cursor.rowcount != 1:
-                return False, "Undo action has already been used."
-            conn.commit()
-
         # Execute undo action with strict workspace scoping
         if action == 'delete':
             tx = get_transaction_by_uid(uid, workspace_id=rec_ws_id) if rec_ws_id else get_transaction_by_uid(uid)
@@ -251,6 +288,14 @@ def perform_undo(
             if not restored:
                 return False, "Recovery is not possible: failed to restore transaction."
 
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE undo_log SET used_at = ? WHERE id = ? AND used_at IS NULL",
+                    (now_iso, rec_id),
+                )
+                conn.commit()
+
             from services.audit_service import log_audit_event
             log_audit_event(
                 workspace_id=rec_ws_id,
@@ -259,8 +304,7 @@ def perform_undo(
                 resource=f"tx:{uid}"
             )
 
-
-            new_bal = get_balance_setting()
+            new_bal = get_balance_setting(workspace_id=rec_ws_id)
             try:
                 from services.backup_service import export_database_to_json
                 export_database_to_json()
@@ -284,8 +328,19 @@ def perform_undo(
                 return False, "Transaction is already deleted or no longer exists."
 
             tx_id = tx.get('id')
-            delete_transaction_by_uid(uid=uid)
-            new_bal = get_balance_setting()
+            deleted = delete_transaction_by_uid(uid=uid)
+            if not deleted:
+                return False, "Failed to remove newly added transaction."
+
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE undo_log SET used_at = ? WHERE id = ? AND used_at IS NULL",
+                    (now_iso, rec_id),
+                )
+                conn.commit()
+
+            new_bal = get_balance_setting(workspace_id=rec_ws_id)
             try:
                 from services.backup_service import export_database_to_json
                 export_database_to_json()
@@ -294,6 +349,55 @@ def perform_undo(
 
             return True, (
                 f"↩️ <b>Undo Successful! Removed newly added transaction #{tx_id}.</b>\n\n"
+                f"💰 <b>Updated Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>"
+            )
+
+        elif action == 'edit':
+            tx = get_transaction_by_uid(uid, workspace_id=rec_ws_id) if rec_ws_id else get_transaction_by_uid(uid)
+            if not tx:
+                return False, "Transaction record no longer exists or does not belong to this workspace."
+
+            if ws_id and tx.get('workspace_id') and str(tx['workspace_id']) != str(ws_id):
+                return False, "Cross-workspace undo rejected: transaction does not belong to current workspace."
+
+            snapshot_raw = row['snapshot_json']
+            if not snapshot_raw:
+                return False, "No previous snapshot data found to restore."
+
+            try:
+                snapshot = json.loads(snapshot_raw)
+            except Exception as e:
+                return False, f"Corrupted undo snapshot: {e}"
+
+            from database.queries import update_transaction, recalculate_all_balances
+            updated = update_transaction(tx['id'], snapshot, workspace_id=rec_ws_id)
+            if not updated:
+                return False, "Failed to restore previous transaction values."
+
+            recalculate_all_balances(workspace_id=rec_ws_id)
+            new_bal = get_balance_setting(workspace_id=rec_ws_id)
+
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE undo_log SET used_at = ? WHERE id = ? AND used_at IS NULL",
+                    (now_iso, rec_id),
+                )
+                conn.commit()
+
+            try:
+                from services.backup_service import export_database_to_json
+                export_database_to_json()
+            except (OSError, RuntimeError) as bkp_err:
+                logger.debug(f"Undo backup notice: {bkp_err}")
+
+            tx_id = tx.get('id')
+            amt_s = format_currency(snapshot.get('amount', tx.get('amount', 0)))
+            person_s = snapshot.get('person_name', tx.get('person_name', 'Unknown'))
+            return True, (
+                f"↩️ <b>Undo Successful! Reverted Edit on Transaction #{tx_id}</b>\n\n"
+                f"• <b>Person:</b> {html.escape(str(person_s))}\n"
+                f"• <b>Amount:</b> <b>{html.escape(amt_s)}</b>\n\n"
                 f"💰 <b>Updated Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>"
             )
 

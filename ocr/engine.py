@@ -108,6 +108,16 @@ def extract_text_from_image(image_path: str) -> str:
     multi-pass image enhancement if needed, and pytesseract fallback.
     Returns the extracted text.
     """
+    Image.MAX_IMAGE_PIXELS = 50_000_000
+    try:
+        with Image.open(image_path) as img:
+            w, h = img.size
+            if w * h > 50_000_000:
+                raise ValueError(f"Image too large: {w}x{h}")
+    except (ValueError, OSError) as e:
+        logger.error(f"Image safety check failed on {image_path}: {e}")
+        return ""
+
     # 1. Try RapidOCR first (works cross-platform via ONNX without external binaries)
     engine = get_rapid_ocr_engine()
     if engine is not None:
@@ -141,17 +151,19 @@ def extract_text_from_image(image_path: str) -> str:
                 from ocr.preprocess import preprocess_image_for_ocr
                 proc_path = preprocess_image_for_ocr(ocr_target)
                 if proc_path and proc_path != ocr_target and os.path.exists(proc_path):
-                    res2, _ = engine(proc_path)
                     try:
-                        os.remove(proc_path)
-                    except OSError:
-                        pass
-                    if res2:
-                        lines2 = _sort_rapid_ocr_boxes(res2)
-                        text2 = "\n".join(lines2).strip()
-                        if text2:
-                            logger.info(f"RapidOCR (preprocessed) extracted {len(text2)} chars")
-                            return text2
+                        res2, _ = engine(proc_path)
+                        if res2:
+                            lines2 = _sort_rapid_ocr_boxes(res2)
+                            text2 = "\n".join(lines2).strip()
+                            if text2:
+                                logger.info(f"RapidOCR (preprocessed) extracted {len(text2)} chars")
+                                return text2
+                    finally:
+                        try:
+                            os.remove(proc_path)
+                        except OSError:
+                            pass
             except Exception as prep_err:
                 logger.debug(f"Preprocessing fallback notice: {prep_err}")
 

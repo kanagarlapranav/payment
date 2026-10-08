@@ -666,23 +666,23 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_received = sum(t['amount'] for t in transactions if t['transaction_type'] == 'RECEIVED')
     curr_balance = get_balance_setting(workspace_id=ws_id)
 
-    lines_list = ["📜 *Payment History*\n"]
+    lines_list = ["📜 <b>Payment History</b>\n"]
     for idx, t in enumerate(transactions, 1):
-        date_str = format_display_date(t['transaction_date'])
-        person = t['person_name'] or "Unknown"
+        date_str = html.escape(format_display_date(t['transaction_date']))
+        person = html.escape(t['person_name'] or "Unknown")
         badge = "🔴" if t['transaction_type'] == 'SENT' else "🟢"
-        amt_str = format_currency(t['amount'])
-        bal_str = format_currency(t['balance_after'])
+        amt_str = html.escape(format_currency(t['amount']))
+        bal_str = html.escape(format_currency(t['balance_after']))
 
         lines_list.append(
-            f"*{idx}.* {badge} *{amt_str}* — {person}\n"
-            f"   📅 {date_str} | 💰 Bal: `{bal_str}`\n"
+            f"<b>{idx}.</b> {badge} <b>{amt_str}</b> — {person}\n"
+            f"   📅 {date_str} | 💰 Bal: <code>{bal_str}</code>\n"
         )
 
     lines_list.append("━━━━━━━━━━━━━━━━━━━━")
-    lines_list.append(f"🟢 *Total Received:* {format_currency(total_received)}")
-    lines_list.append(f"🔴 *Total Sent:* {format_currency(total_sent)}")
-    lines_list.append(f"💳 *Current Balance:* *{format_currency(curr_balance)}*")
+    lines_list.append(f"🟢 <b>Total Received:</b> {html.escape(format_currency(total_received))}")
+    lines_list.append(f"🔴 <b>Total Sent:</b> {html.escape(format_currency(total_sent))}")
+    lines_list.append(f"💳 <b>Current Balance:</b> <b>{html.escape(format_currency(curr_balance))}</b>")
 
     text = "\n".join(lines_list)
 
@@ -698,9 +698,9 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if current:
             parts.append(current)
         for part in parts:
-            await update.message.reply_text(part, parse_mode='Markdown')
+            await update.message.reply_text(part, parse_mode='HTML')
     else:
-        await update.message.reply_text(text, parse_mode='Markdown')
+        await update.message.reply_text(text, parse_mode='HTML')
 
 async def last5_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the latest 5 transactions immediately without pagination confusion."""
@@ -725,23 +725,23 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No recent transactions found.", reply_markup=get_standard_nav_keyboard())
         return
         
-    text = "🔍 *Detailed Transactions (With IDs)*\n\n"
+    text = "🔍 <b>Detailed Transactions (With IDs)</b>\n\n"
     for t in transactions:
-        date_str = format_display_date(t['transaction_date'])
-        time_str = f" {t['transaction_time']}" if t['transaction_time'] and t['transaction_time'] != 'N/A' else ""
-        person = t['person_name'] or "Unknown"
-        ref = t['reference_number'] or "N/A"
-        bank = t['bank_name'] or "N/A"
+        date_str = html.escape(format_display_date(t['transaction_date']))
+        time_str = f" {html.escape(t['transaction_time'])}" if t['transaction_time'] and t['transaction_time'] != 'N/A' else ""
+        person = html.escape(t['person_name'] or "Unknown")
+        ref = html.escape(t['reference_number'] or "N/A")
+        bank = html.escape(t['bank_name'] or "N/A")
         type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
         
         text += (
-            f"🆔 *ID: #{t['id']}* | {type_badge}\n"
+            f"🆔 <b>ID: #{t['id']}</b> | {type_badge}\n"
             f"Date: {date_str}{time_str}\n"
             f"👤 Person: {person}\n"
-            f"💵 Amount: {format_currency(t['amount'])}\n"
+            f"💵 Amount: {html.escape(format_currency(t['amount']))}\n"
             f"🏦 Bank: {bank}\n"
-            f"🔢 Ref/UTR: `{ref}`\n"
-            f"💰 Balance: {format_currency(t['balance_after'])}\n\n"
+            f"🔢 Ref/UTR: <code>{ref}</code>\n"
+            f"💰 Balance: {html.escape(format_currency(t['balance_after']))}\n\n"
         )
     
     # Split message if too long for Telegram (4096 char limit)
@@ -758,9 +758,9 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts.append(current)
         for i, part in enumerate(parts):
             markup = get_standard_nav_keyboard() if i == len(parts) - 1 else None
-            await update.message.reply_text(part, reply_markup=markup, parse_mode='Markdown')
+            await update.message.reply_text(part, reply_markup=markup, parse_mode='HTML')
     else:
-        await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
+        await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
 
 async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows transactions for a specific date e.g. /date 05/09/2026 or /date yesterday."""
@@ -772,49 +772,49 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not context.args:
         await update.message.reply_text(
-            "🗓 *Date Search:*\n"
-            "Usage: `/date <date>`\n\n"
+            "🗓 <b>Date Search:</b>\n"
+            "Usage: <code>/date &lt;date&gt;</code>\n\n"
             "Examples:\n"
-            "• `/date yesterday`\n"
-            "• `/date today`\n"
-            "• `/date 05/09/2026`\n"
-            "• `/date 31 Aug 2026`",
+            "• <code>/date yesterday</code>\n"
+            "• <code>/date today</code>\n"
+            "• <code>/date 05/09/2026</code>\n"
+            "• <code>/date 31 Aug 2026</code>",
             reply_markup=get_standard_nav_keyboard(),
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         return
         
     raw_date = " ".join(context.args).strip()
     target_d = parse_date(raw_date)
     if not target_d:
-        await update.message.reply_text("❌ Could not parse date. Example: `/date 05/09/2026` or `/date yesterday`", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
+        await update.message.reply_text("❌ Could not parse date. Example: <code>/date 05/09/2026</code> or <code>/date yesterday</code>", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
         return
         
     txs = search_transactions(target_date=target_d, sort_by="date_desc", workspace_id=ws_id)
     if not txs:
-        await update.message.reply_text(f"No transactions found on *{target_d.strftime('%d %b %Y')}*.", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
+        await update.message.reply_text(f"No transactions found on <b>{html.escape(target_d.strftime('%d %b %Y'))}</b>.", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
         return
         
     total_sent = sum(t['amount'] for t in txs if t['transaction_type'] == 'SENT')
     total_recv = sum(t['amount'] for t in txs if t['transaction_type'] == 'RECEIVED')
     
     text = (
-        f"• *Transactions on {target_d.strftime('%d %b %Y')}*\n"
-        f"Total Sent: {format_currency(total_sent)} | Received: {format_currency(total_recv)}\n\n"
+        f"• <b>Transactions on {html.escape(target_d.strftime('%d %b %Y'))}</b>\n"
+        f"Total Sent: {html.escape(format_currency(total_sent))} | Received: {html.escape(format_currency(total_recv))}\n\n"
     )
     
     for t in txs:
-        time_str = f" | ⏰ {t['transaction_time']}" if t['transaction_time'] and t['transaction_time'] != 'N/A' else ""
-        person = t['person_name'] or "Unknown"
+        time_str = f" | ⏰ {html.escape(t['transaction_time'])}" if t['transaction_time'] and t['transaction_time'] != 'N/A' else ""
+        person = html.escape(t['person_name'] or "Unknown")
         type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
         text += (
             f"• {t['transaction_type']}{time_str}\n"
             f"👤 {person}\n"
-            f"💵 {format_currency(t['amount'])}\n"
-            f"Balance: {format_currency(t['balance_after'])}\n\n"
+            f"💵 {html.escape(format_currency(t['amount']))}\n"
+            f"Balance: {html.escape(format_currency(t['balance_after']))}\n\n"
         )
         
-    await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
+    await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Searches transactions by person name, reference, or keyword."""
@@ -826,14 +826,14 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not context.args:
         await update.message.reply_text(
-            "🔍 *Search Transactions:*\n"
-            "Usage: `/search <name or keyword>`\n\n"
+            "🔍 <b>Search Transactions:</b>\n"
+            "Usage: <code>/search &lt;name or keyword&gt;</code>\n\n"
             "Examples:\n"
-            "• `/search Balaji`\n"
-            "• `/search ICICI`\n"
-            "• `/search 61322762`",
+            "• <code>/search Balaji</code>\n"
+            "• <code>/search ICICI</code>\n"
+            "• <code>/search 61322762</code>",
             reply_markup=get_standard_nav_keyboard(),
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         return
         
@@ -841,24 +841,24 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txs = search_transactions(query_text=query_text, limit=15, workspace_id=ws_id)
     
     if not txs:
-        await update.message.reply_text(f"🔍 No transactions found matching *'{query_text}'*.", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
+        await update.message.reply_text(f"🔍 No transactions found matching <b>'{html.escape(query_text)}'</b>.", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
         return
         
     total_amount = sum(t['amount'] for t in txs)
-    text = f"🔍 *Found {len(txs)} transactions for '{query_text}'* (Total: {format_currency(total_amount)})\n\n"
+    text = f"🔍 <b>Found {len(txs)} transactions for '{html.escape(query_text)}'</b> (Total: {html.escape(format_currency(total_amount))})\n\n"
     
     for t in txs:
-        date_str = format_display_date(t['transaction_date'])
-        time_str = f" | ⏰ {t['transaction_time']}" if t['transaction_time'] and t['transaction_time'] != 'Unknown Time' else ""
-        person = t['person_name'] or "Unknown"
+        date_str = html.escape(format_display_date(t['transaction_date']))
+        time_str = f" | ⏰ {html.escape(t['transaction_time'])}" if t['transaction_time'] and t['transaction_time'] != 'Unknown Time' else ""
+        person = html.escape(t['person_name'] or "Unknown")
         type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
         text += (
-            f"• *{date_str}*{time_str} | {type_badge}\n"
+            f"• <b>{date_str}</b>{time_str} | {type_badge}\n"
             f"👤 {person}\n"
-            f"💵 {format_currency(t['amount'])}\n"
-            f"Balance: {format_currency(t['balance_after'])}\n\n"
+            f"💵 {html.escape(format_currency(t['amount']))}\n"
+            f"Balance: {html.escape(format_currency(t['balance_after']))}\n\n"
         )
-    await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
+    await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
 
 async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Searches all transactions with the specified amount."""
@@ -870,15 +870,15 @@ async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not context.args:
         await update.message.reply_text(
-            "💵 *Search by Amount:*\n"
-            "Usage: `/amount <number>` or simply type the number (e.g. `500` or `5000`)\n\n"
+            "💵 <b>Search by Amount:</b>\n"
+            "Usage: <code>/amount &lt;number&gt;</code> or simply type the number (e.g. <code>500</code> or <code>5000</code>)\n\n"
             "Examples:\n"
-            "• `/amount 500`\n"
-            "• `/amount 5000`\n"
-            "• `/amount 6200`\n"
-            "• `30700`",
+            "• <code>/amount 500</code>\n"
+            "• <code>/amount 5000</code>\n"
+            "• <code>/amount 6200</code>\n"
+            "• <code>30700</code>",
             reply_markup=get_standard_nav_keyboard(),
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         return
         
@@ -886,28 +886,28 @@ async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         amt = float(raw_amt)
     except ValueError:
-        await update.message.reply_text("❌ Invalid amount. Example: `/amount 500` or `/amount 5000`", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
+        await update.message.reply_text("❌ Invalid amount. Example: <code>/amount 500</code> or <code>/amount 5000</code>", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
         return
         
     txs = search_transactions(exact_amount=amt, sort_by="date_desc", workspace_id=ws_id)
     if not txs:
-        await update.message.reply_text(f"💵 No transactions found with amount *{format_currency(amt)}*.", reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
+        await update.message.reply_text(f"💵 No transactions found with amount <b>{html.escape(format_currency(amt))}</b>.", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
         return
         
     total_val = sum(t['amount'] for t in txs)
-    text = f"💵 *Found {len(txs)} transaction(s) of {format_currency(amt)}* (Total: {format_currency(total_val)})\n\n"
+    text = f"💵 <b>Found {len(txs)} transaction(s) of {html.escape(format_currency(amt))}</b> (Total: {html.escape(format_currency(total_val))})\n\n"
     for t in txs:
-        date_str = format_display_date(t['transaction_date'])
-        time_str = f" | ⏰ {t['transaction_time']}" if t['transaction_time'] and t['transaction_time'] != 'Unknown Time' else ""
-        person = t['person_name'] or "Unknown"
+        date_str = html.escape(format_display_date(t['transaction_date']))
+        time_str = f" | ⏰ {html.escape(t['transaction_time'])}" if t['transaction_time'] and t['transaction_time'] != 'Unknown Time' else ""
+        person = html.escape(t['person_name'] or "Unknown")
         type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
         text += (
-            f"• *{date_str}*{time_str} | {type_badge}\n"
+            f"• <b>{date_str}</b>{time_str} | {type_badge}\n"
             f"👤 {person}\n"
-            f"💵 {format_currency(t['amount'])}\n"
-            f"Balance: {format_currency(t['balance_after'])}\n\n"
+            f"💵 {html.escape(format_currency(t['amount']))}\n"
+            f"Balance: {html.escape(format_currency(t['balance_after']))}\n\n"
         )
-    await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='Markdown')
+    await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
 
 
 
@@ -928,7 +928,7 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if arg.isdigit() and 1 <= int(arg) <= 12:
             month = int(arg)
         if len(context.args) > 1 and context.args[1].isdigit():
-            year = int(context.args[1])
+            year = max(2000, min(2100, int(context.args[1])))
             
     stats = get_monthly_summary(year, month, workspace_id=ws_id)
     from datetime import date
@@ -936,28 +936,31 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     top_p_text = "N/A"
     if stats['top_recipient']:
-        top_p_text = f"{stats['top_recipient']['person_name']} ({format_currency(stats['top_recipient']['total'])})"
+        top_p_text = f"{html.escape(stats['top_recipient']['person_name'])} ({html.escape(format_currency(stats['top_recipient']['total']))})"
         
     text = (
-        f"📊 *Monthly Analytics - {month_name}*\n\n"
-        f"🔴 Total Sent: {format_currency(stats['total_sent'])}\n"
-        f"🟢 Total Received: {format_currency(stats['total_received'])}\n"
-        f"📈 Net Flow: {format_currency(stats['net_savings'])}\n\n"
+        f"📊 <b>Monthly Analytics - {html.escape(month_name)}</b>\n\n"
+        f"🔴 Total Sent: {html.escape(format_currency(stats['total_sent']))}\n"
+        f"🟢 Total Received: {html.escape(format_currency(stats['total_received']))}\n"
+        f"📈 Net Flow: {html.escape(format_currency(stats['net_savings']))}\n\n"
         f"🔢 Total Transactions: {stats['tx_count']}\n"
         f"🏆 Top Recipient: {top_p_text}"
     )
     from bot.keyboards import get_stats_keyboard
-    await update.message.reply_text(text, reply_markup=get_stats_keyboard(), parse_mode='Markdown')
+    await update.message.reply_text(text, reply_markup=get_stats_keyboard(), parse_mode='HTML')
 
 async def filter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Opens the interactive filter menu."""
     if not await require_authorized(update): return
     from bot.keyboards import get_filter_keyboard
-    await update.message.reply_text("🎛️ *Filter & Sort Transactions:*\n\nChoose an option below:", reply_markup=get_filter_keyboard(), parse_mode='Markdown')
+    await update.message.reply_text("🎛️ <b>Filter & Sort Transactions:</b>\n\nChoose an option below:", reply_markup=get_filter_keyboard(), parse_mode='HTML')
 
 async def sort_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Opens sorting options or performs sorting directly by money / date args."""
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
     from bot.keyboards import get_sort_keyboard
     
     # If user provided argument e.g. /sort high, /sort low, /sort amount, /sort money
@@ -976,27 +979,27 @@ async def sort_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sort_by = 'date_desc'
             title = "🗓️ Date (Newest First)"
             
-        txs = search_transactions(sort_by=sort_by, limit=10)
+        txs = search_transactions(sort_by=sort_by, limit=10, workspace_id=ws_id)
         if not txs:
             await update.message.reply_text("No transactions found.")
             return
             
-        text = f"🔀 *Sorted by: {title}*\n\n"
+        text = f"🔀 <b>Sorted by: {html.escape(title)}</b>\n\n"
         for t in txs:
-            date_s = format_display_date(t['transaction_date'])
-            time_str = f" | ⏰ {t['transaction_time']}" if t['transaction_time'] and t['transaction_time'] != 'Unknown Time' else ""
-            person = t['person_name'] or "Unknown"
+            date_s = html.escape(format_display_date(t['transaction_date']))
+            time_str = f" | ⏰ {html.escape(t['transaction_time'])}" if t['transaction_time'] and t['transaction_time'] != 'Unknown Time' else ""
+            person = html.escape(t['person_name'] or "Unknown")
             type_badge = "🔴 SENT" if t['transaction_type'] == 'SENT' else "🟢 RECEIVED"
             text += (
-                f"• *{date_s}*{time_str} | {type_badge}\n"
+                f"• <b>{date_s}</b>{time_str} | {type_badge}\n"
                 f"👤 {person}\n"
-                f"💵 {format_currency(t['amount'])}\n"
-                f"Balance: {format_currency(t['balance_after'])}\n\n"
+                f"💵 {html.escape(format_currency(t['amount']))}\n"
+                f"Balance: {html.escape(format_currency(t['balance_after']))}\n\n"
             )
-        await update.message.reply_text(text, reply_markup=get_sort_keyboard(), parse_mode='Markdown')
+        await update.message.reply_text(text, reply_markup=get_sort_keyboard(), parse_mode='HTML')
         return
 
-    await update.message.reply_text("🔀 *Sort Transactions by Money or Date:*\n\nChoose an option below:", reply_markup=get_sort_keyboard(), parse_mode='Markdown')
+    await update.message.reply_text("🔀 <b>Sort Transactions by Money or Date:</b>\n\nChoose an option below:", reply_markup=get_sort_keyboard(), parse_mode='HTML')
 
 
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1049,7 +1052,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         raw_num = int(context.args[0].replace('#', ''))
     except ValueError:
-        await update.message.reply_text("❌ Invalid ID format. Example: `/edit 3` or `/edit 1`", parse_mode='Markdown')
+        await update.message.reply_text("❌ Invalid ID format. Example: <code>/edit 3</code> or <code>/edit 1</code>", parse_mode='HTML')
         return
 
     import asyncio
@@ -1057,7 +1060,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     tx = get_transaction_by_id(raw_num, workspace_id=ws_id)
     if not tx:
-        await update.message.reply_text("❌ Transaction not found.", parse_mode='Markdown')
+        await update.message.reply_text("❌ Transaction not found.", parse_mode='HTML')
         return
     tx_id = tx['id']
 
@@ -1072,17 +1075,17 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 2. Only ID provided: show edit field buttons
     if len(context.args) == 1:
-        date_str = format_display_date(tx['transaction_date'])
-        person = tx['person_name'] or "Unknown"
+        date_str = html.escape(format_display_date(tx['transaction_date']))
+        person = html.escape(tx['person_name'] or "Unknown")
         text = (
-            f"✏️ *Editing Transaction #{tx_id}*\n\n"
-            f"Type: {tx['transaction_type']}\n"
-            f"Amount: {format_currency(tx['amount'])}\n"
+            f"✏️ <b>Editing Transaction #{tx_id}</b>\n\n"
+            f"Type: {html.escape(str(tx['transaction_type']))}\n"
+            f"Amount: {html.escape(format_currency(tx['amount']))}\n"
             f"Person: {person}\n"
             f"Date: {date_str}\n\n"
             "Select what you would like to edit:"
         )
-        await update.message.reply_text(text, reply_markup=get_edit_fields_keyboard(tx_id), parse_mode='Markdown')
+        await update.message.reply_text(text, reply_markup=get_edit_fields_keyboard(tx_id), parse_mode='HTML')
         return
 
     # 3. Full command provided: /edit <id> <field> <value>
@@ -1120,7 +1123,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             updates['transaction_type'] = new_type
             needs_recalc = True
         except ValueError as err:
-            await update.message.reply_text(f"❌ Invalid type: {err}. Must be `SENT` or `RECEIVED`.", parse_mode='Markdown')
+            await update.message.reply_text(f"❌ Invalid type: {html.escape(str(err))}. Must be <code>SENT</code> or <code>RECEIVED</code>.", parse_mode='HTML')
             return
     elif field in ('date', 'transaction_date'):
         parsed_d = parse_date(value_raw)
@@ -1137,36 +1140,38 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Invalid reference: {err}")
             return
     else:
-        await update.message.reply_text(f"❌ Unknown field `{field}`. Supported: `amount`, `person`, `type`, `date`, `ref`.", parse_mode='Markdown')
+        await update.message.reply_text(f"❌ Unknown field <code>{html.escape(field)}</code>. Supported: <code>amount</code>, <code>person</code>, <code>type</code>, <code>date</code>, <code>ref</code>.", parse_mode='HTML')
         return
 
     from services.undo_service import record_edit_action
-    record_edit_action(tx)
+    c_id = update.effective_chat.id if update.effective_chat else None
+    u_id = update.effective_user.id if update.effective_user else None
+    record_edit_action(tx, chat_id=c_id, user_id=u_id, workspace_id=ws_id)
 
-    success = update_transaction(tx_id, updates)
+    success = update_transaction(tx_id, updates, workspace_id=ws_id)
     if success:
         if needs_recalc:
-            new_bal = recalculate_all_balances()
+            new_bal = recalculate_all_balances(workspace_id=ws_id)
         else:
-            new_bal = get_balance_setting()
+            new_bal = get_balance_setting(workspace_id=ws_id)
 
-        updated_tx = get_transaction_by_id(tx_id)
-        person = (updated_tx['person_name'] if updated_tx else '') or "Unknown"
-        amt_s = format_currency(updated_tx['amount']) if updated_tx else ''
+        updated_tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
+        person = html.escape((updated_tx['person_name'] if updated_tx else '') or "Unknown")
+        amt_s = html.escape(format_currency(updated_tx['amount'])) if updated_tx else ''
         bal_flow = ""
         if updated_tx and 'balance_before' in updated_tx and 'balance_after' in updated_tx:
-            bal_flow = f"\n💰 *Balance Flow:* {format_currency(updated_tx['balance_before'])} ➔ *{format_currency(updated_tx['balance_after'])}"
+            bal_flow = f"\n💰 <b>Balance Flow:</b> {html.escape(format_currency(updated_tx['balance_before']))} ➔ <b>{html.escape(format_currency(updated_tx['balance_after']))}</b>"
 
         from bot.keyboards import get_undo_keyboard
         from services.task_manager import schedule_debounced_backup
         schedule_debounced_backup(context.bot)
         await update.message.reply_text(
-            f"✅ *Transaction #{tx_id} Updated*\n\n"
-            f"👤 *Person:* {person}\n"
-            f"💵 *Amount:* *{amt_s}*{bal_flow}\n\n"
-            f"💳 *Current Balance:* *{format_currency(new_bal)}*",
+            f"✅ <b>Transaction #{tx_id} Updated</b>\n\n"
+            f"👤 <b>Person:</b> {person}\n"
+            f"💵 <b>Amount:</b> <b>{amt_s}</b>{bal_flow}\n\n"
+            f"💳 <b>Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>",
             reply_markup=get_undo_keyboard(),
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     else:
         await update.message.reply_text("❌ Failed to update transaction.")
@@ -1203,30 +1208,32 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         tx_list_lines = []
         for idx, t in enumerate(transactions, 1):
-            date_s = format_display_date(t['transaction_date'])
+            date_s = html.escape(format_display_date(t['transaction_date']))
             badge = "🟢" if t['transaction_type'] == 'RECEIVED' else "🔴"
-            tx_list_lines.append(f"*{t['id']}.* {badge} {t['person_name'] or 'Unknown'} — *{format_currency(t['amount'])}* ({date_s})")
+            p_name = html.escape(t['person_name'] or 'Unknown')
+            amt_s = html.escape(format_currency(t['amount']))
+            tx_list_lines.append(f"<b>{t['id']}.</b> {badge} {p_name} — <b>{amt_s}</b> ({date_s})")
 
         list_text = "\n".join(tx_list_lines)
-        header_text = "🗑️ *Delete Transaction*" if role in ('owner', 'admin') else "🗑️ *Delete Your Transaction*"
+        header_text = "🗑️ <b>Delete Transaction</b>" if role in ('owner', 'admin') else "🗑️ <b>Delete Your Transaction</b>"
         await update.message.reply_text(
             f"{header_text}\n\n"
-            f"Tap a button below, or reply with the transaction ID (e.g. `1`):\n\n"
+            f"Tap a button below, or reply with the transaction ID (e.g. <code>1</code>):\n\n"
             f"{list_text}",
             reply_markup=get_transaction_selection_keyboard(transactions, 'select_delete'),
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         return
 
     try:
         raw_num = int(context.args[0].replace('#', ''))
     except ValueError:
-        await update.message.reply_text("❌ Invalid ID format. Example: `/delete 3` or `/delete 1`", parse_mode='Markdown')
+        await update.message.reply_text("❌ Invalid ID format. Example: <code>/delete 3</code> or <code>/delete 1</code>", parse_mode='HTML')
         return
 
     tx = get_transaction_by_id(raw_num, workspace_id=ws_id)
     if not tx:
-        await update.message.reply_text("❌ Transaction not found.", parse_mode='Markdown')
+        await update.message.reply_text("❌ Transaction not found.", parse_mode='HTML')
         return
     tx_id = tx['id']
 
@@ -1240,17 +1247,17 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Show confirmation keyboard
-    date_str = format_display_date(tx['transaction_date'])
-    person = tx['person_name'] or "Unknown"
+    date_str = html.escape(format_display_date(tx['transaction_date']))
+    person = html.escape(tx['person_name'] or "Unknown")
     text = (
-        f"🗑️ *Delete Transaction #{tx_id}*\n\n"
-        f"Type: {tx['transaction_type']}\n"
-        f"Amount: {format_currency(tx['amount'])}\n"
+        f"🗑️ <b>Delete Transaction #{tx_id}</b>\n\n"
+        f"Type: {html.escape(str(tx['transaction_type']))}\n"
+        f"Amount: {html.escape(format_currency(tx['amount']))}\n"
         f"Person: {person}\n"
         f"Date: {date_str}\n\n"
         "Are you sure you want to delete this transaction?"
     )
-    await update.message.reply_text(text, reply_markup=get_delete_confirm_keyboard(tx_id), parse_mode='Markdown')
+    await update.message.reply_text(text, reply_markup=get_delete_confirm_keyboard(tx_id), parse_mode='HTML')
 
 async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.auth import require_owner
@@ -1279,17 +1286,14 @@ async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def send_pdf_report(chat, bot, workspace_id: str = None):
+    import uuid
     from services.export_service import generate_pdf_statement
     from services.gdrive_service import is_gdrive_available, upload_statement_to_drive
-    from services.task_manager import create_tracked_task
-    export_path = DATA_DIR / f"Payment_Tracker_Statement_{chat.id}.pdf"
+    export_path = DATA_DIR / f"Payment_Tracker_Statement_{chat.id}_{uuid.uuid4().hex[:8]}.pdf"
     try:
         await asyncio.to_thread(generate_pdf_statement, str(export_path), workspace_id=workspace_id)
         if is_gdrive_available():
-            create_tracked_task(
-                asyncio.to_thread(upload_statement_to_drive, str(export_path)),
-                name="gdrive_pdf_statement_upload"
-            )
+            await asyncio.to_thread(upload_statement_to_drive, str(export_path))
         with open(export_path, 'rb') as f:
             await bot.send_document(
                 chat_id=chat.id,
@@ -1307,17 +1311,14 @@ async def send_pdf_report(chat, bot, workspace_id: str = None):
             except OSError: pass
 
 async def send_excel_report(chat, bot, workspace_id: str = None):
+    import uuid
     from services.export_service import generate_excel_report
     from services.gdrive_service import is_gdrive_available, upload_statement_to_drive
-    from services.task_manager import create_tracked_task
-    export_path = DATA_DIR / f"transactions_export_{chat.id}.xlsx"
+    export_path = DATA_DIR / f"transactions_export_{chat.id}_{uuid.uuid4().hex[:8]}.xlsx"
     try:
         await asyncio.to_thread(generate_excel_report, str(export_path), workspace_id=workspace_id)
         if is_gdrive_available():
-            create_tracked_task(
-                asyncio.to_thread(upload_statement_to_drive, str(export_path)),
-                name="gdrive_excel_report_upload"
-            )
+            await asyncio.to_thread(upload_statement_to_drive, str(export_path))
         with open(export_path, 'rb') as f:
             await bot.send_document(
                 chat_id=chat.id,
@@ -1368,8 +1369,10 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates AI spending insights and category analytics (Admin only)."""
-    from bot.auth import require_admin
+    from bot.auth import require_admin, get_workspace_context
     if not await require_admin(update): return
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
     from services.category_service import format_spending_insights
     from bot.keyboards import get_insights_keyboard
     from datetime import datetime
@@ -1383,9 +1386,9 @@ async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if arg.isdigit() and 1 <= int(arg) <= 12:
             month = int(arg)
         if len(context.args) > 1 and context.args[1].isdigit():
-            year = int(context.args[1])
+            year = max(2000, min(2100, int(context.args[1])))
             
-    text = format_spending_insights(year, month)
+    text = format_spending_insights(year, month, workspace_id=ws_id)
     await update.message.reply_text(text, reply_markup=get_insights_keyboard(), parse_mode='HTML')
 
 async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1407,7 +1410,7 @@ async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if arg.isdigit() and 1 <= int(arg) <= 12:
             month = int(arg)
         if len(context.args) > 1 and context.args[1].isdigit():
-            year = int(context.args[1])
+            year = max(2000, min(2100, int(context.args[1])))
             
     text = format_budget_status(year, month, workspace_id=ws_id)
     await update.message.reply_text(text, reply_markup=get_budget_keyboard(), parse_mode='HTML')
@@ -1450,6 +1453,9 @@ async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates the daily financial closing digest on demand."""
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
     from services.scheduler_service import format_daily_digest
     from bot.keyboards import get_digest_keyboard
     
@@ -1461,7 +1467,7 @@ async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if parsed:
             target_date = parsed.strftime("%Y-%m-%d")
             
-    digest_text = format_daily_digest(target_date)
+    digest_text = format_daily_digest(target_date, workspace_id=ws_id)
     await update.message.reply_text(digest_text, reply_markup=get_digest_keyboard(), parse_mode='HTML')
 
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1740,6 +1746,11 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     is_confirmed = bool(context.args and context.args[0].lower() in ('confirm', 'yes', 'force'))
+
+    if is_confirmed:
+        from bot.auth import require_owner
+        if not await require_owner(update):
+            return
 
     if not is_confirmed:
         preview = preview_database_import(BACKUP_JSON_PATH)
@@ -2068,6 +2079,13 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = context.args[-1].strip()
         target_ws = get_workspace_by_id(target_id)
         if target_ws:
+            from database.queries import get_workspace_member
+            from bot.auth import is_super_admin, is_owner
+            m = get_workspace_member(target_ws.id, user_id)
+            is_global_owner = is_super_admin(user_id) or is_owner(update)
+            if not is_global_owner and not (m and m.is_active and getattr(m, 'status', 'active') == 'active'):
+                await update.message.reply_text("⛔ <b>Access Denied:</b> You are not an active member of that workspace.", parse_mode='HTML')
+                return
             set_user_active_workspace(user_id, target_ws.id)
             await update.message.reply_text(
                 f"✅ Switched active workspace to: <b>{html.escape(target_ws.title or 'Workspace')}</b>\n\n"
@@ -2222,13 +2240,13 @@ async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Update both current workspace and global user profile
         update_workspace_member_role(ctx.workspace_id, target_uid, new_role)
-        set_user_permission_and_role(target_uid, new_role, is_active=True)
+        set_user_permission_and_role(target_uid, new_role, is_active=True, workspace_id=ctx.workspace_id)
         from services.task_manager import schedule_debounced_backup
         schedule_debounced_backup(context.bot)
         target_display = target_display or str(target_uid)
         await update.message.reply_text(
             f"✅ Role updated: <b>{html.escape(str(target_display))}</b> is now <b>{new_role.upper()}</b> in this workspace.\n\n"
-            f"<i>Permissions have been updated across this workspace and active ledgers.</i>",
+            f"<i>Permissions have been updated for this workspace.</i>",
             parse_mode='HTML'
         )
     except Exception as err:
@@ -2302,7 +2320,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         update_workspace_member_role(ctx.workspace_id, target_uid, 'admin')
-        set_user_permission_and_role(target_uid, 'admin', is_active=True)
+        set_user_permission_and_role(target_uid, 'admin', is_active=True, workspace_id=ctx.workspace_id)
         from services.task_manager import schedule_debounced_backup
         schedule_debounced_backup(context.bot)
         target_display = target_display or str(target_uid)

@@ -157,25 +157,34 @@ def validate_and_redeem_invite(
                 return False, "⏳ This invite token has expired.", None, None
 
             if uses_count >= max_uses:
-                return False, "⚠️ This invite has already reached its maximum usage limit.", None, None
+                return False, "❌ This invite has reached its maximum usage limit.", None, None
 
-            # Check if user is already a member
+            # Check if user is already an active member before consuming
             cursor.execute("""
                 SELECT role, is_active, status FROM workspace_members
                 WHERE workspace_id = ? AND telegram_user_id = ?
             """, (ws_id, int(user_id)))
             mem_row = cursor.fetchone()
 
+            if mem_row and mem_row['is_active'] and mem_row['status'] == 'active':
+                return False, f"ℹ️ You are already an active member of <b>{ws_title}</b>.", ws_id, mem_row['role']
+
+            # Atomic conditional consumption of invite
+            cursor.execute("""
+                UPDATE workspace_invites
+                SET uses_count = uses_count + 1
+                WHERE id = ? AND uses_count < max_uses AND revoked_at IS NULL AND ? <= expires_at
+            """, (invite_id, now_utc))
+            if cursor.rowcount != 1:
+                return False, "❌ This invite has reached its maximum usage limit, expired, or was revoked.", None, None
+
             if mem_row:
-                if mem_row['is_active'] and mem_row['status'] == 'active':
-                    return False, f"ℹ️ You are already an active member of <b>{ws_title}</b>.", ws_id, mem_row['role']
-                else:
-                    # Reactivate suspended/inactive member with the invite's role
-                    cursor.execute("""
-                        UPDATE workspace_members
-                        SET role = ?, is_active = 1, status = 'active', updated_at = ?
-                        WHERE workspace_id = ? AND telegram_user_id = ?
-                    """, (role, now_utc, ws_id, int(user_id)))
+                # Reactivate suspended/inactive member with the invite's role
+                cursor.execute("""
+                    UPDATE workspace_members
+                    SET role = ?, is_active = 1, status = 'active', updated_at = ?
+                    WHERE workspace_id = ? AND telegram_user_id = ?
+                """, (role, now_utc, ws_id, int(user_id)))
             else:
                 # Add new active member
                 cursor.execute("""
@@ -185,12 +194,6 @@ def validate_and_redeem_invite(
                     ) VALUES (?, ?, ?, ?, ?, 1, 'active', ?, ?)
                 """, (ws_id, int(user_id), username, display_name or str(user_id), role, now_utc, now_utc))
 
-            # Increment invite use count
-            cursor.execute("""
-                UPDATE workspace_invites
-                SET uses_count = uses_count + 1
-                WHERE id = ?
-            """, (invite_id,))
             conn.commit()
 
     from services.audit_service import log_audit_event

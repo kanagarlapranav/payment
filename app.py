@@ -266,8 +266,8 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-        if path in ('/healthz', '/health', '/', '/dashboard'):
+        norm_path = parsed.path.rstrip('/') or '/'
+        if norm_path in ('/healthz', '/health', '/healthcheck', '/ping', '/', '/dashboard'):
             self._send_security_headers(200, 'text/plain; charset=utf-8')
         else:
             self._send_security_headers(404, 'text/plain; charset=utf-8')
@@ -279,10 +279,12 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
         )
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+        norm_path = path.rstrip('/') or '/'
         query_params = urllib.parse.parse_qs(parsed.query)
 
         # 1. Lightweight health check endpoint for uptime monitors
-        if path in ('/healthz', '/health'):
+        user_agent = (self.headers.get('User-Agent') or '').lower()
+        if norm_path in ('/healthz', '/health', '/healthcheck', '/ping') or (norm_path == '/' and any(m in user_agent for m in ('uptimerobot', 'monitor', 'pingdom', 'statuscake', 'betteruptime', 'uptime'))):
             self._send_security_headers(200, 'text/plain; charset=utf-8')
             self.wfile.write(b"OK")
             return
@@ -574,6 +576,12 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
             output = io.StringIO()
             writer = csv.writer(output)
             writer.writerow(['ID', 'Date', 'Time', 'Type', 'Amount (INR)', 'Payee / Person', 'Category', 'Bank / App', 'Reference / UTR', 'Balance After'])
+            def _esc(val):
+                s = str(val or '')
+                if s and s[0] in ('=', '+', '-', '@', '\t', '\r'):
+                    return f"'{s}"
+                return s
+
             for t in txs:
                 writer.writerow([
                     t['id'],
@@ -581,10 +589,10 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                     t['transaction_time'] or '',
                     t['transaction_type'],
                     f"{t['amount']:.2f}",
-                    t['person_name'] or '',
-                    t['category'] or 'General',
-                    t['bank_name'] or t['payment_app'] or '',
-                    t['reference_number'] or '',
+                    _esc(t['person_name']),
+                    _esc(t['category'] or 'General'),
+                    _esc(t['bank_name'] or t['payment_app'] or ''),
+                    _esc(t['reference_number'] or ''),
                     f"{t['balance_after']:.2f}"
                 ])
 

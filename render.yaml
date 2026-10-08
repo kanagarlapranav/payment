@@ -1,11 +1,20 @@
+# Render Deployment Blueprint for Payment Tracker
+# NOTE: Free plan instances on Render use ephemeral disks that reset on redeploy or inactivity spin-down.
+# Payment Tracker handles this automatically by pulling the latest verified cloud backup on cold start.
+# For guaranteed zero-latency persistence, upgrade to 'starter' plan and attach a persistent disk.
 services:
   - type: web
     name: payment-tracker-bot
     env: python
-    plan: free
+    plan: free # Change to 'starter' if persistent disk is attached below
     buildCommand: pip install -r requirements.txt
     startCommand: python app.py
     autoDeploy: true
+    # To attach a persistent disk on Render (requires Starter plan):
+    # disk:
+    #   name: payment-tracker-data
+    #   mountPath: /data
+    #   sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.14

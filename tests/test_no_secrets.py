@@ -19,6 +19,8 @@ class TestNoSecrets(unittest.TestCase):
     ALLOWED_TEST_TOKENS = {
         "123456789:AAFakePlaceholderBotTokenForTesting35",
         "AIzaSyFakePlaceholderGeminiApiKeyForTesting35",
+        "123456789:AA" + "0" * 33,
+        "AIza" + "0" * 35,
     }
 
     def test_no_secrets_in_tracked_files(self):
@@ -72,36 +74,57 @@ class TestNoSecrets(unittest.TestCase):
             f"Sensitive credentials detected in tracked files:\n" + "\n".join(violations)
         )
 
+    def test_no_production_data_or_unprotected_backups_tracked(self):
+        """P0-1/P0-N10: Verifies no raw SQLite databases or sensitive backup files are tracked in git."""
+        try:
+            tracked_files = subprocess.check_output(['git', 'ls-files'], text=True).splitlines()
+        except Exception:
+            return
+
+        forbidden_data_files = []
+        for path in tracked_files:
+            norm = path.replace("\\", "/")
+            if norm.startswith("data/") and norm not in ("data/images/.gitkeep", "data/seed_backup.json"):
+                forbidden_data_files.append(norm)
+
+        self.assertEqual(
+            forbidden_data_files,
+            [],
+            f"Sensitive production data or backup files tracked in git: {forbidden_data_files}"
+        )
+
     def test_log_filter_masks_telegram_token(self):
         """Verifies that SensitiveDataFilter masks Telegram bot tokens in log messages and args."""
         log_filter = SensitiveDataFilter()
+        dummy_token = "123456789:AA" + ("0" * 33)
         record = logging.LogRecord(
             name="test_logger",
             level=logging.INFO,
             pathname=__file__,
             lineno=10,
-            msg="Sending request to bot with token 8863268724:AAFcDfpdgTXas2E6OnNIQj9mRIwRzQ8WV94 now",
+            msg=f"Sending request to bot with token {dummy_token} now",
             args=(),
             exc_info=None
         )
         self.assertTrue(log_filter.filter(record))
-        self.assertNotIn("8863268724:AAFcDfpdgTXas2E6OnNIQj9mRIwRzQ8WV94", record.msg)
+        self.assertNotIn(dummy_token, record.msg)
         self.assertIn("[REDACTED_TELEGRAM_TOKEN]", record.msg)
 
     def test_log_filter_masks_aiza_key(self):
         """Verifies that SensitiveDataFilter masks AIza keys in log messages and args."""
         log_filter = SensitiveDataFilter()
+        dummy_key = "AIza" + ("0" * 35)
         record = logging.LogRecord(
             name="test_logger",
             level=logging.INFO,
             pathname=__file__,
             lineno=20,
             msg="Gemini key is %s",
-            args=("AIzaSyBxSq2mRHzoayVdItKrQqTC-4UIGqXiU8E",),
+            args=(dummy_key,),
             exc_info=None
         )
         self.assertTrue(log_filter.filter(record))
-        self.assertNotIn("AIzaSyBxSq2mRHzoayVdItKrQqTC-4UIGqXiU8E", str(record.args))
+        self.assertNotIn(dummy_key, str(record.args))
         self.assertIn("[REDACTED_API_KEY]", str(record.args))
 
     def test_get_effective_gemini_api_key_rejects_disabled(self):
