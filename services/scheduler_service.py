@@ -173,10 +173,10 @@ async def send_daily_digest_with_retry(bot, target_chat_id: int | str, target_da
     return False
 
 
-def claim_workspace_job(workspace_id: str, job_name: str, scheduled_date: str) -> bool:
+def claim_workspace_job(workspace_id: str, job_name: str, scheduled_date: str, lease_timeout_seconds: int = 900) -> bool:
     """
     Attempts to claim execution of a scheduled job for a workspace on a specific date.
-    Returns True if claimed, False if already completed or in progress.
+    Returns True if claimed, False if already completed or active running lease exists.
     """
     now_utc = utc_now_iso()
     try:
@@ -184,19 +184,41 @@ def claim_workspace_job(workspace_id: str, job_name: str, scheduled_date: str) -
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT status FROM workspace_job_runs
+                    SELECT status, executed_at FROM workspace_job_runs
                     WHERE workspace_id = ? AND job_name = ? AND scheduled_date = ?
                 """, (str(workspace_id), str(job_name), str(scheduled_date)))
                 row = cursor.fetchone()
-                if row and row['status'] == 'completed':
-                    return False
+                if row:
+                    if row['status'] == 'completed':
+                        return False
+                    if row['status'] == 'running':
+                        exec_at = row['executed_at']
+                        is_expired = False
+                        try:
+                            from utils.dates import parse_utc_iso
+                            dt = parse_utc_iso(exec_at)
+                            if dt and (datetime.now(timezone.utc) - dt).total_seconds() > lease_timeout_seconds:
+                                is_expired = True
+                        except Exception:
+                            is_expired = True
+                        if not is_expired:
+                            return False
+
+                    cursor.execute("""
+                        UPDATE workspace_job_runs
+                        SET status = 'running', executed_at = ?
+                        WHERE workspace_id = ? AND job_name = ? AND scheduled_date = ?
+                    """, (now_utc, str(workspace_id), str(job_name), str(scheduled_date)))
+                    conn.commit()
+                    return True
+
                 cursor.execute("""
-                    INSERT OR REPLACE INTO workspace_job_runs (
+                    INSERT INTO workspace_job_runs (
                         workspace_id, job_name, scheduled_date, status, executed_at
                     ) VALUES (?, ?, ?, 'running', ?)
                 """, (str(workspace_id), str(job_name), str(scheduled_date), now_utc))
                 conn.commit()
-        return True
+                return True
     except Exception as e:
         logger.warning(f"Failed to claim job {job_name} for workspace {workspace_id}: {e}")
         return False

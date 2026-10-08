@@ -7,6 +7,15 @@ _OCR_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name
 _OCR_PIPELINE_TIMEOUT = 30.0
 
 
+def _reset_ocr_executor():
+    global _OCR_EXECUTOR
+    try:
+        _OCR_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+    except Exception as e:
+        logger.warning(f"Error shutting down hung OCR executor: {e}")
+    _OCR_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocr_worker")
+
+
 async def perform_ocr_async(image_path: str, timeout: float = _OCR_PIPELINE_TIMEOUT, engine_fn=None) -> str:
     fn = engine_fn or extract_text_from_image
     loop = asyncio.get_running_loop()
@@ -22,7 +31,8 @@ async def perform_ocr_async(image_path: str, timeout: float = _OCR_PIPELINE_TIME
         logger.warning("OCR returned no text from the image.")
         return ""
     except asyncio.TimeoutError:
-        logger.warning(f"OCR pipeline timed out after {timeout}s on {image_path}")
+        logger.warning(f"OCR pipeline timed out after {timeout}s on {image_path}. Resetting executor pool.")
+        _reset_ocr_executor()
         return ""
     except Exception as e:
         logger.error(f"OCR pipeline error on {image_path}: {e}")
@@ -45,7 +55,8 @@ def perform_ocr(image_path: str, timeout: float = _OCR_PIPELINE_TIMEOUT, engine_
         logger.warning("OCR returned no text from the image.")
         return ""
     except concurrent.futures.TimeoutError:
-        logger.warning(f"OCR pipeline timed out after {timeout}s on {image_path}")
+        logger.warning(f"OCR pipeline timed out after {timeout}s on {image_path}. Resetting executor pool.")
+        _reset_ocr_executor()
         return ""
     except Exception as e:
         logger.error(f"OCR pipeline error on {image_path}: {e}")

@@ -30,6 +30,8 @@ os.environ["BACKUP_JSON_PATH"] = str(_TEST_BACKUP_PATH)
 os.environ["LOG_DIR"] = str(_TEST_LOG_DIR)
 os.environ["TELEGRAM_USER_ID"] = "123456789"
 os.environ["TELEGRAM_GROUP_ID"] = "-100123456789"
+os.environ["GEMINI_API_KEY"] = ""
+os.environ["GDRIVE_BACKUP_ENABLED"] = "false"
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 prod_dir = (BASE_DIR / "data").resolve()

@@ -83,8 +83,9 @@ class AmazonPayParser(GenericParser):
     def _normalize_line(self, line: str) -> str:
         """Normalize OCR artifacts in a line for better matching."""
         s = line.strip()
-        # Fix leading OCR green checkmark artifacts: "O Paid" -> "Paid", "O400" -> "400", "O 400" -> "400"
-        s = re.sub(r'^[OoQq0]\s*(?=[A-Za-z]|\d)', '', s)
+        # Fix leading OCR green checkmark artifacts: "O Paid" -> "Paid", "O 400" -> "400"
+        if not re.match(r'(?i)^(oct|0ct)', s):
+            s = re.sub(r'^[OoQq0]\s+(?=[A-Z][a-z]+|\d)', '', s)
         s = re.sub(r'(?i)(paid|payment)(successfully|successful)', r'\1 \2', s)
         return s
 

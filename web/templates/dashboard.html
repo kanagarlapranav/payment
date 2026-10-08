@@ -477,6 +477,12 @@
             border: 1px solid rgba(239, 68, 68, 0.3);
         }
 
+        .pill-transfer {
+            background: rgba(59, 130, 246, 0.15);
+            color: var(--accent-blue);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
         .pill-category {
             background: rgba(139, 92, 246, 0.15);
             color: #c084fc;
@@ -673,6 +679,7 @@
                         <button class="chip active" id="chip-all" onclick="setTypeFilter('ALL')">All</button>
                         <button class="chip" id="chip-sent" onclick="setTypeFilter('SENT')">🔴 Sent</button>
                         <button class="chip" id="chip-recv" onclick="setTypeFilter('RECEIVED')">🟢 Recv</button>
+                        <button class="chip" id="chip-transfer" onclick="setTypeFilter('TRANSFER')">🔄 Transfer</button>
                     </div>
                     <a href="#" class="csv-btn" id="csv-export-link" onclick="downloadCSV()">📥 CSV</a>
                 </div>
@@ -695,6 +702,13 @@
                         <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 20px;">Loading transactions...</td></tr>
                     </tbody>
                 </table>
+            </div>
+            <div class="pagination-bar" id="pagination-bar" style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-card); font-size: 13px; color: var(--text-muted);">
+                <div id="pagination-info">Showing page <span id="current-page-num">1</span> of <span id="total-pages-num">1</span></div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="chip" id="btn-prev-page" onclick="changeTxPage(-1)">◀ Prev</button>
+                    <button class="chip" id="btn-next-page" onclick="changeTxPage(1)">Next ▶</button>
+                </div>
             </div>
         </div>
 
@@ -1058,19 +1072,63 @@
             });
         }
 
+        let currentTxPage = 1;
+        let totalTxPages = 1;
+        const txPageSize = 50;
+
         function setTypeFilter(type) {
             currentTypeFilter = type;
             document.getElementById('chip-all').classList.toggle('active', type === 'ALL');
             document.getElementById('chip-sent').classList.toggle('active', type === 'SENT');
             document.getElementById('chip-recv').classList.toggle('active', type === 'RECEIVED');
+            const chipTrans = document.getElementById('chip-transfer');
+            if (chipTrans) chipTrans.classList.toggle('active', type === 'TRANSFER');
+            currentTxPage = 1;
             filterTransactions();
+        }
+
+        function updatePaginationUI(curr, total) {
+            const pageNum = document.getElementById('current-page-num');
+            const totalNum = document.getElementById('total-pages-num');
+            const prevBtn = document.getElementById('btn-prev-page');
+            const nextBtn = document.getElementById('btn-next-page');
+            if (pageNum) pageNum.textContent = curr;
+            if (totalNum) totalNum.textContent = Math.max(1, total);
+            if (prevBtn) prevBtn.disabled = curr <= 1;
+            if (nextBtn) nextBtn.disabled = curr >= total;
+        }
+
+        async function changeTxPage(delta) {
+            const targetPage = currentTxPage + delta;
+            if (targetPage < 1 || targetPage > totalTxPages) return;
+            currentTxPage = targetPage;
+            const query = (document.getElementById('table-search').value || '').trim();
+            let url = `/api/transactions?page=${currentTxPage}&page_size=${txPageSize}&year=${currentYear}&month=${currentMonth}`;
+            if (currentTypeFilter && currentTypeFilter !== 'ALL') {
+                url += `&type=${encodeURIComponent(currentTypeFilter)}`;
+            }
+            if (query) {
+                url += `&search=${encodeURIComponent(query)}`;
+            }
+            if (activeSessionId) {
+                url += `&session=${encodeURIComponent(activeSessionId)}`;
+            }
+            try {
+                const res = await fetch(url, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' });
+                if (res.ok) {
+                    const data = await res.json();
+                    allCurrentTransactions = data.transactions || [];
+                    totalTxPages = data.total_pages || 1;
+                    renderFilteredRows(allCurrentTransactions);
+                    updatePaginationUI(currentTxPage, totalTxPages);
+                }
+            } catch (err) {
+                console.error("Error fetching transactions page:", err);
+            }
         }
 
         function filterTransactions() {
             const query = (document.getElementById('table-search').value || '').toLowerCase();
-            const tbody = document.getElementById('tx-tbody');
-            tbody.textContent = '';
-
             const filtered = allCurrentTransactions.filter(tx => {
                 if (currentTypeFilter !== 'ALL' && tx.transaction_type !== currentTypeFilter) return false;
                 if (!query) return true;
@@ -1081,7 +1139,18 @@
                 return matchPerson || matchCategory || matchRef || matchApp;
             });
 
-            if (!filtered.length) {
+            totalTxPages = Math.max(1, Math.ceil(filtered.length / txPageSize));
+            const startIdx = (currentTxPage - 1) * txPageSize;
+            const paged = filtered.slice(startIdx, startIdx + txPageSize);
+            renderFilteredRows(paged);
+            updatePaginationUI(currentTxPage, totalTxPages);
+        }
+
+        function renderFilteredRows(txs) {
+            const tbody = document.getElementById('tx-tbody');
+            tbody.textContent = '';
+
+            if (!txs.length) {
                 const tr = document.createElement('tr');
                 const td = document.createElement('td');
                 td.colSpan = 7;
@@ -1092,13 +1161,14 @@
                 return;
             }
 
-            filtered.forEach(tx => {
+            txs.forEach(tx => {
                 const tr = document.createElement('tr');
                 const isReceived = tx.transaction_type === 'RECEIVED';
-                const pillClass = isReceived ? 'pill-received' : 'pill-sent';
-                const typeText = isReceived ? '🟢 RECV' : '🔴 SENT';
-                const amtSign = isReceived ? '+' : '-';
-                const amtColor = isReceived ? 'val-green' : 'val-red';
+                const isTransfer = tx.transaction_type === 'TRANSFER';
+                const pillClass = isReceived ? 'pill-received' : (isTransfer ? 'pill-transfer' : 'pill-sent');
+                const typeText = isReceived ? '🟢 RECV' : (isTransfer ? '🔄 TRANSFER' : '🔴 SENT');
+                const amtSign = isReceived ? '+' : (isTransfer ? '↕' : '-');
+                const amtColor = isReceived ? 'val-green' : (isTransfer ? 'val-blue' : 'val-red');
 
                 const tdId = document.createElement('td');
                 const strongId = document.createElement('strong');
@@ -1154,10 +1224,12 @@
             document.getElementById('d-title').textContent = `Transaction #${tx.id}`;
 
             const isReceived = tx.transaction_type === 'RECEIVED';
-            const typeColor = isReceived ? 'var(--accent-green)' : 'var(--accent-red)';
+            const isTransfer = tx.transaction_type === 'TRANSFER';
+            const typeColor = isReceived ? 'var(--accent-green)' : (isTransfer ? 'var(--accent-blue)' : 'var(--accent-red)');
+            const sign = isReceived ? '+' : (isTransfer ? '↕' : '-');
 
             const rows = [
-                { label: 'Amount', value: `${isReceived ? '+' : '-'}${formatINR(tx.amount)}`, color: typeColor, fontSize: '16px' },
+                { label: 'Amount', value: `${sign}${formatINR(tx.amount)}`, color: typeColor, fontSize: '16px' },
                 { label: 'Payee / Counterparty', value: tx.person_name || '—' },
                 { label: 'Type', value: tx.transaction_type || '—', color: typeColor },
                 { label: 'Category', value: tx.category || 'General' },

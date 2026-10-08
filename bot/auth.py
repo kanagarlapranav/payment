@@ -114,7 +114,6 @@ CALLBACK_ROLE_POLICY = {
     # Viewer & above
     "nav": "viewer", "filter": "viewer", "sort": "viewer",
     "cafe_stats": "viewer", "cafe_view_menu": "viewer", "tx_view": "viewer",
-    "refresh_gemini": "viewer",
     "ws_switch": "viewer", "ws_reset": "viewer", "ws_reset_menu": "viewer",
     "ws_new_prompt": "viewer", "perm_view": "viewer", "perm_list": "viewer",
 
@@ -135,13 +134,15 @@ CALLBACK_ROLE_POLICY = {
     "select_delete": "member", "select_delete_cancel": "member",
     "edit_field": "member", "edit_cancel": "member",
     "delete_confirm": "member", "delete_cancel": "member", "correct_amount": "member",
-    "edit_tx": "member", "delete_tx": "member", "export_file": "member",
+    "edit_tx": "member", "delete_tx": "member",
 
     # Admin & above
+    "export_file": "admin",
     "cafe_edit": "admin", "cafe_menu_add_prompt": "admin", "cafe_menu_del_prompt": "admin",
     "cafe_del_item": "admin", "cafe_del_cancel": "admin", "backup_now": "admin",
     "rec_paid": "admin", "rec_skip": "admin", "rec_pause": "admin",
     "rec_resume": "admin", "rec_del": "admin", "close_month": "admin", "set_model": "admin",
+    "refresh_gemini": "admin",
     "perm_remove": "admin", "perm_remove_confirm": "admin",
 
     # Owner only
@@ -297,6 +298,42 @@ def is_authorized_user(update: Update, workspace_id: Optional[str] = None) -> bo
     if is_super_admin(user_id):
         return True
 
+    from database.queries import get_workspace_by_chat_id, get_workspace_member, get_workspace_member_record, get_default_workspace_id
+    from database.db import get_db_connection
+    chat = getattr(update, 'effective_chat', None)
+    chat_type = getattr(chat, 'type', 'private') if chat else 'private'
+    ws_id = workspace_id or (get_user_active_workspace(user_id) if chat_type == 'private' else None)
+    if not ws_id and chat_type == 'private':
+        def_id = get_default_workspace_id()
+        if def_id:
+            def_rec = get_workspace_member_record(def_id, user_id)
+            if def_rec and def_rec.is_active and getattr(def_rec, 'status', 'active') == 'active':
+                ws_id = def_id
+    if not ws_id:
+        ws = get_workspace_by_chat_id(chat_id)
+        if ws:
+            ws_id = ws.id
+    if not ws_id and chat_type == 'private':
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT wm.workspace_id 
+                FROM workspace_members wm 
+                JOIN workspaces w ON wm.workspace_id = w.id 
+                WHERE wm.telegram_user_id = ? AND wm.is_active = 1 
+                  AND w.is_active = 1 AND (wm.status IS NULL OR wm.status = 'active')
+                ORDER BY wm.joined_at ASC LIMIT 1
+            """, (user_id,))
+            m_row = cursor.fetchone()
+            if m_row:
+                ws_id = m_row['workspace_id']
+
+    # If the user has an explicit deactivated/revoked record in this workspace, denial is absolute
+    if ws_id:
+        rec = get_workspace_member_record(ws_id, user_id)
+        if rec and (not rec.is_active or getattr(rec, 'status', 'active') in ('suspended', 'removed', 'revoked')):
+            return False
+
     if is_owner(update, workspace_id=workspace_id):
         return True
 
@@ -308,16 +345,6 @@ def is_authorized_user(update: Update, workspace_id: Optional[str] = None) -> bo
                     return True
             except (ValueError, TypeError):
                 pass
-
-    # Multi-tenant mode: Check membership in current workspace
-    from database.queries import get_workspace_by_chat_id, get_workspace_member
-    chat = getattr(update, 'effective_chat', None)
-    chat_type = getattr(chat, 'type', 'private') if chat else 'private'
-    ws_id = workspace_id or (get_user_active_workspace(user_id) if chat_type == 'private' else None)
-    if not ws_id:
-        ws = get_workspace_by_chat_id(chat_id)
-        if ws:
-            ws_id = ws.id
 
     if ws_id:
         member = get_workspace_member(ws_id, user_id)
@@ -398,7 +425,7 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
 
     from database.queries import (
         get_workspace_by_chat_id, get_or_create_workspace,
-        get_workspace_member, add_workspace_member, get_all_workspace_members,
+        get_workspace_member, get_workspace_member_record, add_workspace_member, get_all_workspace_members,
         get_workspace_setting, get_workspace_by_id, get_default_workspace_id
     )
 
@@ -411,14 +438,21 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
             except (ValueError, TypeError):
                 pass
 
-        # Check if user has switched active workspace (applies to private DMs and group chats)
-        active_ws_id = get_user_active_workspace(user_id)
-        if active_ws_id:
-            switched_ws = get_workspace_by_id(active_ws_id)
-            if switched_ws:
-                member = get_workspace_member(switched_ws.id, user_id)
-                if is_super_admin(user_id) or is_global_owner or member:
-                    caller_role = 'owner' if (is_super_admin(user_id) or is_global_owner) else (member.role if member else 'member')
+        # Check if user has switched active workspace (applies to private DMs and global owner)
+        if chat_type == 'private' or is_global_owner:
+            active_ws_id = get_user_active_workspace(user_id)
+            if active_ws_id:
+                switched_ws = get_workspace_by_id(active_ws_id)
+                if switched_ws:
+                    if not switched_ws.is_active or getattr(switched_ws, 'status', 'active') not in ('active',):
+                        return None
+                    member = get_workspace_member(switched_ws.id, user_id)
+                    if is_super_admin(user_id) or is_global_owner:
+                        caller_role = 'owner'
+                    else:
+                        if not member or not member.is_active or getattr(member, 'status', 'active') in ('suspended', 'removed'):
+                            return None
+                        caller_role = member.role
                     if user_id == 8343764796 and caller_role == 'owner':
                         caller_role = 'member'
                     return RequestContext(
@@ -435,14 +469,36 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
                     )
 
         ws = None
-        # User requested: for Pranav (owner), in private DMs, use Payment (Group) directly
-        if chat_type == 'private' and is_global_owner:
+        # In private DMs: if caller has not switched workspaces, use the default workspace (e.g. Payment (Group))
+        # if they are global owner or an active member of it.
+        if chat_type == 'private':
             def_ws_id = get_default_workspace_id()
             if def_ws_id:
-                ws = get_workspace_by_id(def_ws_id)
+                if is_global_owner:
+                    ws = get_workspace_by_id(def_ws_id)
+                else:
+                    def_rec = get_workspace_member_record(def_ws_id, user_id)
+                    if def_rec and def_rec.is_active and getattr(def_rec, 'status', 'active') == 'active':
+                        ws = get_workspace_by_id(def_ws_id)
 
         if ws is None:
             ws = get_workspace_by_chat_id(chat_id)
+
+        if ws is None and chat_type == 'private':
+            from database.db import get_db_connection
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT wm.workspace_id 
+                    FROM workspace_members wm 
+                    JOIN workspaces w ON wm.workspace_id = w.id 
+                    WHERE wm.telegram_user_id = ? AND wm.is_active = 1 
+                      AND w.is_active = 1 AND (wm.status IS NULL OR wm.status = 'active')
+                    ORDER BY wm.joined_at ASC LIMIT 1
+                """, (user_id,))
+                m_row = cursor.fetchone()
+                if m_row:
+                    ws = get_workspace_by_id(m_row['workspace_id'])
 
         if ws is None:
             if not is_authorized_user(update):
@@ -464,8 +520,21 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
                 display_name=display_name
             )
 
-        member = get_workspace_member(ws.id, user_id)
-        if member is None:
+        existing_record = get_workspace_member_record(ws.id, user_id)
+        if existing_record is not None:
+            if not existing_record.is_active or getattr(existing_record, 'status', 'active') in ('suspended', 'removed', 'revoked'):
+                logger.info(f"User {user_id} is explicitly revoked/inactive in workspace {ws.id}. Context resolution denied.")
+                return None
+            member = existing_record
+            caller_role = member.role
+            if is_super_admin(user_id):
+                caller_role = 'owner'
+            elif getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False) or is_global_owner:
+                owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+                if owner_id is not None and user_id == int(owner_id):
+                    caller_role = 'owner'
+        else:
+            member = None
             if is_super_admin(user_id):
                 caller_role = 'owner'
             elif getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False) or is_global_owner:
@@ -495,16 +564,6 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
                 caller_role = 'member' if user_id == 8343764796 else 'owner'
             else:
                 return None
-        else:
-            if not member.is_active or getattr(member, 'status', 'active') in ('suspended', 'removed'):
-                return None
-            caller_role = member.role
-            if is_super_admin(user_id):
-                caller_role = 'owner'
-            elif getattr(config, 'LEGACY_SINGLE_TENANT_MODE', False) or is_global_owner:
-                owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
-                if owner_id is not None and user_id == int(owner_id):
-                    caller_role = 'owner'
 
         if user_id == 8343764796 and caller_role == 'owner':
             caller_role = 'member'
@@ -741,16 +800,22 @@ async def require_member(update: Update, silent: bool = False) -> bool:
     Ensures the caller has at least 'member' role in the current workspace (member, admin, or owner).
     Viewers and strangers are rejected with a clear role requirement notice.
     """
-    if is_owner(update):
+    if is_owner(update) or is_admin_or_owner(update):
         return True
 
     chat_id = get_effective_chat_id(update)
     user_id = get_effective_user_id(update)
     if user_id is not None:
-        from database.queries import get_workspace_by_chat_id, get_workspace_member
+        from database.queries import get_workspace_by_chat_id, get_workspace_member, get_workspace_member_record, get_default_workspace_id
         chat = getattr(update, 'effective_chat', None)
         chat_type = getattr(chat, 'type', 'private') if chat else 'private'
         ws_id = get_user_active_workspace(user_id) if chat_type == 'private' else None
+        if not ws_id and chat_type == 'private':
+            def_id = get_default_workspace_id()
+            if def_id:
+                def_rec = get_workspace_member_record(def_id, user_id)
+                if def_rec and def_rec.is_active and getattr(def_rec, 'status', 'active') == 'active':
+                    ws_id = def_id
         if not ws_id and chat_id is not None:
             ws = get_workspace_by_chat_id(chat_id)
             if ws:
@@ -771,7 +836,7 @@ async def require_member(update: Update, silent: bool = False) -> bool:
     msg_target = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
     if update.callback_query:
         try:
-            await update.callback_query.answer("⛔ Restricted: Requires Member role.", show_alert=True)
+            await update.callback_query.answer("⛔ Access Restricted: Requires Member role.", show_alert=True)
         except Exception:
             pass
     elif msg_target:
@@ -787,16 +852,22 @@ async def require_admin(update: Update, silent: bool = False) -> bool:
     Ensures the caller has administrative role in current workspace or is global bot owner.
     Non-admin members and strangers are rejected with a clear admin-only notice.
     """
-    if is_owner(update):
+    if is_owner(update) or is_admin_or_owner(update):
         return True
 
     chat_id = get_effective_chat_id(update)
     user_id = get_effective_user_id(update)
     if user_id is not None:
-        from database.queries import get_workspace_by_chat_id, get_workspace_member
+        from database.queries import get_workspace_by_chat_id, get_workspace_member, get_workspace_member_record, get_default_workspace_id
         chat = getattr(update, 'effective_chat', None)
         chat_type = getattr(chat, 'type', 'private') if chat else 'private'
         ws_id = get_user_active_workspace(user_id) if chat_type == 'private' else None
+        if not ws_id and chat_type == 'private':
+            def_id = get_default_workspace_id()
+            if def_id:
+                def_rec = get_workspace_member_record(def_id, user_id)
+                if def_rec and def_rec.is_active and getattr(def_rec, 'status', 'active') == 'active':
+                    ws_id = def_id
         if not ws_id and chat_id is not None:
             ws = get_workspace_by_chat_id(chat_id)
             if ws:
@@ -849,7 +920,7 @@ async def require_owner(update: Update, silent: bool = False) -> bool:
     msg_target = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
     if update.callback_query:
         try:
-            await update.callback_query.answer("⛔ Owner Only: Strictly reserved for Bot Owner.", show_alert=True)
+            await update.callback_query.answer("⛔ Owner Only: Access restricted — strictly reserved for Bot Owner.", show_alert=True)
         except Exception:
             pass
     elif msg_target:
@@ -871,11 +942,9 @@ def get_command_policy(command: str) -> Optional[str]:
 
 
 def get_callback_policy(action: str) -> Optional[str]:
-    """Returns 'admin', 'read_only', or role from WORKSPACE_CALLBACK_POLICY."""
+    """Returns 'admin', 'read_only', or None for unknown callback actions."""
     if action in ADMIN_CALLBACK_ACTIONS:
         return 'admin'
     if action in READ_ONLY_CALLBACK_ACTIONS:
         return 'read_only'
-    if action in WORKSPACE_CALLBACK_POLICY:
-        return WORKSPACE_CALLBACK_POLICY[action]
-    return None
+    return WORKSPACE_CALLBACK_POLICY.get(action)

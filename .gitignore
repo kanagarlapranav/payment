@@ -18,6 +18,9 @@ data/*.xlsx
 data/*.pdf
 data/*.pre-remediation
 data/*.backup*
+data/*.before-migration*
+data/.safety_backup/
+data/.safety_backup/*
 data/archive/
 data/archive
 *.db
@@ -34,6 +37,7 @@ htmlcov/
 
 # Audit & Security Reports
 audit_report.txt
+audit_report_text.txt
 gitleaks_report.txt
 *.pdf
 

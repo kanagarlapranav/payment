@@ -58,14 +58,14 @@ def get_category_icon(category: str) -> str:
     """Returns the matching emoji icon for a category."""
     return CATEGORY_ICONS.get(category, "💳")
 
-def format_spending_insights(year: int, month: int) -> str:
+def format_spending_insights(year: int, month: int, workspace_id: str | None = None) -> str:
     """
     Generates a rich HTML report of monthly spending insights, category breakdown,
-    and financial health highlights for Telegram.
+    and financial health highlights for Telegram with workspace isolation.
     """
-    cat_data = get_category_summary(year, month)
-    monthly_data = get_monthly_summary(year, month)
-    budget = get_budget_setting()
+    cat_data = get_category_summary(year, month, workspace_id=workspace_id)
+    monthly_data = get_monthly_summary(year, month, workspace_id=workspace_id)
+    budget = get_budget_setting(workspace_id=workspace_id)
     
     month_names = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
     m_name = month_names[month] if 1 <= month <= 12 else str(month)

@@ -11,7 +11,7 @@ from config import TELEGRAM_USER_ID, IMAGE_DIR, logger
 from bot.auth import (
     require_authorized, require_admin, require_owner, require_member, is_owner, is_authorized_user,
     get_callback_policy, ADMIN_CALLBACK_ACTIONS, READ_ONLY_CALLBACK_ACTIONS,
-    get_workspace_context, resolve_workspace_context
+    get_workspace_context, resolve_workspace_context, WORKSPACE_CALLBACK_POLICY
 )
 from bot.commands import (
     is_authorized, is_admin_user, render_home_menu_text, render_history_page,
@@ -42,15 +42,42 @@ from database.queries import (
 from utils.currency import parse_amount, format_currency, normalize_amount_string
 from utils.dates import parse_date, get_current_time_in_tz, format_display_date
 
+import time
+
 # In-memory store for pending transactions awaiting confirmation
 pending_transactions = {}
+_pending_transactions_timestamps = {}
+
+def parse_int_arg(parts: list, index: int) -> int | None:
+    try:
+        return int(parts[index])
+    except (IndexError, ValueError):
+        return None
+
+def parse_float_arg(parts: list, index: int) -> float | None:
+    try:
+        return float(parts[index])
+    except (IndexError, ValueError):
+        return None
+
+def _prune_pending_transactions():
+    now = time.time()
+    cutoff = now - (7 * 86400)
+    expired_keys = [k for k, t in _pending_transactions_timestamps.items() if t < cutoff]
+    for k in expired_keys:
+        _pending_transactions_timestamps.pop(k, None)
+        pending_transactions.pop(k, None)
 
 def set_pending_transaction(pending_id: str, transaction, workspace_id: str = None) -> None:
     """Stores pending transaction in memory and persists to SQLite database with workspace scoping."""
+    _prune_pending_transactions()
+    now = time.time()
     pending_transactions[pending_id] = transaction
+    _pending_transactions_timestamps[pending_id] = now
     ws_id = workspace_id or getattr(transaction, 'workspace_id', None)
     if ws_id:
         pending_transactions[(ws_id, pending_id)] = transaction
+        _pending_transactions_timestamps[(ws_id, pending_id)] = now
     try:
         save_pending_receipt(pending_id, transaction, workspace_id=ws_id)
     except Exception as e:
@@ -562,7 +589,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     action = parts[0]
     
     # Check policy before any database access or data exposure
-    policy = get_callback_policy(action)
+    policy = WORKSPACE_CALLBACK_POLICY.get(action) or get_callback_policy(action)
     if policy is None:
         # Unknown or stale callback data gets a friendly refusal, not a crash
         try:
@@ -576,10 +603,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if not await require_owner(update):
             return
     elif policy == 'admin':
-        if not await require_admin(update):
+        if not (is_owner(update) or await require_admin(update)):
+            return
+    elif policy == 'member':
+        if not (is_owner(update) or is_admin_user(update) or await require_member(update)):
             return
     elif policy in ('read_only', 'viewer'):
-        if not await require_authorized(update):
+        if not (is_owner(update) or is_admin_user(update) or await require_authorized(update)):
             return
     else:
         ws_ctx = await resolve_workspace_context(update, required_policy=policy)
@@ -780,7 +810,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
             elif nav_target == "dash_info":
                 from config import RENDER_EXTERNAL_URL
-                from bot.auth import is_owner
                 from services.dashboard_auth import create_one_time_code
                 base_url = RENDER_EXTERNAL_URL
                 if is_owner(update):
@@ -1461,11 +1490,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     # --- Workspace Switcher Actions ---
     elif action == "ws_switch":
         target_ws_id = parts[1]
-        from bot.auth import set_user_active_workspace, get_effective_user_id
-        from database.queries import get_workspace_by_id
+        from bot.auth import set_user_active_workspace, get_effective_user_id, is_super_admin
+        from database.queries import get_workspace_by_id, get_workspace_member
         user_id = get_effective_user_id(update)
         target_ws = get_workspace_by_id(target_ws_id)
         if target_ws and user_id:
+            m = get_workspace_member(target_ws.id, user_id)
+            is_global_owner = is_super_admin(user_id) or is_owner(update)
+            if not is_global_owner and not (m and m.is_active and getattr(m, 'status', 'active') == 'active'):
+                await query.answer("⛔ You are not an active member of that workspace.", show_alert=True)
+                return
             chat_id = getattr(update.effective_chat, 'id', None)
             from database.queries import get_default_workspace_id
             default_ws_id = get_default_workspace_id()
@@ -1523,12 +1557,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     # --- Access Request & Approval Callbacks ---
     elif action == "auth_grant":
-        from bot.auth import is_owner
         if not is_owner(update):
             await query.answer("⛔ Only the bot owner can approve access.", show_alert=True)
             return
         target_uid = int(parts[1])
         role = parts[2].lower() if len(parts) > 2 else "member"
+        if role not in ('member', 'admin', 'viewer'):
+            role = 'member'
         from database.queries import (
             get_access_request, update_access_request_status, set_user_permission_and_role,
             get_workspace_by_chat_id, get_or_create_workspace, add_workspace_member,
@@ -1624,7 +1659,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     elif action == "auth_deny":
-        from bot.auth import is_owner
         if not is_owner(update):
             await query.answer("⛔ Only the bot owner can deny access.", show_alert=True)
             return
@@ -1682,7 +1716,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     # --- Interactive Permissions & Roles Editor Callbacks ---
     elif action == "perm_list":
-        from bot.auth import is_owner
         if not is_owner(update):
             await query.answer("⛔ Only the bot owner can manage permissions.", show_alert=True)
             return
@@ -1692,7 +1725,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     elif action == "perm_view":
-        from bot.auth import is_owner
         if not is_owner(update):
             await query.answer("⛔ Only the bot owner can manage permissions.", show_alert=True)
             return
@@ -1703,7 +1735,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     elif action == "perm_set":
-        from bot.auth import is_owner
         if not is_owner(update):
             await query.answer("⛔ Only the bot owner can manage permissions.", show_alert=True)
             return
@@ -1718,14 +1749,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.answer("⛔ Only the primary bot owner can hold the owner role.", show_alert=True)
             return
         from database.queries import set_user_permission_and_role
+        target_ws_scope = ws_id if (ws_ctx and ws_ctx.chat_type in ('group', 'supergroup')) else None
         if setting == "revoke":
-            set_user_permission_and_role(target_uid, "viewer", is_active=False)
+            set_user_permission_and_role(target_uid, "viewer", is_active=False, workspace_id=target_ws_scope)
             try:
                 await query.answer("🚫 User access revoked & blocked!", show_alert=False)
             except Exception:
                 pass
         else:
-            set_user_permission_and_role(target_uid, setting, is_active=True)
+            set_user_permission_and_role(target_uid, setting, is_active=True, workspace_id=target_ws_scope)
             try:
                 await query.answer(f"✅ Role set to {setting.upper()}!", show_alert=False)
             except Exception:
@@ -1737,7 +1769,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     elif action == "perm_remove":
-        from bot.auth import is_owner
         if not is_owner(update):
             await query.answer("⛔ Only the owner can remove members.", show_alert=True)
             return
@@ -1767,7 +1798,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     elif action == "perm_remove_confirm":
-        from bot.auth import is_owner
         if not is_owner(update):
             await query.answer("⛔ Only the owner can remove members.", show_alert=True)
             return
@@ -1786,7 +1816,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     # --- 2. Quick Undo & Quick Add Actions ---
     elif action == "undo_tx":
-        tx_id = int(parts[1])
+        tx_id = parse_int_arg(parts, 1)
+        if tx_id is None:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
         from database.queries import can_user_modify_transaction
         caller_id = update.effective_user.id if update.effective_user else None
         caller_role = ws_ctx.role if ws_ctx else 'member'
@@ -1887,7 +1920,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             
     # 2. Transaction Selection for Edit / Delete
     elif action == "select_edit":
-        tx_id = int(parts[1])
+        tx_id = parse_int_arg(parts, 1)
+        if tx_id is None:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
         from database.queries import can_user_modify_transaction
         caller_id = update.effective_user.id if update.effective_user else None
         caller_role = ws_ctx.role if ws_ctx else 'member'
@@ -1911,7 +1947,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(text, reply_markup=get_edit_fields_keyboard(tx_id), parse_mode='HTML')
         
     elif action == "select_delete":
-        tx_id = int(parts[1])
+        tx_id = parse_int_arg(parts, 1)
+        if tx_id is None:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
         from database.queries import can_user_modify_transaction
         caller_id = update.effective_user.id if update.effective_user else None
         caller_role = ws_ctx.role if ws_ctx else 'member'
@@ -1959,7 +1998,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     # 3. Field Selection for Editing
     elif action == "edit_field":
         field = parts[1]
-        tx_id = int(parts[2])
+        tx_id = parse_int_arg(parts, 2)
+        if tx_id is None:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
         from database.queries import can_user_modify_transaction
         caller_id = update.effective_user.id if update.effective_user else None
         caller_role = ws_ctx.role if ws_ctx else 'member'
@@ -1993,7 +2035,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     # 4. Delete Confirmation
     elif action == "delete_confirm":
-        tx_id = int(parts[1])
+        tx_id = parse_int_arg(parts, 1)
+        if tx_id is None:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
         from database.queries import can_user_modify_transaction
         caller_id = update.effective_user.id if update.effective_user else None
         caller_role = ws_ctx.role if ws_ctx else 'member'
@@ -2001,7 +2046,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.answer("⛔ You can only delete payments that you recorded.", show_alert=True)
             return
         await query.answer("✅ Delete Confirmed!", show_alert=False)
-        tx_id = int(parts[1])
         tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         if not tx:
             from database.db import get_db_connection
@@ -2163,8 +2207,20 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     # 4b. Correct Amount for Existing Transaction
     elif action == "correct_amount":
-        tx_id = int(parts[1])
-        new_amt = float(parts[2])
+        try:
+            tx_id = int(parts[1])
+            new_amt = float(parse_decimal_amount(parts[2], allow_zero=False))
+        except (IndexError, ValueError):
+            await query.answer("❌ Invalid amount.", show_alert=True)
+            return
+
+        caller_id = get_effective_user_id(update)
+        caller_role = ws_ctx.role if ws_ctx else 'member'
+        from database.queries import can_user_modify_transaction
+        if not can_user_modify_transaction(tx_id, caller_id, caller_role, workspace_id=ws_id):
+            await query.answer("⛔ You can only edit payments that you recorded.", show_alert=True)
+            return
+
         tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         if not tx:
             await query.edit_message_text("❌ Transaction not found.")
@@ -2195,11 +2251,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if fmt == "pdf":
             from bot.commands import send_pdf_report
             await query.edit_message_text("⏳ Generating official PDF statement...")
-            await send_pdf_report(query.message.chat, context.bot)
+            await send_pdf_report(query.message.chat, context.bot, workspace_id=ws_id)
         elif fmt == "excel":
             from bot.commands import send_excel_report
             await query.edit_message_text("⏳ Generating Excel spreadsheet...")
-            await send_excel_report(query.message.chat, context.bot)
+            await send_excel_report(query.message.chat, context.bot, workspace_id=ws_id)
 
     # 5. Interactive Filter Callbacks
     elif action == "filter":
@@ -2304,12 +2360,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     # 7. Cafeteria Menu Callbacks
     elif action == "cafe_pick":
-        tx_id = int(parts[1])
+        tx_id = parse_int_arg(parts, 1)
+        if tx_id is None or len(parts) < 3:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
         item_name = parts[2]
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         if tx:
             new_name = f"VIKRAMAN NAIR K (Cafeteria: {item_name})"
-            update_transaction(tx_id, {'person_name': new_name, 'category': 'Food & Dining'})
+            update_transaction(tx_id, {'person_name': new_name, 'category': 'Food & Dining'}, workspace_id=ws_id)
             from services.task_manager import schedule_debounced_backup
             schedule_debounced_backup(context.bot)
             amt_s = format_currency(tx['amount'])
@@ -2330,9 +2389,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text(f"🍽️ Tagged order: <b>{html.escape(item_name)}</b>", parse_mode='HTML')
 
     elif action == "cafe_mode":
-        tx_id = int(parts[1])
+        tx_id = parse_int_arg(parts, 1)
+        if tx_id is None or len(parts) < 3:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
         mode = parts[2]
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         amt = float(tx['amount']) if tx else 0.0
         
         if mode == "1":
@@ -2375,7 +2437,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
 
     elif action == "cafe_custom_prompt":
-        tx_id = int(parts[1])
+        tx_id = parse_int_arg(parts, 1)
+        if tx_id is None or len(parts) < 3:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
         item_type = parts[2]
         context.user_data['action'] = 'waiting_cafe_custom_amount'
         context.user_data['cafe_tx_id'] = tx_id
@@ -2388,10 +2453,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     elif action == "cafe_cart_add":
-        tx_id = int(parts[1])
+        tx_id = parse_int_arg(parts, 1)
+        item_price = parse_float_arg(parts, 3)
+        if tx_id is None or item_price is None or len(parts) < 4:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
         item_name = parts[2]
-        item_price = float(parts[3])
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         amt = float(tx['amount']) if tx else 0.0
         
         cart_key = f'cafe_cart_{tx_id}'
@@ -2415,8 +2483,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     elif action == "cafe_cart_clear":
-        tx_id = int(parts[1])
-        tx = get_transaction_by_id(tx_id)
+        tx_id = parse_int_arg(parts, 1)
+        if tx_id is None:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         amt = float(tx['amount']) if tx else 0.0
         context.user_data[f'cafe_cart_{tx_id}'] = []
         from bot.keyboards import get_cafeteria_cart_keyboard
@@ -2429,13 +2500,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     elif action == "cafe_cart_done":
-        tx_id = int(parts[1])
+        tx_id = parse_int_arg(parts, 1)
+        if tx_id is None:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
         cart = context.user_data.pop(f'cafe_cart_{tx_id}', [])
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         if tx and cart:
             item_names = " + ".join([it['name'] for it in cart])
             new_name = f"VIKRAMAN NAIR K (Cafeteria: {item_names})"
-            update_transaction(tx_id, {'person_name': new_name, 'category': 'Food & Dining'})
+            update_transaction(tx_id, {'person_name': new_name, 'category': 'Food & Dining'}, workspace_id=ws_id)
             from services.task_manager import schedule_debounced_backup
             schedule_debounced_backup(context.bot)
             amt_s = format_currency(tx['amount'])
@@ -2461,10 +2535,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
 
     elif action == "cafe_cat":
-        tx_id = int(parts[1])
+        tx_id = parse_int_arg(parts, 1)
+        if tx_id is None or len(parts) < 3:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
         cat_name = parts[2]
         from bot.keyboards import get_cafeteria_category_keyboard
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         amt_str = format_currency(tx['amount']) if tx else ""
         await query.edit_message_text(
             f"🍽️ <b>Cafeteria Menu — {html.escape(cat_name)}</b>\n"
@@ -2475,9 +2552,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     elif action == "cafe_back":
-        tx_id = int(parts[1])
+        tx_id = parse_int_arg(parts, 1)
+        if tx_id is None:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
         from bot.keyboards import get_cafeteria_selection_keyboard
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         amt = float(tx['amount']) if tx else 0.0
         await query.edit_message_text(
             f"🍽️ <b>Cafeteria Menu Selection (Paid {html.escape(format_currency(amt))}):</b>\n\n"
@@ -2488,13 +2568,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     elif action == "cafe_addon":
-        tx_id = int(parts[1])
+        tx_id = parse_int_arg(parts, 1)
+        if tx_id is None or len(parts) < 3:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
         addon = parts[2]
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         if tx:
             current_name = tx['person_name'] or "VIKRAMAN NAIR K (Cafeteria)"
             updated_name = f"{current_name} + {addon}"
-            update_transaction(tx_id, {'person_name': updated_name, 'category': 'Food & Dining'})
+            update_transaction(tx_id, {'person_name': updated_name, 'category': 'Food & Dining'}, workspace_id=ws_id)
             from bot.keyboards import get_cafeteria_tagged_keyboard
             await query.edit_message_text(
                 f"🍽️ <b>Add-on Tagged:</b> +₹5 {html.escape(addon)}\n"
@@ -2506,8 +2589,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
 
     elif action == "cafe_edit":
-        tx_id = int(parts[1])
-        tx = get_transaction_by_id(tx_id)
+        tx_id = parse_int_arg(parts, 1)
+        if tx_id is None:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         if tx:
             from bot.keyboards import get_cafeteria_selection_keyboard
             amt = float(tx['amount'])
@@ -2547,7 +2633,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif action == "cafe_menu_del_prompt":
         from database.db import get_custom_menu_items
-        custom_items = get_custom_menu_items()
+        custom_items = get_custom_menu_items(workspace_id=ws_id)
         if not custom_items:
             await query.message.reply_text(
                 "ℹ️ No custom menu items found to delete. Predefined standard items cannot be removed.",
@@ -2567,7 +2653,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
 
     elif action == "cafe_del_item":
-        item_id = int(parts[1])
+        item_id = parse_int_arg(parts, 1)
+        if item_id is None:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
         from database.db import delete_custom_menu_item_by_id
         success, name = delete_custom_menu_item_by_id(item_id, workspace_id=ws_id)
         if success:
@@ -2597,8 +2686,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.message.reply_text("❌ No recent cafeteria payments found.")
 
     elif action == "cafe_skip":
-        tx_id = int(parts[1])
-        tx = get_transaction_by_id(tx_id)
+        tx_id = parse_int_arg(parts, 1)
+        if tx_id is None:
+            await query.answer("❌ Invalid button data.", show_alert=True)
+            return
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         amt_s = format_currency(tx['amount']) if tx else ""
         from bot.keyboards import get_cafeteria_tagged_keyboard
         await query.edit_message_text(
@@ -2989,7 +3081,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ Invalid name: {err}")
                 return
             updates['person_name'] = clean_name
-            tx = get_transaction_by_id(tx_id)
+            tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
             if tx and tx['transaction_type'] == 'SENT':
                 updates['recipient_name'] = clean_name
             else:
@@ -3018,23 +3110,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ Invalid reference: {err}")
                 return
 
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         if tx:
             from services.undo_service import record_edit_action
-            record_edit_action(tx)
+            record_edit_action(tx, chat_id=update.effective_chat.id if update.effective_chat else None, user_id=caller_id, workspace_id=ws_id)
 
-        success = update_transaction(tx_id, updates)
+        success = update_transaction(tx_id, updates, workspace_id=ws_id)
         context.user_data.pop('action', None)
         context.user_data.pop('edit_tx_id', None)
         context.user_data.pop('edit_field', None)
 
         if success:
             if needs_recalc:
-                new_bal = recalculate_all_balances()
+                new_bal = recalculate_all_balances(workspace_id=ws_id)
             else:
-                new_bal = get_balance_setting()
+                new_bal = get_balance_setting(workspace_id=ws_id)
 
-            updated_tx = get_transaction_by_id(tx_id)
+            updated_tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
             person = (updated_tx['person_name'] if updated_tx else '') or "Unknown"
             amt_s = format_currency(updated_tx['amount']) if updated_tx else ''
             bal_flow = ""
@@ -3090,7 +3182,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     tag_desc = f"{item_type}: {custom_note}"
                     
                 new_name = f"VIKRAMAN NAIR K (Cafeteria: {tag_desc})"
-                update_transaction(tx_id, {'person_name': new_name, 'category': 'Food & Dining'})
+                update_transaction(tx_id, {'person_name': new_name, 'category': 'Food & Dining'}, workspace_id=ws_id)
                 from services.task_manager import schedule_debounced_backup
                 schedule_debounced_backup(context.bot)
                 amt_s = format_currency(tx['amount'])
@@ -3155,7 +3247,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        success, msg = add_custom_menu_item(name, price, category, is_veg=True)
+        success, msg = add_custom_menu_item(name, price, category, is_veg=True, workspace_id=ws_id)
         if success:
             await update.message.reply_text(
                 f"✅ <b>Custom Menu Item Added!</b>\n\n"
@@ -3173,7 +3265,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif pending_action == 'waiting_del_menu_item':
         context.user_data.pop('action', None)
         from services.cafeteria_service import delete_custom_menu_item
-        success, msg = delete_custom_menu_item(text.strip())
+        success, msg = delete_custom_menu_item(text.strip(), workspace_id=ws_id)
         if success:
             await update.message.reply_text(f"✅ {html.escape(msg)}", parse_mode='HTML')
         else:
@@ -3454,8 +3546,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not fn.endswith('.json'):
         return
 
-    from bot.auth import require_admin
-    if not await require_admin(update):
+    from bot.auth import require_owner
+    if not await require_owner(update):
         return
 
     from config import BACKUP_JSON_PATH
@@ -3484,8 +3576,19 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # Prune expired staged imports (older than 10 minutes)
+        now_ts = time.time()
+        for tok, info in list(_pending_json_imports.items()):
+            if now_ts - info.get('created_at', 0) > 600:
+                expired = _pending_json_imports.pop(tok, None)
+                if expired and expired.get('path') and expired['path'].exists():
+                    try:
+                        expired['path'].unlink()
+                    except OSError:
+                        pass
+
         # -- Stash validated path for confirmation step --
-        _pending_json_imports[tmp_token] = {'path': tmp_path, 'preview': preview}
+        _pending_json_imports[tmp_token] = {'path': tmp_path, 'preview': preview, 'created_at': now_ts}
 
         rev = preview.get('revision', '?')
         exported_at = preview.get('exported_at', '?')

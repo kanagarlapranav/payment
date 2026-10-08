@@ -336,9 +336,12 @@ def _sanitize_error_message(err: Exception, api_key: str = "") -> str:
 
 def _prepare_image_b64(image_path: str) -> tuple[str, str]:
     try:
+        Image.MAX_IMAGE_PIXELS = 50_000_000
         with Image.open(image_path) as img:
-            img = img.convert("RGB")
             w, h = img.size
+            if w * h > 50_000_000:
+                raise ValueError(f"Image too large: {w}x{h}")
+            img = img.convert("RGB")
 
             if h > w * 1.4:
                 # Keep crop conservative; do not aggressively cut receipt details
@@ -547,6 +550,15 @@ async def extract_transaction_with_gemini_async(
 
                 if err_type == "RATE_LIMIT" or (response is not None and response.status_code == 429):
                     _last_extraction_error = "RATE_LIMIT"
+                    logger.warning(f"Gemini rate limit (429) on {model_name}. Short-circuiting model loop.")
+                    break
+
+                if response is not None and response.status_code in (400, 413, 415):
+                    logger.warning(
+                        "Gemini permanently rejected request (%s) on %s. Short-circuiting model loop.",
+                        response.status_code, model_name
+                    )
+                    break
 
                 if response is None or response.status_code != 200:
                     continue
@@ -565,7 +577,10 @@ async def extract_transaction_with_gemini_async(
                         json_str = json_str.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
                     parsed = json.loads(json_str)
-                except (json.JSONDecodeError, KeyError, IndexError, TypeError) as parse_err:
+                    if not isinstance(parsed, dict):
+                        logger.warning(f"Gemini returned non-dict JSON ({type(parsed)}). Falling back to next model.")
+                        continue
+                except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError) as parse_err:
                     logger.warning(f"Malformed JSON returned by {model_name} ({parse_err}). Falling back to next model.")
                     continue
 
@@ -787,11 +802,12 @@ def parse_text_with_gemini(text: str) -> Tuple[Optional[Transaction], int]:
         if loop and loop.is_running():
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(asyncio.run, parse_text_with_gemini_async(text)).result()
+                fut = pool.submit(asyncio.run, parse_text_with_gemini_async(text))
+                return fut.result(timeout=15.0)
         else:
-            return asyncio.run(parse_text_with_gemini_async(text))
-    except Exception as e:
-        logger.error(f"Error in parse_text_with_gemini: {e}")
+            return asyncio.run(asyncio.wait_for(parse_text_with_gemini_async(text), timeout=15.0))
+    except (TimeoutError, Exception) as e:
+        logger.warning(f"Error or timeout in parse_text_with_gemini: {e}")
         return None, 0
 
 

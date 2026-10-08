@@ -59,17 +59,19 @@ def parse_decimal_amount(value: Any, *, allow_zero: bool = False) -> Decimal:
     if not amount.is_finite():
         raise ValueError("Amount must be finite (not NaN or Infinity)")
 
+    quantized = amount.quantize(CENT)
+
     if allow_zero:
-        if amount < Decimal("0.00"):
+        if quantized < Decimal("0.00"):
             raise ValueError("Amount cannot be negative")
     else:
-        if amount <= Decimal("0.00"):
-            raise ValueError("Amount must be greater than zero")
+        if quantized <= Decimal("0.00"):
+            raise ValueError("Amount must be at least ₹0.01")
 
-    if amount > MAX_AMOUNT:
-        raise ValueError(f"Amount {amount} exceeds the maximum limit of 10 crore ({MAX_AMOUNT})")
+    if quantized > MAX_AMOUNT:
+        raise ValueError(f"Amount {quantized} exceeds the maximum limit of 10 crore ({MAX_AMOUNT})")
 
-    return amount.quantize(CENT)
+    return quantized
 
 
 def validate_transaction_type(value: Any) -> str:

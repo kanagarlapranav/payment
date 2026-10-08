@@ -13,4 +13,5 @@ google-api-python-client==2.200.0
 google-auth-httplib2==0.4.2
 google-auth-oauthlib==1.4.1
 tzdata==2026.1
+httpx==0.28.1
 

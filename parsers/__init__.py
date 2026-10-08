@@ -1,3 +1,4 @@
+import re
 from parsers.base import BasePaymentParser
 from parsers.generic import GenericParser
 from parsers.phonepe import PhonePeParser
@@ -27,11 +28,11 @@ def get_best_parser(raw_text: str) -> BasePaymentParser:
         return BhimParser(raw_text)
     elif any(k in top_few for k in ('google pay', 'gpay')) or 'google pay' in text_lower or 'gpay' in text_lower:
         return GooglePayParser(raw_text)
-    elif 'cred' in top_few or 'cred' in text_lower:
+    elif bool(re.search(r'\bcred\b', top_few)) or bool(re.search(r'\bcred\b', text_lower)):
         return CredParser(raw_text)
     elif 'supermoney' in text_lower or 'super.money' in text_lower or '@superyes' in text_lower or '@superaxis' in text_lower or ('super' in text_lower and 'money' in text_lower):
         return SuperMoneyParser(raw_text)
-    elif 'navi' in text_lower or 'navipay' in text_lower:
+    elif bool(re.search(r'\bnavi\b', text_lower)) or 'navipay' in text_lower:
         return NaviParser(raw_text)
     elif 'yono' in text_lower or 'yono sbi' in text_lower:
         return YonoSbiParser(raw_text)
@@ -41,7 +42,7 @@ def get_best_parser(raw_text: str) -> BasePaymentParser:
         return WhatsAppPayParser(raw_text)
     elif 'mobikwik' in text_lower or '@ikwik' in text_lower:
         return MobikwikParser(raw_text)
-    elif 'slice' in text_lower or '@slice' in text_lower:
+    elif bool(re.search(r'\bslice\b', text_lower)) or '@slice' in text_lower:
         return SliceParser(raw_text)
     elif 'jupiter' in text_lower or '@jupiteraxis' in text_lower:
         return JupiterParser(raw_text)

@@ -3,6 +3,12 @@ from openpyxl.styles import Font, PatternFill
 from database.queries import get_all_transactions
 import os
 
+def sanitize_cell_value(val: any) -> any:
+    """Neutralizes spreadsheet formula injection by prepending a single quote to formula triggers."""
+    if isinstance(val, str) and len(val) > 0 and val[0] in ('=', '+', '-', '@', '\t', '\r'):
+        return f"'{val}"
+    return val
+
 def generate_excel_report(output_path: str, workspace_id: str = None):
     """Generates an Excel report of all transactions for a workspace."""
     transactions = get_all_transactions(workspace_id=workspace_id)
@@ -39,16 +45,16 @@ def generate_excel_report(output_path: str, workspace_id: str = None):
             t['transaction_date'], 
             t['transaction_time'], 
             t['transaction_type'],
-            t['person_name'], 
-            t['sender_name'], 
-            t['recipient_name'], 
+            sanitize_cell_value(t['person_name']), 
+            sanitize_cell_value(t['sender_name']), 
+            sanitize_cell_value(t['recipient_name']), 
             t['amount'], 
-            t['upi_id'], 
-            t['phone_number'],
-            t['reference_number'], 
-            t['transaction_id'], 
-            t['payment_app'], 
-            t['bank_name'],
+            sanitize_cell_value(t['upi_id']), 
+            sanitize_cell_value(t['phone_number']),
+            sanitize_cell_value(t['reference_number']), 
+            sanitize_cell_value(t['transaction_id']), 
+            sanitize_cell_value(t['payment_app']), 
+            sanitize_cell_value(t['bank_name']),
             t['payment_status'], 
             t['balance_before'], 
             t['balance_after'], 
