@@ -22,7 +22,8 @@ from bot.commands import (
     insights_command, budget_command, setbudget_command, digest_command, dashboard_command, menu_command,
     cafestats_command, cafeedit_command, addmenu_command, delmenu_command, restore_command, undo_command,
     geministatus_command, setmodel_command, backup_command, workspace_command, members_command, setrole_command,
-    permissions_command, invite_member_command, join_command, audit_command, removemember_command
+    permissions_command, invite_member_command, join_command, audit_command, removemember_command,
+    admin_command
 )
 from bot.handlers import handle_image, handle_callback_query, handle_text, handle_document, handle_chat_migration
 from services.scheduler_service import register_scheduler_jobs
@@ -225,6 +226,7 @@ def build_application():
     app.add_handler(CommandHandler(["workspace", "workspaces"], workspace_command))
     app.add_handler(CommandHandler(["members", "team"], members_command))
     app.add_handler(CommandHandler("setrole", setrole_command))
+    app.add_handler(CommandHandler(["admin", "makeadmin", "promote"], admin_command))
     app.add_handler(CommandHandler(["removemember", "remove_member", "kickmember", "kick"], removemember_command))
     app.add_handler(CommandHandler(["permissions", "roles", "users"], permissions_command))
     app.add_handler(CommandHandler(["invite", "invite_member"], invite_member_command))

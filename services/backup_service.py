@@ -819,11 +819,10 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                     cursor.execute('''
                         INSERT INTO custom_menu_items (name, price, category, is_veg, workspace_id)
                         VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(name) DO UPDATE SET
+                        ON CONFLICT(workspace_id, name) DO UPDATE SET
                             price = excluded.price,
                             category = excluded.category,
-                            is_veg = excluded.is_veg,
-                            workspace_id = excluded.workspace_id
+                            is_veg = excluded.is_veg
                     ''', (dish_name, dish_price, dish_cat, int(dish.get('is_veg', 1)), menu_ws))
 
                 # Restore settings
@@ -1056,7 +1055,7 @@ async def backup_to_telegram(bot, chat_id: str = None, timeout: float = 20.0, fo
                 disable_notification=True
             )
             
-        # Pin new message
+        # Pin new message in target chat (group or DM)
         try:
             await bot.pin_chat_message(
                 chat_id=target_chat,
@@ -1064,7 +1063,27 @@ async def backup_to_telegram(bot, chat_id: str = None, timeout: float = 20.0, fo
                 disable_notification=True
             )
         except Exception as pin_err:
-            logger.debug(f"Notice pinning new backup message: {pin_err}")
+            logger.debug(f"Notice pinning new backup message in {target_chat}: {pin_err}")
+
+        # In addition, if target_chat was a group, always mirror and pin to owner's private chat (where pin always succeeds)
+        if TELEGRAM_USER_ID and str(target_chat) != str(TELEGRAM_USER_ID) and str(target_chat).startswith('-'):
+            try:
+                with open(BACKUP_JSON_PATH, 'rb') as owner_doc:
+                    owner_msg = await bot.send_document(
+                        chat_id=TELEGRAM_USER_ID,
+                        document=owner_doc,
+                        filename="payment_tracker_backup.json",
+                        caption=caption,
+                        disable_notification=True
+                    )
+                await bot.pin_chat_message(
+                    chat_id=TELEGRAM_USER_ID,
+                    message_id=owner_msg.message_id,
+                    disable_notification=True
+                )
+                logger.info(f"Mirrored and pinned backup to bot owner private DM ({TELEGRAM_USER_ID}).")
+            except Exception as owner_pin_err:
+                logger.debug(f"Notice mirroring backup to owner DM: {owner_pin_err}")
 
         # Rotate backup messages: retain last 7 message IDs
         to_prune = []
@@ -1133,63 +1152,85 @@ async def backup_to_telegram(bot, chat_id: str = None, timeout: float = 20.0, fo
         return False
 
 def restore_local_fallback_if_valid() -> bool:
-    """Restores from local BACKUP_JSON_PATH only if its checksum and schema are valid."""
-    if not BACKUP_JSON_PATH.exists():
-        return False
-    try:
-        with open(BACKUP_JSON_PATH, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        valid, err = verify_backup_payload(data)
-        if not valid:
-            logger.warning(f"Local backup JSON fallback rejected: checksum or schema invalid ({err})")
-            return False
-        res = import_database_from_json(data_dict=data)
-        return bool(res.get('success'))
-    except Exception as e:
-        logger.warning(f"Error reading local backup fallback: {e}")
-        return False
+    """Restores from local BACKUP_JSON_PATH or seed_backup.json only if its checksum and schema are valid."""
+    from config import BASE_DIR
+    candidates = [
+        BACKUP_JSON_PATH,
+        DATA_DIR / 'seed_backup.json',
+        BASE_DIR / 'data' / 'seed_backup.json',
+        BASE_DIR / 'seed_backup.json',
+    ]
+    for cand in candidates:
+        if cand.exists():
+            try:
+                with open(cand, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                valid, err = verify_backup_payload(data)
+                if not valid:
+                    logger.warning(f"Local backup JSON fallback {cand} rejected: checksum or schema invalid ({err})")
+                    continue
+                res = import_database_from_json(data_dict=data)
+                if res.get('success'):
+                    logger.info(f"Restored database successfully from local backup file: {cand}")
+                    return True
+            except Exception as e:
+                logger.warning(f"Error reading local backup fallback from {cand}: {e}")
+    return False
 
 async def restore_from_telegram(bot, chat_id: str = None) -> bool:
     """
     Retrieves the latest pinned backup document from Telegram and restores the database.
+    Checks owner DM (TELEGRAM_USER_ID) and group chat (TELEGRAM_GROUP_ID).
     Falls back to local JSON backup ONLY if its checksum is valid.
     """
-    target_chat = chat_id or TELEGRAM_GROUP_ID or TELEGRAM_USER_ID
-    if not target_chat or not bot:
+    chats_to_check = []
+    if chat_id:
+        chats_to_check.append(chat_id)
+    if TELEGRAM_USER_ID and TELEGRAM_USER_ID not in chats_to_check:
+        chats_to_check.append(TELEGRAM_USER_ID)
+    if TELEGRAM_GROUP_ID and TELEGRAM_GROUP_ID not in chats_to_check:
+        chats_to_check.append(TELEGRAM_GROUP_ID)
+
+    if not chats_to_check or not bot:
         logger.warning("No Telegram chat or bot available for cloud restore.")
         return restore_local_fallback_if_valid()
-        
-    try:
-        chat = await bot.get_chat(chat_id=target_chat)
-        pinned = chat.pinned_message
-        if not pinned or not pinned.document:
-            logger.info("No pinned backup document found in Telegram chat.")
-            return restore_local_fallback_if_valid()
-            
-        is_backup = (
-            (pinned.caption and "#PAYMENT_TRACKER_BACKUP" in pinned.caption) or
-            ("backup" in (pinned.document.file_name or "").lower())
-        )
-        if not is_backup:
-            logger.info("Pinned message is not a payment tracker backup.")
-            return restore_local_fallback_if_valid()
-            
-        logger.info(f"Found pinned cloud backup: {pinned.document.file_name}. Downloading...")
-        file = await bot.get_file(pinned.document.file_id)
-        download_path = DATA_DIR / "temp_cloud_backup.json"
+
+    for target_chat in chats_to_check:
         try:
-            await file.download_to_drive(custom_path=download_path)
-            res = import_database_from_json(input_path=download_path)
-            return bool(res.get('success'))
-        finally:
-            if download_path.exists():
-                try:
-                    download_path.unlink()
-                except OSError as cleanup_err:
-                    logger.warning(f"Could not remove temp cloud backup file {download_path}: {cleanup_err}")
-    except Exception as e:
-        logger.error(f"Error restoring backup from Telegram: {e}", exc_info=True)
-        return restore_local_fallback_if_valid()
+            chat = await bot.get_chat(chat_id=target_chat)
+            pinned = chat.pinned_message
+            if not pinned or not pinned.document:
+                logger.info(f"No pinned backup document found in Telegram chat {target_chat}.")
+                continue
+
+            is_backup = (
+                (pinned.caption and "#PAYMENT_TRACKER_BACKUP" in pinned.caption) or
+                ("backup" in (pinned.document.file_name or "").lower())
+            )
+            if not is_backup:
+                logger.info(f"Pinned message in chat {target_chat} is not a payment tracker backup.")
+                continue
+
+            logger.info(f"Found pinned cloud backup in {target_chat}: {pinned.document.file_name}. Downloading...")
+            file = await bot.get_file(pinned.document.file_id)
+            download_path = DATA_DIR / "temp_cloud_backup.json"
+            try:
+                await file.download_to_drive(custom_path=download_path)
+                res = import_database_from_json(input_path=download_path)
+                if res.get('success'):
+                    logger.info(f"Cloud restore from {target_chat} succeeded!")
+                    return True
+            finally:
+                if download_path.exists():
+                    try:
+                        download_path.unlink()
+                    except OSError as cleanup_err:
+                        logger.warning(f"Could not remove temp cloud backup file {download_path}: {cleanup_err}")
+        except Exception as e:
+            logger.warning(f"Error restoring backup from Telegram chat {target_chat}: {e}")
+
+    logger.info("Cloud restore checks complete. Attempting local seed/fallback...")
+    return restore_local_fallback_if_valid()
 
 
 def export_workspace_to_json(workspace_id: str, output_path: Path = None, actor_user_id: int = 0) -> dict:

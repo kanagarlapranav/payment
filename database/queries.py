@@ -722,21 +722,43 @@ def set_user_permission_and_role(telegram_user_id: int, role: str, is_active: bo
 
             if is_active:
                 def_ws_id = get_default_workspace_id()
+                cursor.execute("SELECT username, display_name FROM access_requests WHERE telegram_user_id = ?", (int(telegram_user_id),))
+                ar_row = cursor.fetchone()
+                uname = ar_row['username'] if ar_row and ar_row['username'] else ("nagendra" if int(telegram_user_id) == 8343764796 else "")
+                dname = ar_row['display_name'] if ar_row and ar_row['display_name'] else ("Nagendra" if int(telegram_user_id) == 8343764796 else "")
+
+                # Check existing workspace members for better username/display_name
+                cursor.execute("SELECT username, display_name FROM workspace_members WHERE telegram_user_id = ? AND (username != '' OR display_name != '') LIMIT 1", (int(telegram_user_id),))
+                ex_row = cursor.fetchone()
+                if ex_row:
+                    if ex_row['username']: uname = ex_row['username']
+                    if ex_row['display_name']: dname = ex_row['display_name']
+
+                # Target default workspace + all active group workspaces
+                target_workspaces = set()
                 if def_ws_id:
+                    target_workspaces.add(def_ws_id)
+                cursor.execute("SELECT id FROM workspaces WHERE (chat_type IN ('group', 'supergroup') OR chat_id < 0) AND is_active = 1")
+                for gw in cursor.fetchall():
+                    target_workspaces.add(gw['id'])
+
+                for tws in target_workspaces:
                     cursor.execute(
                         "SELECT id FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?",
-                        (def_ws_id, int(telegram_user_id))
+                        (tws, int(telegram_user_id))
                     )
                     if not cursor.fetchone():
-                        cursor.execute("SELECT username, display_name FROM access_requests WHERE telegram_user_id = ?", (int(telegram_user_id),))
-                        ar_row = cursor.fetchone()
-                        uname = ar_row['username'] if ar_row and ar_row['username'] else ""
-                        dname = ar_row['display_name'] if ar_row and ar_row['display_name'] else ""
                         cursor.execute("""
                             INSERT OR REPLACE INTO workspace_members 
                             (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (def_ws_id, int(telegram_user_id), uname, dname, clean_role, active_val, now_utc, now_utc))
+                        """, (tws, int(telegram_user_id), uname, dname, clean_role, active_val, now_utc, now_utc))
+                    else:
+                        cursor.execute("""
+                            UPDATE workspace_members 
+                            SET role = ?, is_active = ?, updated_at = ?
+                            WHERE workspace_id = ? AND telegram_user_id = ?
+                        """, (clean_role, active_val, now_utc, tws, int(telegram_user_id)))
 
             req_status = 'approved' if is_active else 'rejected'
             cursor.execute("""
@@ -745,7 +767,15 @@ def set_user_permission_and_role(telegram_user_id: int, role: str, is_active: bo
                 WHERE telegram_user_id = ?
             """, (req_status, now_utc, int(telegram_user_id)))
             conn.commit()
-            return True
+
+        # Update local backup after role change
+        try:
+            from services.backup_service import export_database_to_json
+            export_database_to_json()
+        except Exception as bkp_err:
+            logger.debug(f"Notice exporting backup after role change: {bkp_err}")
+
+        return True
 
 def get_workspace_setting(workspace_id: str, key: str, default: str = None) -> str | None:
     """
