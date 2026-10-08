@@ -383,3 +383,75 @@ def test_super_admin_emergency_access():
             assert ctx.role == "owner"
 
     asyncio.run(_test())
+
+
+def test_cross_workspace_mutation_protection_default_ws():
+    """Verifies that non-default workspace cannot mutate or delete transactions in default workspace."""
+    from database.queries import get_default_workspace_id
+    default_ws = get_default_workspace_id()
+
+    # Create transaction in default workspace
+    t_default = Transaction(
+        amount=500.0,
+        transaction_type="SENT",
+        person_name="Default Owner",
+        category="General",
+        transaction_date="2026-10-08",
+        workspace_id=default_ws
+    )
+    tx_id = insert_transaction(t_default)
+    assert tx_id > 0
+
+    # Create separate tenant workspace
+    ws_tenant = get_or_create_workspace(chat_id=-100999888, chat_type="group", title="Tenant Group")
+
+    # Attempt to delete default workspace transaction using tenant workspace scope
+    del_res = delete_transaction(tx_id, workspace_id=ws_tenant.id)
+    assert del_res is False, "Tenant workspace should not be able to delete default workspace transaction"
+
+    # Verify transaction still exists and is untouched
+    tx = get_transaction_by_id(tx_id, workspace_id=default_ws)
+    assert tx is not None
+    assert tx.get('deleted_at') is None
+
+    # Attempt to update default workspace transaction using tenant workspace scope
+    upd_res = update_transaction(tx_id, {'amount': 999.0}, workspace_id=ws_tenant.id)
+    assert upd_res is False, "Tenant workspace should not be able to update default workspace transaction"
+
+    # Transaction amount remains original
+    tx_after = get_transaction_by_id(tx_id, workspace_id=default_ws)
+    assert float(tx_after['amount']) == 500.0
+
+
+def test_cross_workspace_undo_insert_protection():
+    """Verifies that undo cannot delete transaction belonging to another workspace."""
+    from services.undo_service import record_insert_action, perform_undo
+    from database.queries import get_default_workspace_id
+
+    ws_1 = get_or_create_workspace(chat_id=-100111222, chat_type="group", title="Workspace 1")
+    ws_2 = get_or_create_workspace(chat_id=-100333444, chat_type="group", title="Workspace 2")
+
+    t1 = Transaction(
+        amount=250.0,
+        transaction_type="SENT",
+        person_name="Tenant 1 Payee",
+        category="Food",
+        transaction_date="2026-10-08",
+        workspace_id=ws_1.id
+    )
+    tx1_id = insert_transaction(t1)
+    tx1 = get_transaction_by_id(tx1_id, workspace_id=ws_1.id)
+    assert tx1 is not None
+
+    # Record insert for user 100 in ws_1
+    record_insert_action(tx1['uid'], chat_id=-100111222, user_id=100, workspace_id=ws_1.id)
+
+    # Attempt undo in ws_2 scope
+    success, msg = perform_undo(chat_id=-100333444, user_id=100, workspace_id=ws_2.id)
+    assert success is False
+
+    # Original transaction in ws_1 is still live
+    tx1_check = get_transaction_by_id(tx1_id, workspace_id=ws_1.id)
+    assert tx1_check is not None
+    assert tx1_check.get('deleted_at') is None
+
