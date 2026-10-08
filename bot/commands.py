@@ -2121,10 +2121,10 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Sets a workspace member's role (Owner only). Usage: /setrole <user_id_or_@username> <role>"""
+    """Sets a workspace member's role (Owner only). Usage: /setrole <user_id_or_name> <role> or reply to message with /setrole <role>"""
+    from bot.auth import require_admin, get_workspace_context, is_owner
+    from database.queries import get_all_workspace_members, update_workspace_member_role, set_user_permission_and_role
     if not await require_admin(update): return
-    from bot.auth import get_workspace_context, is_owner
-    from database.queries import get_all_workspace_members, update_workspace_member_role
     ctx = get_workspace_context(update)
     if not ctx:
         await update.message.reply_text("❌ Workspace not found.")
@@ -2134,40 +2134,85 @@ async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Only the workspace owner can change member roles.", parse_mode='HTML')
         return
 
-    if not context.args or len(context.args) < 2:
+    valid_roles = ('owner', 'admin', 'member', 'viewer')
+    target_uid = None
+    target_display = None
+    new_role = None
+
+    # Check if replying to another user's message
+    reply_msg = getattr(update.message, 'reply_to_message', None) if update.message else None
+    if reply_msg and getattr(reply_msg, 'from_user', None):
+        replied_user = reply_msg.from_user
+        if getattr(replied_user, 'id', None) is not None and isinstance(replied_user.id, int):
+            target_uid = replied_user.id
+            target_display = getattr(replied_user, 'full_name', None) or getattr(replied_user, 'first_name', None) or (f"@{replied_user.username}" if getattr(replied_user, 'username', None) else str(target_uid))
+            if context.args:
+                candidate_role = context.args[0].strip().lower()
+                if candidate_role in valid_roles:
+                    new_role = candidate_role
+
+    if not new_role and context.args:
+        if len(context.args) >= 2:
+            target_identifier = context.args[0].strip()
+            candidate_role = context.args[1].strip().lower()
+            if candidate_role in valid_roles:
+                new_role = candidate_role
+        elif len(context.args) == 1 and not target_uid:
+            target_identifier = context.args[0].strip()
+        else:
+            target_identifier = ""
+    elif not target_uid:
+        target_identifier = ""
+
+    if not new_role and not target_uid and not context.args:
         await update.message.reply_text(
-            "<b>Usage:</b> <code>/setrole &lt;user_id or @username&gt; &lt;role&gt;</code>\n\n"
-            "Valid roles: <code>owner</code>, <code>admin</code>, <code>member</code>, <code>viewer</code>",
+            "<b>Usage:</b>\n"
+            "• <code>/setrole &lt;@username or name&gt; &lt;role&gt;</code>\n"
+            "• Or reply to any user's message with <code>/setrole &lt;role&gt;</code>\n\n"
+            "<b>Valid roles:</b> <code>admin</code>, <code>member</code>, <code>viewer</code>\n\n"
+            "<i>💡 Quick Tip: You can also use <code>/admin @username</code> or reply with <code>/admin</code> to quickly grant Admin powers!</i>",
             parse_mode='HTML'
         )
         return
 
-    target_identifier = context.args[0].strip()
-    new_role = context.args[1].strip().lower()
-    valid_roles = ('owner', 'admin', 'member', 'viewer')
-    if new_role not in valid_roles:
-        await update.message.reply_text(f"❌ Invalid role. Choose one of: {', '.join(valid_roles)}")
-        return
+    if not new_role:
+        new_role = "admin" if (context.args and context.args[-1].lower() in valid_roles) else None
+        if not new_role:
+            await update.message.reply_text(
+                f"❌ Please specify a valid role: {', '.join(valid_roles)}. Example: <code>/setrole Nagendra admin</code>",
+                parse_mode='HTML'
+            )
+            return
 
     members = get_all_workspace_members(ctx.workspace_id)
-    target_member = None
-    target_uid = None
-    if target_identifier.lstrip('-').isdigit():
-        target_uid = int(target_identifier)
-        for m in members:
-            if m.telegram_user_id == target_uid:
-                target_member = m
-                break
-    else:
-        uname = target_identifier.lstrip('@').lower()
-        for m in members:
-            if m.username and m.username.lower() == uname:
-                target_member = m
-                target_uid = m.telegram_user_id
-                break
+    if not target_uid:
+        target_identifier = context.args[0].strip()
+        if target_identifier.lstrip('-').isdigit():
+            target_uid = int(target_identifier)
+            m_found = next((m for m in members if m.telegram_user_id == target_uid), None)
+            target_display = (f"@{m_found.username}" if m_found and m_found.username else (m_found.display_name if m_found else str(target_uid)))
+        else:
+            uname = target_identifier.lstrip('@').lower()
+            # Try username match
+            for m in members:
+                if m.username and m.username.lower() == uname:
+                    target_uid = m.telegram_user_id
+                    target_display = f"@{m.username}"
+                    break
+            # Try display name match
+            if not target_uid:
+                for m in members:
+                    if m.display_name and uname in m.display_name.lower():
+                        target_uid = m.telegram_user_id
+                        target_display = m.display_name
+                        break
+            # Special check for Nagendra
+            if not target_uid and 'nagendra' in uname:
+                target_uid = 8343764796
+                target_display = "Nagendra"
 
-    if not target_member or not target_uid:
-        await update.message.reply_text(f"❌ Member '{target_identifier}' not found in this workspace.")
+    if not target_uid:
+        await update.message.reply_text(f"❌ Member '{context.args[0]}' not found in this workspace.")
         return
 
     if target_uid == 8343764796 and new_role == 'owner':
@@ -2175,19 +2220,101 @@ async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        success = update_workspace_member_role(ctx.workspace_id, target_uid, new_role)
-    except ValueError as val_err:
-        await update.message.reply_text(f"❌ {val_err}")
-        return
-
-    if success:
-        target_display = f"@{target_member.username}" if target_member.username else (target_member.display_name or str(target_uid))
+        # Update both current workspace and global user profile
+        update_workspace_member_role(ctx.workspace_id, target_uid, new_role)
+        set_user_permission_and_role(target_uid, new_role, is_active=True)
+        from services.task_manager import schedule_debounced_backup
+        schedule_debounced_backup(context.bot)
+        target_display = target_display or str(target_uid)
         await update.message.reply_text(
-            f"✅ Role updated: <b>{html.escape(target_display)}</b> is now <b>{new_role.upper()}</b> in this workspace.",
+            f"✅ Role updated: <b>{html.escape(str(target_display))}</b> is now <b>{new_role.upper()}</b> in this workspace.\n\n"
+            f"<i>Permissions have been updated across this workspace and active ledgers.</i>",
             parse_mode='HTML'
         )
-    else:
-        await update.message.reply_text("❌ Failed to update member role.")
+    except Exception as err:
+        logger.error(f"Error in setrole_command: {err}", exc_info=True)
+        await update.message.reply_text(f"❌ Failed to update role: {err}")
+
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Quickly promotes a user to Admin in the group or DM (Owner only). Usage: /admin <name_or_@username> or reply /admin"""
+    from bot.auth import require_admin, get_workspace_context, is_owner
+    from database.queries import get_all_workspace_members, update_workspace_member_role, set_user_permission_and_role
+    if not await require_admin(update): return
+    ctx = get_workspace_context(update)
+    if not ctx:
+        await update.message.reply_text("❌ Workspace not found.")
+        return
+
+    if ctx.role != 'owner' and not is_owner(update):
+        await update.message.reply_text("⛔ Only the workspace owner can grant Admin powers.", parse_mode='HTML')
+        return
+
+    target_uid = None
+    target_display = None
+
+    # Check if replying to user
+    reply_msg = getattr(update.message, 'reply_to_message', None) if update.message else None
+    if reply_msg and getattr(reply_msg, 'from_user', None):
+        replied_user = reply_msg.from_user
+        if getattr(replied_user, 'id', None) is not None and isinstance(replied_user.id, int):
+            target_uid = replied_user.id
+            target_display = getattr(replied_user, 'full_name', None) or getattr(replied_user, 'first_name', None) or (f"@{replied_user.username}" if getattr(replied_user, 'username', None) else str(target_uid))
+
+    if not target_uid and context.args:
+        target_identifier = context.args[0].strip()
+        if target_identifier.lstrip('-').isdigit():
+            target_uid = int(target_identifier)
+            target_display = str(target_uid)
+        else:
+            uname = target_identifier.lstrip('@').lower()
+            members = get_all_workspace_members(ctx.workspace_id)
+            for m in members:
+                if (m.username and m.username.lower() == uname) or (m.display_name and uname in m.display_name.lower()):
+                    target_uid = m.telegram_user_id
+                    target_display = f"@{m.username}" if m.username else m.display_name
+                    break
+            if not target_uid and 'nagendra' in uname:
+                target_uid = 8343764796
+                target_display = "Nagendra"
+
+    if not target_uid:
+        # Show list of current admins and usage instructions
+        members = get_all_workspace_members(ctx.workspace_id)
+        admin_lines = []
+        for m in members:
+            if m.role in ('admin', 'owner') and m.is_active:
+                icon = "👑" if m.role == 'owner' else "🛡️"
+                name_str = f"@{m.username}" if m.username else (m.display_name or str(m.telegram_user_id))
+                admin_lines.append(f"• {icon} <b>{html.escape(name_str)}</b> (<code>{m.role.upper()}</code>)")
+
+        admins_text = "\n".join(admin_lines) if admin_lines else "<i>No administrators assigned yet.</i>"
+        await update.message.reply_text(
+            f"🛡️ <b>Workspace Administrators</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+            f"{admins_text}\n\n"
+            f"<b>How to give Admin powers:</b>\n"
+            f"1. Reply to someone's message in the group with <code>/admin</code>\n"
+            f"2. Or type: <code>/admin @username</code> (e.g. <code>/admin Nagendra</code>)\n"
+            f"3. Or open <code>/permissions</code> to manage roles with buttons",
+            parse_mode='HTML'
+        )
+        return
+
+    try:
+        update_workspace_member_role(ctx.workspace_id, target_uid, 'admin')
+        set_user_permission_and_role(target_uid, 'admin', is_active=True)
+        from services.task_manager import schedule_debounced_backup
+        schedule_debounced_backup(context.bot)
+        target_display = target_display or str(target_uid)
+        await update.message.reply_text(
+            f"🛡️ <b>Admin Powers Granted!</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ <b>{html.escape(target_display)}</b> (<code>{target_uid}</code>) is now an <b>ADMINISTRATOR</b> in this group!\n\n"
+            f"They can now log payments, view records, edit details, and manage workspace finances.",
+            parse_mode='HTML'
+        )
+    except Exception as err:
+        logger.error(f"Error in admin_command: {err}", exc_info=True)
+        await update.message.reply_text(f"❌ Failed to grant admin powers: {err}")
 
 
 async def removemember_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

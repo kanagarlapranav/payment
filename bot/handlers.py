@@ -590,7 +590,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     parts = data.split(":") if ":" in data else [data]
     action = parts[0]
 
-    if action not in ("set_model", "refresh_gemini"):
+    if action not in ("set_model", "refresh_gemini") and not action.startswith("perm_"):
         try:
             await query.answer()
         except Exception:
@@ -2728,6 +2728,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = text.split(maxsplit=1)
         context.args = parts[1].split() if len(parts) > 1 else []
         await setrole_command(update, context)
+        return
+    elif cmd_lower.startswith((r'\admin', 'admin', '/admin', r'\makeadmin', 'makeadmin', '/makeadmin', r'\promote', 'promote', '/promote')):
+        from bot.commands import admin_command
+        parts = text.split(maxsplit=1)
+        context.args = parts[1].split() if len(parts) > 1 else []
+        await admin_command(update, context)
         return
     elif cmd_lower in (r'\undo', 'undo', '/undo', 'revert', '/revert', r'\revert'):
         await undo_command(update, context)
