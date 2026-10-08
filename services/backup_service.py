@@ -843,14 +843,24 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                     dish_price = float(parse_decimal_amount(dish.get('price', 0.0), allow_zero=False))
                     dish_cat = validate_string_length(dish.get('category', 'Snacks & Tea'), max_length=50) or "Snacks & Tea"
                     menu_ws = target_ws or dish.get('workspace_id') or fallback_ws
-                    cursor.execute('''
-                        INSERT INTO custom_menu_items (name, price, category, is_veg, workspace_id)
-                        VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(workspace_id, name) DO UPDATE SET
-                            price = excluded.price,
-                            category = excluded.category,
-                            is_veg = excluded.is_veg
-                    ''', (dish_name, dish_price, dish_cat, int(dish.get('is_veg', 1)), menu_ws))
+                    cursor.execute("""
+                        SELECT id FROM custom_menu_items
+                        WHERE (workspace_id = ? OR (workspace_id IS NULL AND ? IS NULL))
+                          AND lower(name) = lower(?)
+                    """, (menu_ws, menu_ws, dish_name.strip()))
+                    existing_dish = cursor.fetchone()
+                    if existing_dish:
+                        dish_row_id = existing_dish[0]
+                        cursor.execute("""
+                            UPDATE custom_menu_items
+                            SET price = ?, category = ?, is_veg = ?, workspace_id = ?
+                            WHERE id = ?
+                        """, (dish_price, dish_cat, int(dish.get('is_veg', 1)), menu_ws, dish_row_id))
+                    else:
+                        cursor.execute("""
+                            INSERT INTO custom_menu_items (name, price, category, is_veg, workspace_id)
+                            VALUES (?, ?, ?, ?, ?)
+                        """, (dish_name, dish_price, dish_cat, int(dish.get('is_veg', 1)), menu_ws))
 
                 # Restore settings
                 now_utc = utc_now_iso()
@@ -860,11 +870,8 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                             v = str(float(parse_decimal_amount(v, allow_zero=True)))
                             if target_ws:
                                 cursor.execute("""
-                                    INSERT INTO workspace_settings (workspace_id, key, value, updated_at)
+                                    INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at)
                                     VALUES (?, ?, ?, ?)
-                                    ON CONFLICT(workspace_id, key) DO UPDATE SET
-                                        value = excluded.value,
-                                        updated_at = excluded.updated_at
                                 """, (target_ws, k, str(v), now_utc))
                             else:
                                 cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))

@@ -529,16 +529,22 @@ def add_workspace_member(
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO workspace_members (
-                    workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-                ON CONFLICT(workspace_id, telegram_user_id) DO UPDATE SET
-                    username = excluded.username,
-                    display_name = excluded.display_name,
-                    role = excluded.role,
-                    is_active = 1,
-                    updated_at = excluded.updated_at
-            """, (str(workspace_id), int(telegram_user_id), str(username or ""), str(display_name or ""), clean_role, now_utc, now_utc))
+                SELECT id FROM workspace_members
+                WHERE workspace_id = ? AND telegram_user_id = ?
+            """, (str(workspace_id), int(telegram_user_id)))
+            existing_member = cursor.fetchone()
+            if existing_member:
+                cursor.execute("""
+                    UPDATE workspace_members
+                    SET username = ?, display_name = ?, role = ?, is_active = 1, updated_at = ?
+                    WHERE id = ?
+                """, (str(username or ""), str(display_name or ""), clean_role, now_utc, existing_member[0]))
+            else:
+                cursor.execute("""
+                    INSERT INTO workspace_members (
+                        workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                """, (str(workspace_id), int(telegram_user_id), str(username or ""), str(display_name or ""), clean_role, now_utc, now_utc))
             conn.commit()
             return RowDict({
                 'workspace_id': str(workspace_id),
@@ -606,18 +612,24 @@ def create_access_request(telegram_user_id: int, username: str, display_name: st
     now_utc = utc_now_iso()
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO access_requests (telegram_user_id, workspace_id, username, display_name, chat_id, chat_type, status, requested_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
-            ON CONFLICT(telegram_user_id) DO UPDATE SET
-                workspace_id = COALESCE(excluded.workspace_id, access_requests.workspace_id),
-                username = excluded.username,
-                display_name = excluded.display_name,
-                chat_id = excluded.chat_id,
-                chat_type = excluded.chat_type,
-                status = 'pending',
-                requested_at = excluded.requested_at
-        """, (int(telegram_user_id), str(workspace_id) if workspace_id else None, str(username or ""), str(display_name or ""), int(chat_id), str(chat_type or "private"), now_utc))
+        cursor.execute("SELECT telegram_user_id FROM access_requests WHERE telegram_user_id = ?", (int(telegram_user_id),))
+        if cursor.fetchone():
+            cursor.execute("""
+                UPDATE access_requests
+                SET workspace_id = COALESCE(?, access_requests.workspace_id),
+                    username = ?,
+                    display_name = ?,
+                    chat_id = ?,
+                    chat_type = ?,
+                    status = 'pending',
+                    requested_at = ?
+                WHERE telegram_user_id = ?
+            """, (str(workspace_id) if workspace_id else None, str(username or ""), str(display_name or ""), int(chat_id), str(chat_type or "private"), now_utc, int(telegram_user_id)))
+        else:
+            cursor.execute("""
+                INSERT INTO access_requests (telegram_user_id, workspace_id, username, display_name, chat_id, chat_type, status, requested_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+            """, (int(telegram_user_id), str(workspace_id) if workspace_id else None, str(username or ""), str(display_name or ""), int(chat_id), str(chat_type or "private"), now_utc))
         conn.commit()
         return RowDict({
             'telegram_user_id': int(telegram_user_id),

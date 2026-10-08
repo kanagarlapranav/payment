@@ -387,8 +387,14 @@ def setup_database():
                     if "workspace_id" not in t_cols:
                         cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN workspace_id TEXT")
 
-                cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_ws_ym ON monthly_reviews(workspace_id, year, month)')
-                cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_cmi_ws_name ON custom_menu_items(workspace_id, name)')
+                try:
+                    cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_ws_ym ON monthly_reviews(workspace_id, year, month)')
+                except Exception as e:
+                    logger.warning(f"Could not create unique index on monthly_reviews: {e}")
+                try:
+                    cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_cmi_ws_name ON custom_menu_items(workspace_id, name)')
+                except Exception as e:
+                    logger.warning(f"Could not create unique index on custom_menu_items: {e}")
 
                 # Idempotent Schema Migration v3: Backfill occurred_at and set updated_at to migration time in UTC
                 from utils.dates import build_occurred_at, utc_now_iso
