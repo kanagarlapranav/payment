@@ -11,7 +11,7 @@ class CredParser(GenericParser):
 
     def can_parse(self) -> bool:
         text_l = self.raw_text.lower()
-        return "cred" in text_l or "@cred" in text_l or "cred upi" in text_l or "cred protected" in text_l
+        return bool(re.search(r'\bcred\b', text_l)) or "@cred" in text_l or "cred upi" in text_l or "cred protected" in text_l
 
     def parse(self) -> Transaction:
         t = super().parse()
@@ -126,7 +126,7 @@ class NaviParser(GenericParser):
 
     def can_parse(self) -> bool:
         text_l = self.raw_text.lower()
-        return "navi" in text_l or "navipay" in text_l or "@navi" in text_l or "navi technologies" in text_l
+        return bool(re.search(r'\bnavi\b', text_l)) or "navipay" in text_l or "@navi" in text_l or "navi technologies" in text_l
 
     def parse(self) -> Transaction:
         t = super().parse()
@@ -195,7 +195,7 @@ class SliceParser(GenericParser):
 
     def can_parse(self) -> bool:
         text_l = self.raw_text.lower()
-        return "slice" in text_l or "@slice" in text_l
+        return bool(re.search(r'\bslice\b', text_l)) or "@slice" in text_l
 
     def parse(self) -> Transaction:
         t = super().parse()
