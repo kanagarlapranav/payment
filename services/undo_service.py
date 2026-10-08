@@ -323,12 +323,16 @@ def perform_undo(
             )
 
         elif action == 'insert':
-            tx = get_transaction_by_uid(uid, live_only=True)
+            tx = get_transaction_by_uid(uid, live_only=True, workspace_id=rec_ws_id) if rec_ws_id else get_transaction_by_uid(uid, live_only=True)
             if not tx:
                 return False, "Transaction is already deleted or no longer exists."
 
+            # Verify workspace match
+            if ws_id and tx.get('workspace_id') and str(tx['workspace_id']) != str(ws_id):
+                return False, "Cross-workspace undo rejected: transaction does not belong to current workspace."
+
             tx_id = tx.get('id')
-            deleted = delete_transaction_by_uid(uid=uid)
+            deleted = delete_transaction_by_uid(uid=uid, workspace_id=rec_ws_id)
             if not deleted:
                 return False, "Failed to remove newly added transaction."
 
