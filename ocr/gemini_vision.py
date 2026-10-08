@@ -356,6 +356,11 @@ def _prepare_image_b64(image_path: str) -> tuple[str, str]:
             return b64, "image/jpeg"
     except Exception as img_err:
         logger.warning(f"Could not resize image with PIL ({img_err}), using raw file.")
+        try:
+            if os.path.getsize(image_path) > 15 * 1024 * 1024:
+                raise ValueError(f"Image too large: {os.path.getsize(image_path)} bytes exceeds 15MB limit")
+        except (OSError, FileNotFoundError):
+            pass
         with open(image_path, "rb") as f:
             raw_b64 = base64.b64encode(f.read()).decode("utf-8")
         ext = os.path.splitext(image_path)[1].lower()
