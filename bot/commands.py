@@ -194,11 +194,11 @@ def render_backup_status_text() -> str:
     )
     return text
 
-def render_recurring_overview_text() -> str:
+def render_recurring_overview_text(workspace_id: Optional[str] = None) -> str:
     """Renders the Recurring Payments overview and upcoming dues card."""
     from services.recurring_service import get_upcoming_recurring, get_recurring_monthly_total
-    upcoming = get_upcoming_recurring(days_ahead=30)
-    monthly_total = get_recurring_monthly_total()
+    upcoming = get_upcoming_recurring(days_ahead=30, workspace_id=workspace_id)
+    monthly_total = get_recurring_monthly_total(workspace_id=workspace_id)
     
     lines = [
         "🔄 <b>Recurring Payments & Subscriptions</b>",
@@ -223,10 +223,10 @@ def render_recurring_overview_text() -> str:
     lines.append("<i>💡 Tap a Pay or Skip button below, or add a new recurring payment:</i>")
     return "\n".join(lines)
 
-def render_all_recurring_text() -> str:
+def render_all_recurring_text(workspace_id: Optional[str] = None) -> str:
     """Renders full list of active and inactive recurring payments."""
     from services.recurring_service import get_all_recurring
-    all_recs = get_all_recurring(include_inactive=True)
+    all_recs = get_all_recurring(include_inactive=True, workspace_id=workspace_id)
     if not all_recs:
         return "🔄 <b>Recurring Payments</b>\n━━━━━━━━━━━━━━━━━━━━\n<i>No recurring payments created yet.</i>"
         
@@ -244,10 +244,10 @@ def render_all_recurring_text() -> str:
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
-def render_monthly_closing_summary_text(year: int, month: int) -> str:
+def render_monthly_closing_summary_text(year: int, month: int, workspace_id: Optional[str] = None) -> str:
     """Renders the comprehensive Month-End Financial Closing & Retrospective Review."""
     from services.monthly_review_service import calculate_monthly_closing_metrics
-    m = calculate_monthly_closing_metrics(year, month)
+    m = calculate_monthly_closing_metrics(year, month, workspace_id=workspace_id)
     
     month_names = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
     m_name = f"{month_names[month]} {year}"
