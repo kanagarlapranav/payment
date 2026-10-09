@@ -421,6 +421,19 @@ class TestLedgerReliability(unittest.TestCase):
         errors = validate_ledger_invariants(db_path=self.test_db_path)
         self.assertEqual(errors, [])
 
+    def test_build_occurred_at_fallback_uses_local_tz_date(self):
+        """Verify C-N28: build_occurred_at with unparseable date falls back to Asia/Kolkata date, not UTC."""
+        from unittest.mock import patch
+        from datetime import datetime, timezone, timedelta
+        from utils.dates import build_occurred_at
+
+        # Simulate 00:30 IST on Oct 10 (which is 19:00 UTC on Oct 09)
+        mock_ist_dt = datetime(2026, 10, 10, 0, 30, 0, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+        with patch("utils.dates.get_current_time_in_tz", return_value=mock_ist_dt):
+            occurred = build_occurred_at(None, "12:30 AM")
+            self.assertTrue(occurred.startswith("2026-10-10"))
+            self.assertEqual(occurred, "2026-10-10 00:30:00")
+
 
 if __name__ == "__main__":
     unittest.main()

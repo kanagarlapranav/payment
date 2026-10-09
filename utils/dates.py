@@ -39,7 +39,7 @@ def build_occurred_at(tx_date: Any, tx_time: Any) -> str:
                 date_part = parsed.strftime("%Y-%m-%d")
 
     if not date_part:
-        date_part = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_part = get_current_time_in_tz().strftime("%Y-%m-%d")
 
     # 2. Parse and canonicalize time part
     time_part = "00:00:00"
