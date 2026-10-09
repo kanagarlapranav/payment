@@ -1711,8 +1711,9 @@ async def delmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ {html.escape(msg)}", parse_mode='HTML')
 
 async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Restores database transactions from clean text JSON backup file via idempotent upsert with admin confirmation."""
-    if not await require_admin(update): return
+    """Restores database transactions from clean text JSON backup file via idempotent upsert with owner confirmation."""
+    from bot.auth import require_owner
+    if not await require_owner(update): return
 
     from services.backup_service import import_database_from_json, preview_database_import, BACKUP_JSON_PATH, backup_to_telegram, restore_from_telegram
     from database.queries import get_all_transactions, get_balance_setting

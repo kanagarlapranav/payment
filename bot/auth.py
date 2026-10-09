@@ -50,14 +50,14 @@ COMMAND_ROLE_POLICY = {
     "status": "viewer", "members": "viewer", "workspace": "viewer", "workspaces": "viewer",
     "join": "viewer",
 
-    # Member & above (Mutation: Logging Payments, Self-Edit/Delete, Self-Undo & Reports)
+    # Member & above (Mutation: Logging Payments, Self-Edit/Delete, Self-Undo)
     "log_receipt": "member", "log_text": "member", "cafe_tag": "member",
     "quick_add": "member", "self_undo": "member",
     "edit": "member", "delete": "member", "undo": "member", "revert": "member",
-    "export": "member", "report": "member", "statement": "member",
     "dashboard": "member",
 
-    # Admin & above (Management & Mutations, AI Quota & Insights)
+    # Admin & above (Management & Mutations, AI Quota, Reports & Exports)
+    "export": "admin", "report": "admin", "statement": "admin",
     "setbudget": "admin", "addmenu": "admin",
     "delmenu": "admin", "cafeedit": "admin", "editcafe": "admin",
     "backup": "admin", "backupnow": "admin",
@@ -71,51 +71,13 @@ COMMAND_ROLE_POLICY = {
     "workspace_settings": "owner", "transfer_ownership": "owner"
 }
 
-# Callback Action Prefix Policies
-READ_ONLY_CALLBACK_ACTIONS = {
-    "nav", "filter", "sort", "cafe_stats", "cafe_view_menu", "tx_view",
-    "ws_switch", "ws_reset", "ws_reset_menu", "ws_new_prompt", "perm_view", "perm_list"
-}
-
-ADMIN_CALLBACK_ACTIONS = {
-    # AI & Model Controls (Admin Only)
-    "refresh_gemini", "set_model",
-    # Access Approval & Permissions (Admin/Owner Only)
-    "auth_grant", "auth_deny", "perm_set", "perm_remove", "perm_remove_confirm",
-    # Receipt Card Actions & Pending Edits
-    "save_p", "force_save_p", "edit_p", "ep_field", "ep_back", "cat_p", "set_pcat", "cancel_p",
-    # Undo & Quick Add & Duplicate
-    "undo_tx", "quick_add", "undo_action", "undo_confirm", "undo_cancel", "dup_tx", "qa_payee",
-    # Legacy Confirm / Cancel
-    "confirm_tx", "cancel_tx",
-    # Edit / Delete Selection & Prompts
-    "select_edit", "select_edit_cancel", "select_delete", "select_delete_cancel",
-    "edit_field", "edit_cancel", "delete_confirm", "delete_cancel", "correct_amount",
-    "edit_tx", "delete_tx",
-    # Export File Formats
-    "export_file",
-    # Cafeteria Mutations & Tagging
-    "cafe_pick", "cafe_mode", "cafe_custom_prompt", "cafe_cart_add",
-    "cafe_cart_clear", "cafe_cart_done", "cafe_cat", "cafe_back",
-    "cafe_addon", "cafe_edit", "cafe_menu_add_prompt", "cafe_menu_del_prompt",
-    "cafe_del_item", "cafe_del_cancel", "cafe_edit_last", "cafe_skip",
-    # Backup & Restore Confirmation
-    "restore_confirm", "restore_cancel", "backup_now",
-    # JSON Upload Import Confirmation
-    "json_import_confirm", "json_import_cancel",
-    # Recurring & Monthly Reviews
-    "rec_paid", "rec_skip", "rec_pause", "rec_resume", "rec_del", "close_month",
-    # Gemini Model Switching
-    "set_model"
-}
-
-# Fine-grained Callback Role Policy
+# Fine-grained Callback Role Policy — SINGLE SOURCE OF TRUTH (B10 / P1-N3)
 CALLBACK_ROLE_POLICY = {
-    # Viewer & above
+    # Viewer & above (Read-Only)
     "nav": "viewer", "filter": "viewer", "sort": "viewer",
     "cafe_stats": "viewer", "cafe_view_menu": "viewer", "tx_view": "viewer",
     "ws_switch": "viewer", "ws_reset": "viewer", "ws_reset_menu": "viewer",
-    "ws_new_prompt": "viewer", "perm_view": "viewer", "perm_list": "viewer",
+    "ws_new_prompt": "viewer",
 
     # Member & above
     "save_p": "member", "force_save_p": "member", "edit_p": "member",
@@ -146,11 +108,17 @@ CALLBACK_ROLE_POLICY = {
     "perm_remove": "admin", "perm_remove_confirm": "admin",
 
     # Owner only
+    "auth_grant": "owner", "auth_deny": "owner", "perm_set": "owner",
+    "perm_view": "owner", "perm_list": "owner",
     "restore_confirm": "owner", "restore_cancel": "owner",
     "json_import_confirm": "owner", "json_import_cancel": "owner"
 }
 
 WORKSPACE_CALLBACK_POLICY = CALLBACK_ROLE_POLICY
+
+# Derived views for test backwards compatibility
+ADMIN_CALLBACK_ACTIONS = {k for k, v in CALLBACK_ROLE_POLICY.items() if v in ('admin', 'owner')}
+READ_ONLY_CALLBACK_ACTIONS = {k for k, v in CALLBACK_ROLE_POLICY.items() if v == 'viewer'}
 
 
 from typing import Optional, Dict, Any
@@ -930,9 +898,5 @@ def get_command_policy(command: str) -> Optional[str]:
 
 
 def get_callback_policy(action: str) -> Optional[str]:
-    """Returns 'admin', 'read_only', or None for unknown callback actions."""
-    if action in ADMIN_CALLBACK_ACTIONS:
-        return 'admin'
-    if action in READ_ONLY_CALLBACK_ACTIONS:
-        return 'read_only'
-    return WORKSPACE_CALLBACK_POLICY.get(action)
+    """Returns role policy directly from CALLBACK_ROLE_POLICY as the single source of truth."""
+    return CALLBACK_ROLE_POLICY.get(action)
