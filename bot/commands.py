@@ -1947,14 +1947,6 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
             seen.add(w.id)
             unique_workspaces.append(w)
 
-    import config
-    owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
-    owner_int = int(owner_id) if owner_id else None
-    unique_workspaces = [
-        w for w in unique_workspaces
-        if not (owner_int and w.chat_id == owner_int) and not (w.title and w.title.startswith('Pranav (Personal)'))
-    ]
-
     group_workspaces = [w for w in unique_workspaces if w.chat_type != 'dm']
     dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm']
 

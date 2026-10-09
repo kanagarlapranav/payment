@@ -39,6 +39,15 @@ from bot.handlers import (
 @pytest.fixture(autouse=True)
 def init_db():
     setup_database()
+    yield
+    with get_db_connection() as conn:
+        conn.execute("DELETE FROM workspaces WHERE id != (SELECT value FROM settings WHERE key = 'default_workspace_id')")
+        conn.execute("DELETE FROM workspace_members WHERE workspace_id != (SELECT value FROM settings WHERE key = 'default_workspace_id')")
+        conn.execute("DELETE FROM workspace_settings WHERE key LIKE 'user_active_ws:%'")
+        conn.execute("DELETE FROM settings WHERE key LIKE 'user_active_ws:%'")
+        conn.commit()
+    from bot.auth import _USER_ACTIVE_WORKSPACES
+    _USER_ACTIVE_WORKSPACES.clear()
 
 
 def make_mock_update(user_id: int, chat_id: int, chat_type: str = "private", text: str = ""):

@@ -32,6 +32,14 @@ def init_db():
         conn.execute("DELETE FROM workspace_settings WHERE key LIKE 'user_active_ws:%'")
         conn.execute("DELETE FROM settings WHERE key LIKE 'user_active_ws:%'")
         conn.commit()
+    yield
+    with get_db_connection() as conn:
+        conn.execute("DELETE FROM workspaces WHERE id != (SELECT value FROM settings WHERE key = 'default_workspace_id')")
+        conn.execute("DELETE FROM workspace_members WHERE workspace_id != (SELECT value FROM settings WHERE key = 'default_workspace_id')")
+        conn.execute("DELETE FROM workspace_settings WHERE key LIKE 'user_active_ws:%'")
+        conn.execute("DELETE FROM settings WHERE key LIKE 'user_active_ws:%'")
+        conn.commit()
+    _USER_ACTIVE_WORKSPACES.clear()
 
 
 def make_mock_update(user_id: int, chat_id: int, chat_type: str = "supergroup", text: str = "", chat_title: str = "Payment"):
@@ -135,6 +143,8 @@ def test_workspaces_ui_rendering_no_raw_uuids():
     with patch("config.TELEGRAM_USER_ID", owner_id):
         get_or_create_workspace(chat_id=group_chat_id, chat_type="supergroup", title="Payment (Group)", creator_user_id=owner_id)
         get_or_create_workspace(chat_id=8343764796, chat_type="dm", title="Nagendra (Personal)", creator_user_id=8343764796)
+        ws_p = get_or_create_workspace(chat_id=99887766, chat_type="dm", title="Pranav (Personal)", creator_user_id=owner_id)
+        add_workspace_member(ws_p.id, owner_id, role="owner")
 
         up = make_mock_update(user_id=owner_id, chat_id=group_chat_id, chat_type="supergroup", text="/workspaces")
         text, markup = render_workspaces_view(up)
@@ -145,7 +155,7 @@ def test_workspaces_ui_rendering_no_raw_uuids():
         assert "Personal Ledgers:" in text
         assert "Payment (Group)" in text
         assert "Nagendra (Personal)" in text
-        assert "Pranav (Personal)" not in text
+        assert "Pranav (Personal)" in text
 
         # Verify no 36-character UUID strings in user-facing text
         import re
