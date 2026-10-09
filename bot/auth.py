@@ -321,11 +321,19 @@ def is_authorized_user(update: Update, workspace_id: Optional[str] = None) -> bo
 
 _USER_ACTIVE_WORKSPACES: Dict[int, str] = {}
 
+def clear_user_active_workspace_cache(user_id: Optional[int] = None) -> None:
+    """Clears the in-memory active workspace cache for a user or globally."""
+    if user_id is None:
+        _USER_ACTIVE_WORKSPACES.clear()
+    else:
+        _USER_ACTIVE_WORKSPACES.pop(int(user_id), None)
+
 def get_user_active_workspace(user_id: int) -> Optional[str]:
-    """Retrieves the active workspace ID override for a user in private DM."""
+    """Retrieves the active workspace ID override for a user in private DM using stable settings namespace."""
     if not user_id:
         return None
-    from database.queries import get_workspace_setting, get_default_workspace_id, get_workspace_by_id
+    from database.queries import get_workspace_by_id
+    from database.db import get_db_connection
     ws_id = _USER_ACTIVE_WORKSPACES.get(user_id)
     if ws_id:
         # Verify cached workspace still exists in DB
@@ -334,7 +342,16 @@ def get_user_active_workspace(user_id: int) -> Optional[str]:
         _USER_ACTIVE_WORKSPACES.pop(user_id, None)
 
     try:
-        val = get_workspace_setting(get_default_workspace_id(), f"user_active_ws:{user_id}")
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM settings WHERE key = ?", (f"user_active_ws:{user_id}",))
+            row = cursor.fetchone()
+            val = str(row['value']) if row and row['value'] else None
+            if not val:
+                # Fallback to check workspace_settings under any workspace (backward compatibility)
+                cursor.execute("SELECT value FROM workspace_settings WHERE key = ? ORDER BY updated_at DESC LIMIT 1", (f"user_active_ws:{user_id}",))
+                w_row = cursor.fetchone()
+                val = str(w_row['value']) if w_row and w_row['value'] else None
         if val:
             if get_workspace_by_id(str(val)):
                 _USER_ACTIVE_WORKSPACES[user_id] = str(val)
@@ -348,18 +365,33 @@ def get_user_active_workspace(user_id: int) -> Optional[str]:
     return None
 
 def set_user_active_workspace(user_id: int, workspace_id: Optional[str]):
-    """Sets or clears the active workspace ID override for a user in private DM."""
+    """Sets or clears the active workspace ID override for a user in private DM under a stable namespace."""
     if not user_id:
         return
     try:
-        from database.queries import set_workspace_setting, get_default_workspace_id
+        from database.db import get_db_connection, LEDGER_LOCK
+        from database.queries import utc_now_iso, get_default_workspace_id
+        now_utc = utc_now_iso()
+        key = f"user_active_ws:{user_id}"
         def_id = get_default_workspace_id()
-        if workspace_id:
-            _USER_ACTIVE_WORKSPACES[user_id] = str(workspace_id)
-            set_workspace_setting(def_id, f"user_active_ws:{user_id}", str(workspace_id))
-        else:
-            _USER_ACTIVE_WORKSPACES.pop(user_id, None)
-            set_workspace_setting(def_id, f"user_active_ws:{user_id}", "")
+        with LEDGER_LOCK:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                if workspace_id:
+                    _USER_ACTIVE_WORKSPACES[user_id] = str(workspace_id)
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
+                        (key, str(workspace_id), now_utc)
+                    )
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at) VALUES (?, ?, ?, ?)",
+                        (def_id, key, str(workspace_id), now_utc)
+                    )
+                else:
+                    _USER_ACTIVE_WORKSPACES.pop(user_id, None)
+                    cursor.execute("DELETE FROM settings WHERE key = ?", (key,))
+                    cursor.execute("DELETE FROM workspace_settings WHERE key = ?", (key,))
+                conn.commit()
     except Exception as e:
         logger.error(f"Failed to set user active workspace: {e}")
 

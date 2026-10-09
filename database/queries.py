@@ -450,6 +450,12 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                     cursor.execute("DELETE FROM workspace_members WHERE workspace_id = ?", (p_id,))
                     cursor.execute("DELETE FROM workspaces WHERE id = ?", (p_id,))
                 cursor.execute("DELETE FROM workspace_settings WHERE key = ?", (f"user_active_ws:{owner_id}",))
+                cursor.execute("DELETE FROM settings WHERE key = ?", (f"user_active_ws:{owner_id}",))
+                try:
+                    from bot.auth import clear_user_active_workspace_cache
+                    clear_user_active_workspace_cache(owner_id)
+                except Exception:
+                    pass
 
             # 5. Enforce Nagendra (8343764796) is never owner across all workspaces
             cursor.execute("UPDATE workspace_members SET role = 'member' WHERE telegram_user_id = 8343764796 AND role = 'owner'")
@@ -592,6 +598,7 @@ def remove_workspace_member(workspace_id: str, telegram_user_id: int | str) -> b
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM workspace_settings WHERE key = ?", (f"user_active_ws:{uid}",))
+            cursor.execute("DELETE FROM settings WHERE key = ?", (f"user_active_ws:{uid}",))
             cursor.execute(
                 "DELETE FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?",
                 (str(workspace_id), uid)
