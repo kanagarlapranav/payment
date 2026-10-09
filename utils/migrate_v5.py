@@ -18,12 +18,18 @@ import argparse
 from pathlib import Path
 from datetime import datetime, timezone
 
+from database.db import _configure_connection
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "database.sqlite3"
 
 
 def run_migration(dry_run: bool = False, db_path: Path = None):
+    """
+    Runs v5 multi-tenant migration.
+    NOTE: Stop the bot process before running migrations to prevent lock contention.
+    """
     target_db = Path(db_path or DB_PATH).resolve()
     print(f"=== Starting Migration v5 on: {target_db} (Dry Run: {dry_run}) ===")
 
@@ -37,6 +43,7 @@ def run_migration(dry_run: bool = False, db_path: Path = None):
         backup_path = target_db.with_suffix(".sqlite3.backup-v5")
         try:
             chk_conn = sqlite3.connect(str(target_db), timeout=30.0)
+            _configure_connection(chk_conn)
             chk_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             chk_conn.close()
         except Exception as e:
@@ -50,6 +57,7 @@ def run_migration(dry_run: bool = False, db_path: Path = None):
 
     conn = sqlite3.connect(str(active_db), timeout=30.0)
     conn.row_factory = sqlite3.Row
+    _configure_connection(conn)
     cursor = conn.cursor()
 
     try:

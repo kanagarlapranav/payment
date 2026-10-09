@@ -13,6 +13,7 @@ import uuid
 import sqlite3
 import shutil
 from pathlib import Path
+from database.db import _configure_connection
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -21,10 +22,15 @@ RECOVERED_PATH = DATA_DIR / "recovered_16_transactions.json"
 ARCHIVE_DIR = DATA_DIR / "archive"
 
 def run_migration(db_path: Path = DB_PATH, recovered_path: Path = RECOVERED_PATH):
+    """
+    Runs v2 migration.
+    NOTE: Stop the bot process before running migrations to prevent lock contention.
+    """
     print(f"Opening database at {db_path}...")
     if db_path.exists():
         try:
             chk_conn = sqlite3.connect(str(db_path), timeout=30.0)
+            _configure_connection(chk_conn)
             chk_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             chk_conn.close()
         except Exception as e:
@@ -33,8 +39,9 @@ def run_migration(db_path: Path = DB_PATH, recovered_path: Path = RECOVERED_PATH
         shutil.copy2(db_path, backup_file)
         print(f"Pre-migration backup created: {backup_file}")
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(str(db_path), timeout=30.0)
     conn.row_factory = sqlite3.Row
+    _configure_connection(conn)
     cursor = conn.cursor()
 
     try:
