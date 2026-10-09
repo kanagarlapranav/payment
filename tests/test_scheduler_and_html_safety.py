@@ -187,7 +187,7 @@ def test_format_daily_digest_escapes_injected_names():
 
 def test_sanitize_gemini_html_allowlist():
     """sanitize_gemini_html allows only b, i, em, strong, code and escapes other tags."""
-    raw = "Great job! <b>You saved ₹500</b>. <i>Keep it up!</i> <code>CODE123</code> <script>hack()</script> <img src=x>"
+    raw = "Great job! <b>You saved ₹500</b>. <i>Keep it up!</i> <code>CODE123</code> <script>hack()</script> <img src=x> Spending was < 500 & income > 1000"
     sanitized = sanitize_gemini_html(raw)
 
     assert "<b>You saved ₹500</b>" in sanitized
@@ -196,6 +196,8 @@ def test_sanitize_gemini_html_allowlist():
     assert "<script>" not in sanitized
     assert "&lt;script&gt;" in sanitized
     assert "&lt;img" in sanitized
+    assert "&lt; 500" in sanitized
+    assert "&amp; income &gt; 1000" in sanitized
 
 
 # --- 4. Message Splitting & Plain Text Fallback ---

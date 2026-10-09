@@ -888,7 +888,9 @@ async def generate_gemini_spending_advice_async(
             if res and res.status_code == 200:
                 parts = res.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
                 if parts:
-                    return parts[0].get("text", "").strip()
+                    raw_text = parts[0].get("text", "").strip()
+                    from utils.html_safety import sanitize_gemini_html
+                    return sanitize_gemini_html(raw_text)
     finally:
         if should_close_client:
             await client.aclose()
@@ -946,7 +948,9 @@ async def generate_gemini_daily_commentary_async(
             if res and res.status_code == 200:
                 parts = res.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
                 if parts:
-                    return parts[0].get("text", "").strip()
+                    raw_text = parts[0].get("text", "").strip()
+                    from utils.html_safety import sanitize_gemini_html
+                    return sanitize_gemini_html(raw_text)
     finally:
         if should_close_client:
             await client.aclose()

@@ -42,23 +42,25 @@ def sanitize_gemini_html(text: str) -> str:
     """
     Sanitizes AI-generated text to allow ONLY safe, verified Telegram HTML tags
     (b, i, em, strong, code, blockquote). Any unsupported or malformed tags are escaped.
+    Stray '<', '>', and '&' characters are safely escaped to prevent BadRequest errors.
     """
     if not text:
         return ""
 
-    # Check if text contains tags
-    def replace_tag(match: re.Match) -> str:
-        full_tag = match.group(0)
-        tag_name = match.group(1).lower()
-        if tag_name in {"b", "strong", "i", "em", "code", "blockquote"}:
-            # Keep standard simple tags
-            if full_tag.startswith("</"):
-                return f"</{tag_name}>"
-            return f"<{tag_name}>"
-        # Escape any disallowed tag
-        return html.escape(full_tag)
+    allowed_tag_pattern = re.compile(r"</?(?:b|strong|i|em|code|blockquote)>", re.IGNORECASE)
+    placeholders = []
 
-    return HTML_TAG_RE.sub(replace_tag, text)
+    def save_tag(m: re.Match) -> str:
+        idx = len(placeholders)
+        tag = m.group(0).lower()
+        placeholders.append(tag)
+        return f"\x00TAG{idx}\x00"
+
+    t = allowed_tag_pattern.sub(save_tag, text)
+    t = html.escape(t, quote=False)
+    for idx, tag in enumerate(placeholders):
+        t = t.replace(f"\x00TAG{idx}\x00", tag)
+    return t.strip()
 
 
 def split_message(text: str, max_length: int = 4096) -> List[str]:
