@@ -129,8 +129,10 @@ def test_import_database_scoped_to_target_workspace(tmp_path):
 
 def test_dashboard_auth_and_session_workspace_scoping():
     """Verify that one-time auth code and session exchange preserve and expose workspace_id."""
-    ws_id = f"ws_dash_{uuid.uuid4().hex[:8]}"
     user_id = 12345678
+    from database.queries import get_or_create_workspace
+    ws = get_or_create_workspace(chat_id=user_id, chat_type="dm", title="Dash Workspace", creator_user_id=user_id)
+    ws_id = ws.id
 
     # Generate one-time code for specific tenant
     code = create_one_time_code(user_id=user_id, workspace_id=ws_id)

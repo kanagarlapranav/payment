@@ -90,22 +90,7 @@ def create_one_time_code(user_id: Optional[int] = None, workspace_id: Optional[s
         except Exception:
             workspace_id = "default"
     else:
-        try:
-            from database.db import get_db_connection, LEDGER_LOCK
-            with LEDGER_LOCK:
-                with get_db_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT id FROM workspaces WHERE id = ?", (str(workspace_id),))
-                    if not cursor.fetchone():
-                        from utils.dates import utc_now_iso
-                        now_utc = utc_now_iso()
-                        cursor.execute("""
-                            INSERT OR IGNORE INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
-                            VALUES (?, 0, 'dm', ?, 1, ?, ?)
-                        """, (str(workspace_id), f"Workspace {workspace_id}", now_utc, now_utc))
-                        conn.commit()
-        except Exception as e:
-            logger.debug(f"Auto-provision workspace in create_one_time_code notice: {e}")
+        workspace_id = str(workspace_id)
 
     if user_id is None:
         user_id = int(TELEGRAM_USER_ID or 1)
