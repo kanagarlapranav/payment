@@ -677,11 +677,11 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                         cat_val = validate_string_length(tx.get('category', 'General'), max_length=100) or 'General'
 
                         try:
-                            bal_before = float(parse_decimal_amount(tx.get('balance_before', 0.0), allow_zero=True))
+                            bal_before = float(parse_decimal_amount(tx.get('balance_before', 0.0), allow_zero=True, allow_negative=True))
                         except Exception:
                             bal_before = 0.0
                         try:
-                            bal_after = float(parse_decimal_amount(tx.get('balance_after', 0.0), allow_zero=True))
+                            bal_after = float(parse_decimal_amount(tx.get('balance_after', 0.0), allow_zero=True, allow_negative=True))
                         except Exception:
                             bal_after = 0.0
 

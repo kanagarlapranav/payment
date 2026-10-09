@@ -1284,7 +1284,7 @@ async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
     try:
         from utils.validation import parse_decimal_amount
-        new_balance = float(parse_decimal_amount(context.args[0], allow_zero=True))
+        new_balance = float(parse_decimal_amount(context.args[0], allow_zero=True, allow_negative=True))
         final_bal = set_explicit_balance(new_balance, workspace_id=ws_id)
         backed_up = await backup_to_telegram(context.bot)
         status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"

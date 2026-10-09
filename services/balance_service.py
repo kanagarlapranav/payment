@@ -118,7 +118,7 @@ def set_explicit_balance(new_balance: float, workspace_id: str = None) -> float:
     target_ws = workspace_id or default_ws
 
     with LEDGER_LOCK:
-        dec_new = parse_decimal_amount(new_balance, allow_zero=True)
+        dec_new = parse_decimal_amount(new_balance, allow_zero=True, allow_negative=True)
         with get_db_connection() as conn:
             cursor = conn.cursor()
             ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if target_ws == default_ws else "workspace_id = ?"
@@ -177,7 +177,9 @@ def update_balance_for_transaction(transaction: Transaction) -> Transaction:
     Pure calculation helper: populates balance_before and balance_after
     based on current_balance and transaction type without independently mutating settings.
     """
-    current_balance = Decimal(str(get_balance_setting())).quantize(CENT)
+    ws_id = getattr(transaction, 'workspace_id', None)
+    raw_bal = get_balance_setting(ws_id) if ws_id else get_balance_setting()
+    current_balance = Decimal(str(raw_bal)).quantize(CENT)
     amount = parse_decimal_amount(transaction.amount, allow_zero=False)
     transaction.balance_before = float(current_balance)
 
@@ -206,6 +208,19 @@ def get_today_summary(workspace_id: str = None, user_id: int = None) -> Transact
     conditions = ["transaction_date = ?", ws_filter, "deleted_at IS NULL"]
     params = [str(today), ws_id]
 
+    if user_id is not None:
+        from config import TELEGRAM_USER_ID
+        owner_id = int(TELEGRAM_USER_ID) if TELEGRAM_USER_ID else None
+        if not (owner_id and int(user_id) == owner_id):
+            with get_db_connection() as conn_check:
+                c_check = conn_check.cursor()
+                c_check.execute("SELECT id FROM workspaces WHERE chat_id = ? AND is_active = 1", (int(user_id),))
+                p_r = c_check.fetchone()
+                if p_r and p_r['id'] and p_r['id'] != ws_id:
+                    ws_filter = "(workspace_id = ? OR workspace_id = ?)"
+                    conditions = ["transaction_date = ?", ws_filter, "deleted_at IS NULL"]
+                    params = [str(today), ws_id, p_r['id']]
+
     u_sql, u_params = _build_user_filter(user_id)
     if u_sql:
         conditions.append(u_sql)
@@ -231,11 +246,22 @@ def get_today_summary(workspace_id: str = None, user_id: int = None) -> Transact
                     bal_row = cursor.fetchone()
                 cur_bal = float(bal_row['value']) if bal_row and bal_row['value'] is not None else 0.0
             else:
-                cursor.execute(f"""
-                    SELECT transaction_type, amount 
-                    FROM transactions 
-                    WHERE {ws_filter} AND telegram_user_id = ? AND deleted_at IS NULL
-                """, (ws_id, int(user_id)))
+                cursor.execute("SELECT id FROM workspaces WHERE chat_id = ? AND is_active = 1", (int(user_id),))
+                p_ws_row = cursor.fetchone()
+                p_ws_id = p_ws_row['id'] if p_ws_row else None
+
+                if p_ws_id and p_ws_id != ws_id:
+                    cursor.execute(f"""
+                        SELECT transaction_type, amount 
+                        FROM transactions 
+                        WHERE (workspace_id = ? OR workspace_id = ?) AND telegram_user_id = ? AND deleted_at IS NULL
+                    """, (ws_id, p_ws_id, int(user_id)))
+                else:
+                    cursor.execute(f"""
+                        SELECT transaction_type, amount 
+                        FROM transactions 
+                        WHERE {ws_filter} AND telegram_user_id = ? AND deleted_at IS NULL
+                    """, (ws_id, int(user_id)))
                 all_u_rows = cursor.fetchall()
                 u_sent = Decimal('0.00')
                 u_recv = Decimal('0.00')
@@ -245,7 +271,18 @@ def get_today_summary(workspace_id: str = None, user_id: int = None) -> Transact
                         u_sent += a
                     elif r['transaction_type'] == 'RECEIVED':
                         u_recv += a
-                cur_bal = float(u_recv - u_sent)
+
+                init_val = Decimal('0.00')
+                if p_ws_id:
+                    cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'initial_balance'", (p_ws_id,))
+                    init_row = cursor.fetchone()
+                    if init_row and init_row['value'] is not None:
+                        try:
+                            init_val = Decimal(str(init_row['value']))
+                        except Exception:
+                            init_val = Decimal('0.00')
+
+                cur_bal = float(init_val + u_recv - u_sent)
         else:
             cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'current_balance'", (ws_id,))
             bal_row = cursor.fetchone()
@@ -284,6 +321,19 @@ def get_overall_summary(workspace_id: str = None, user_id: int = None) -> Transa
     conditions = [ws_filter, "deleted_at IS NULL"]
     params = [ws_id]
 
+    if user_id is not None:
+        from config import TELEGRAM_USER_ID
+        owner_id = int(TELEGRAM_USER_ID) if TELEGRAM_USER_ID else None
+        if not (owner_id and int(user_id) == owner_id):
+            with get_db_connection() as conn_check:
+                c_check = conn_check.cursor()
+                c_check.execute("SELECT id FROM workspaces WHERE chat_id = ? AND is_active = 1", (int(user_id),))
+                p_r = c_check.fetchone()
+                if p_r and p_r['id'] and p_r['id'] != ws_id:
+                    ws_filter = "(workspace_id = ? OR workspace_id = ?)"
+                    conditions = [ws_filter, "deleted_at IS NULL"]
+                    params = [ws_id, p_r['id']]
+
     u_sql, u_params = _build_user_filter(user_id)
     if u_sql:
         conditions.append(u_sql)
@@ -309,11 +359,22 @@ def get_overall_summary(workspace_id: str = None, user_id: int = None) -> Transa
                     bal_row = cursor.fetchone()
                 cur_bal = float(bal_row['value']) if bal_row and bal_row['value'] is not None else 0.0
             else:
-                cursor.execute(f"""
-                    SELECT transaction_type, amount 
-                    FROM transactions 
-                    WHERE {ws_filter} AND telegram_user_id = ? AND deleted_at IS NULL
-                """, (ws_id, int(user_id)))
+                cursor.execute("SELECT id FROM workspaces WHERE chat_id = ? AND is_active = 1", (int(user_id),))
+                p_ws_row = cursor.fetchone()
+                p_ws_id = p_ws_row['id'] if p_ws_row else None
+
+                if p_ws_id and p_ws_id != ws_id:
+                    cursor.execute(f"""
+                        SELECT transaction_type, amount 
+                        FROM transactions 
+                        WHERE (workspace_id = ? OR workspace_id = ?) AND telegram_user_id = ? AND deleted_at IS NULL
+                    """, (ws_id, p_ws_id, int(user_id)))
+                else:
+                    cursor.execute(f"""
+                        SELECT transaction_type, amount 
+                        FROM transactions 
+                        WHERE {ws_filter} AND telegram_user_id = ? AND deleted_at IS NULL
+                    """, (ws_id, int(user_id)))
                 all_u_rows = cursor.fetchall()
                 u_sent = Decimal('0.00')
                 u_recv = Decimal('0.00')
@@ -323,7 +384,18 @@ def get_overall_summary(workspace_id: str = None, user_id: int = None) -> Transa
                         u_sent += a
                     elif r['transaction_type'] == 'RECEIVED':
                         u_recv += a
-                cur_bal = float(u_recv - u_sent)
+
+                init_val = Decimal('0.00')
+                if p_ws_id:
+                    cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'initial_balance'", (p_ws_id,))
+                    init_row = cursor.fetchone()
+                    if init_row and init_row['value'] is not None:
+                        try:
+                            init_val = Decimal(str(init_row['value']))
+                        except Exception:
+                            init_val = Decimal('0.00')
+
+                cur_bal = float(init_val + u_recv - u_sent)
         else:
             cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'current_balance'", (ws_id,))
             bal_row = cursor.fetchone()

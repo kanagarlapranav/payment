@@ -149,3 +149,65 @@ def test_per_user_scoping_in_shared_workspace():
         search_friend = search_transactions(query_text="Dosa", workspace_id=ws.id, user_id=friend_id)
         assert len(search_friend) == 1
         assert search_friend[0]['person_name'] == "Friend Dosa"
+
+
+def test_nagendra_balance_starts_from_zero_and_calculates_negative():
+    """Verifies that friend Nagendra balance starts from 0 and calculates negative for expenses."""
+    owner_id = 8379948573
+    friend_id = 8343764796
+    
+    # Create Nagendra personal workspace
+    ws_nagendra = get_or_create_workspace(chat_id=friend_id, chat_type="dm", title="Nagendra (Personal)", creator_user_id=friend_id)
+    
+    # 1. Set initial balance for Nagendra workspace to 0.0
+    from database.queries import set_workspace_setting
+    set_workspace_setting(ws_nagendra.id, "initial_balance", "0.0")
+
+    # 2. Insert Nagendra's 2 expenses: ₹20 and ₹120
+    tx1 = Transaction(
+        amount=20.0,
+        transaction_type="SENT",
+        person_name="K Vikraman Nair",
+        category="Food & Dining",
+        transaction_date="2026-10-06",
+        occurred_at="2026-10-06 18:03:00",
+        workspace_id=ws_nagendra.id,
+        telegram_user_id=friend_id
+    )
+    insert_transaction(tx1)
+
+    tx2 = Transaction(
+        amount=120.0,
+        transaction_type="SENT",
+        person_name="Dosa",
+        category="Food & Dining",
+        transaction_date="2026-10-07",
+        occurred_at="2026-10-07 22:23:00",
+        workspace_id=ws_nagendra.id,
+        telegram_user_id=friend_id
+    )
+    insert_transaction(tx2)
+
+    # 3. Recalculate balances
+    final_bal = recalculate_all_balances(workspace_id=ws_nagendra.id)
+    assert final_bal == -140.0
+
+    # 4. Overall summary in Nagendra workspace
+    summary = get_overall_summary(workspace_id=ws_nagendra.id, user_id=friend_id)
+    assert summary.current_balance == -140.0
+    assert summary.total_sent == 140.0
+    assert summary.total_received == 0.0
+    assert summary.net_change == -140.0
+    assert summary.transaction_count == 2
+
+    # 5. Format currency handles negative
+    from utils.currency import format_currency
+    assert format_currency(summary.current_balance) == "-₹140"
+
+    # 6. Verify set_explicit_balance allows negative balance
+    from services.balance_service import set_explicit_balance
+    new_bal = set_explicit_balance(-200.0, workspace_id=ws_nagendra.id)
+    assert new_bal == -200.0
+    # Reset back to -140.0
+    set_explicit_balance(-140.0, workspace_id=ws_nagendra.id)
+

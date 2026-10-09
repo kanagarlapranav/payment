@@ -13,7 +13,7 @@ MAX_AMOUNT = Decimal("100000000.00")  # 10 Crore (₹100,000,000.00)
 CENT = Decimal("0.01")
 
 
-def parse_decimal_amount(value: Any, *, allow_zero: bool = False) -> Decimal:
+def parse_decimal_amount(value: Any, *, allow_zero: bool = False, allow_negative: bool = False) -> Decimal:
     """
     Parses and validates an amount as a Decimal quantized to 2 decimal places (0.01).
     
@@ -21,7 +21,8 @@ def parse_decimal_amount(value: Any, *, allow_zero: bool = False) -> Decimal:
     - None or empty values
     - NaN, sNaN, +Infinity, -Infinity
     - Malformed decimal strings or unparseable objects
-    - Negative values (or zero if allow_zero=False)
+    - Negative values (unless allow_negative=True)
+    - Zero values (unless allow_zero=True)
     - Values exceeding 10 crore (₹100,000,000.00)
     """
     if value is None:
@@ -61,14 +62,17 @@ def parse_decimal_amount(value: Any, *, allow_zero: bool = False) -> Decimal:
 
     quantized = amount.quantize(CENT)
 
-    if allow_zero:
-        if quantized < Decimal("0.00"):
-            raise ValueError("Amount cannot be negative")
-    else:
-        if quantized <= Decimal("0.00"):
-            raise ValueError("Amount must be at least ₹0.01")
+    if not allow_negative:
+        if allow_zero:
+            if quantized < Decimal("0.00"):
+                raise ValueError("Amount cannot be negative")
+        else:
+            if quantized <= Decimal("0.00"):
+                raise ValueError("Amount must be at least ₹0.01")
+    elif not allow_zero and quantized == Decimal("0.00"):
+        raise ValueError("Amount cannot be zero")
 
-    if quantized > MAX_AMOUNT:
+    if abs(quantized) > MAX_AMOUNT:
         raise ValueError(f"Amount {quantized} exceeds the maximum limit of 10 crore ({MAX_AMOUNT})")
 
     return quantized
