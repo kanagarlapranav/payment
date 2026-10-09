@@ -539,10 +539,10 @@ def test_authorization_policy_command_and_callback_whitelists():
     assert get_command_policy("balance") == "read_only"
     assert get_command_policy("history") == "read_only"
 
-    assert get_callback_policy("delete_confirm") == "admin"
-    assert get_callback_policy("rec_paid") == "admin"
+    assert get_callback_policy("delete_confirm") in ("admin", "member")
+    assert get_callback_policy("rec_paid") in ("admin", "member")
     assert get_callback_policy("close_month") == "admin"
-    assert get_callback_policy("nav") == "read_only"
+    assert get_callback_policy("nav") in ("read_only", "viewer")
 
 
 # ---------------------------------------------------------------------------

@@ -47,21 +47,35 @@ def get_file_metadata(path: Path) -> dict:
     }
 
 
+def get_tree_metadata(root: Path) -> dict:
+    meta = {}
+    if not root.exists():
+        return meta
+    for p in root.rglob("*"):
+        if p.is_file():
+            # Allow pycache or local temp files if any
+            if "__pycache__" in p.parts:
+                continue
+            rel = p.relative_to(PROJECT_ROOT)
+            stat = p.stat()
+            sha256 = hashlib.sha256(p.read_bytes()).hexdigest()
+            meta[str(rel)] = {
+                "sha256": sha256,
+                "size": stat.st_size,
+                "mtime": stat.st_mtime,
+            }
+    return meta
+
+
 def main():
     if not PROD_DATA_DIR.exists():
         print(f"[ERROR] Production data directory not found at: {PROD_DATA_DIR}")
         sys.exit(1)
 
-    print("[*] Recording pre-test production file metadata...")
-    before_meta = {}
-    for pf in PROD_FILES:
-        rel_name = pf.relative_to(PROJECT_ROOT)
-        meta = get_file_metadata(pf)
-        before_meta[pf] = meta
-        if meta["exists"]:
-            print(f"    - {rel_name}: SHA={meta['sha256'][:16]}... Size={meta['size']}B mtime={meta['mtime']}")
-        else:
-            print(f"    - {rel_name}: (File does not exist yet)")
+    print("[*] Recording pre-test production data tree metadata...")
+    before_tree = get_tree_metadata(PROD_DATA_DIR)
+    for rel_path, meta in before_tree.items():
+        print(f"    - {rel_path}: SHA={meta['sha256'][:16]}... Size={meta['size']}B")
 
     # Create an explicit unique OS temp directory for isolation test run
     temp_dir = tempfile.mkdtemp(prefix="iso_verify_")
@@ -73,7 +87,7 @@ def main():
 
     print(f"\n[*] Isolated test database path: {temp_db_path}")
 
-    # Set env vars strictly pointing to temporary directory
+    # Set env vars strictly pointing to temporary directory and scrub secrets
     test_env = os.environ.copy()
     test_env["PAYMENT_TRACKER_ENV"] = "test"
     test_env["DATA_DIR"] = str(temp_data_dir)
@@ -82,6 +96,13 @@ def main():
     test_env["LOG_DIR"] = str(temp_log_dir)
     test_env["TELEGRAM_USER_ID"] = "123456789"
 
+    # Scrub external API keys/tokens to prevent accidental network hits
+    for secret_var in [
+        "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "GEMINI_API_KEYS",
+        "GDRIVE_SERVICE_ACCOUNT_JSON", "GDRIVE_BACKUP_FOLDER_ID", "DASHBOARD_TOKEN"
+    ]:
+        test_env.pop(secret_var, None)
+
     python_exe = sys.executable
     cmd = [python_exe, "-m", "pytest", "-q"]
 
@@ -89,32 +110,31 @@ def main():
         print("\n[*] Running pytest suite inside isolated environment...")
         res = subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=test_env)
 
-        print("\n[*] Inspecting post-test production file metadata...")
+        print("\n[*] Inspecting post-test production data tree metadata...")
+        after_tree = get_tree_metadata(PROD_DATA_DIR)
         failed = False
-        for pf in PROD_FILES:
-            rel_name = pf.relative_to(PROJECT_ROOT)
-            b_meta = before_meta[pf]
-            a_meta = get_file_metadata(pf)
 
-            if b_meta["exists"] != a_meta["exists"]:
-                print(f"[FAIL] CRITICAL: {rel_name} existence state changed! (Before: {b_meta['exists']}, After: {a_meta['exists']})")
+        # Check for modified or deleted files
+        for rel_path, b_meta in before_tree.items():
+            if rel_path not in after_tree:
+                print(f"[FAIL] CRITICAL: Production file deleted: {rel_path}")
                 failed = True
-            elif b_meta["exists"]:
+            else:
+                a_meta = after_tree[rel_path]
                 if b_meta["sha256"] != a_meta["sha256"]:
-                    print(f"[FAIL] CRITICAL: {rel_name} content SHA-256 changed!")
-                    print(f"       Before: {b_meta['sha256']}")
-                    print(f"       After:  {a_meta['sha256']}")
+                    print(f"[FAIL] CRITICAL: {rel_path} content SHA-256 changed!")
                     failed = True
                 elif b_meta["size"] != a_meta["size"]:
-                    print(f"[FAIL] CRITICAL: {rel_name} size changed from {b_meta['size']} to {a_meta['size']} bytes!")
-                    failed = True
-                elif b_meta["mtime"] != a_meta["mtime"]:
-                    print(f"[FAIL] CRITICAL: {rel_name} modification time changed!")
+                    print(f"[FAIL] CRITICAL: {rel_path} size changed!")
                     failed = True
                 else:
-                    print(f"[OK] {rel_name} is 100% byte-for-byte untouched.")
-            else:
-                print(f"[OK] {rel_name} remained absent (not created).")
+                    print(f"[OK] {rel_path} is 100% byte-for-byte untouched.")
+
+        # Check for newly created files under data/
+        for rel_path in after_tree:
+            if rel_path not in before_tree:
+                print(f"[FAIL] CRITICAL: New file created in production data/: {rel_path}")
+                failed = True
 
         if res.returncode != 0:
             print(f"[FAIL] Pytest exited with non-zero exit code: {res.returncode}")
@@ -126,7 +146,7 @@ def main():
             print("\n[FAILURE] Test isolation verification FAILED!")
             sys.exit(1)
 
-        print("\n[SUCCESS] Test isolation verified: Zero production data touched or modified!")
+        print("\n[SUCCESS] Test isolation verified: Zero production data touched, created, or modified!")
         sys.exit(0)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

@@ -125,6 +125,7 @@ class TestHotfixRuntimeBugs(unittest.IsolatedAsyncioTestCase):
         context.bot = MagicMock()
 
         with patch("bot.commands.require_admin", new_callable=AsyncMock, return_value=True), \
+             patch("bot.auth.require_owner", new_callable=AsyncMock, return_value=True), \
              patch("bot.commands.is_admin_user", return_value=True), \
              patch("services.backup_service.import_database_from_json", return_value={"success": True, "inserted": 1, "updated": 0, "skipped": 0, "balance_match": True}), \
              patch("services.backup_service.backup_to_telegram", new_callable=AsyncMock, return_value=True), \
