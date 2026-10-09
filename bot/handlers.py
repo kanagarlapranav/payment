@@ -11,7 +11,8 @@ from config import TELEGRAM_USER_ID, IMAGE_DIR, logger
 from bot.auth import (
     require_authorized, require_admin, require_owner, require_member, is_owner, is_authorized_user,
     get_callback_policy, ADMIN_CALLBACK_ACTIONS, READ_ONLY_CALLBACK_ACTIONS,
-    get_workspace_context, resolve_workspace_context, WORKSPACE_CALLBACK_POLICY
+    get_workspace_context, resolve_workspace_context, WORKSPACE_CALLBACK_POLICY,
+    get_effective_user_id
 )
 from bot.commands import (
     is_authorized, is_admin_user, render_home_menu_text, render_history_page,
@@ -41,6 +42,7 @@ from database.queries import (
 )
 from utils.currency import parse_amount, format_currency, normalize_amount_string
 from utils.dates import parse_date, get_current_time_in_tz, format_display_date
+from utils.validation import parse_decimal_amount, validate_name
 
 import time
 
@@ -1497,7 +1499,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     # --- Workspace Switcher Actions ---
     elif action == "ws_switch":
         target_ws_id = parts[1]
-        from bot.auth import set_user_active_workspace, get_effective_user_id, is_super_admin
+        from bot.auth import set_user_active_workspace, is_super_admin
         from database.queries import get_workspace_by_id, get_workspace_member
         user_id = get_effective_user_id(update)
         target_ws = get_workspace_by_id(target_ws_id)
@@ -1526,7 +1528,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     elif action in ("ws_reset", "ws_reset_menu"):
-        from bot.auth import set_user_active_workspace, get_effective_user_id
+        from bot.auth import set_user_active_workspace
         user_id = get_effective_user_id(update)
         if user_id:
             set_user_active_workspace(user_id, None)
@@ -1859,7 +1861,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     elif action == "quick_add":
-        from utils.validation import parse_decimal_amount, validate_name
         try:
             amt = float(parse_decimal_amount(parts[1], allow_zero=False))
             payee = validate_name(parts[2], max_length=120)

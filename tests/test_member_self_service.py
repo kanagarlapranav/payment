@@ -120,6 +120,13 @@ def test_member_and_admin_modification_permissions(setup_test_workspace):
     assert can_user_modify_transaction(tx_a_id, OWNER_USER_ID, "owner") is True
     assert can_user_modify_transaction(tx_b_id, OWNER_USER_ID, "owner") is True
 
+    # With workspace_id specified:
+    assert can_user_modify_transaction(tx_a_id, MEMBER_A_ID, "member", workspace_id=ws['id']) is True
+    assert can_user_modify_transaction(tx_b_id, MEMBER_A_ID, "member", workspace_id=ws['id']) is False
+    # Cross-workspace check: non-existent/other workspace denies even admin
+    assert can_user_modify_transaction(tx_a_id, ADMIN_USER_ID, "admin", workspace_id="other-workspace-uuid") is False
+    assert can_user_modify_transaction(tx_a_id, MEMBER_A_ID, "member", workspace_id="other-workspace-uuid") is False
+
 def test_member_edit_command_restricts_to_own_payments(setup_test_workspace):
     ws = setup_test_workspace
 
@@ -187,3 +194,15 @@ def test_member_delete_command_restricts_to_own_payments(setup_test_workspace):
     asyncio.run(delete_command(up_admin_on_a, ctx))
     call_text = str(up_admin_on_a.effective_message.reply_text.call_args)
     assert "Delete Transaction" in call_text
+
+def test_correct_amount_callback_enforces_ownership_and_tenant(setup_test_workspace):
+    ws = setup_test_workspace
+    tx_a = Transaction(amount=100.0, transaction_type="SENT", person_name="Shop", workspace_id=ws['id'], telegram_user_id=MEMBER_A_ID)
+    tx_a_id = insert_transaction_with_balance(tx_a)
+
+    # Member B tries to correct amount on Member A's transaction -> clean denial
+    up_b = make_update(MEMBER_B_ID, callback_data=f"correct_amount:{tx_a_id}:150.0")
+    ctx = MagicMock()
+    asyncio.run(handle_callback_query(up_b, ctx))
+    calls = [str(c) for c in up_b.callback_query.answer.call_args_list]
+    assert any("You can only edit payments that you recorded" in c for c in calls)

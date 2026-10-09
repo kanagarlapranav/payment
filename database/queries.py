@@ -1023,8 +1023,16 @@ def get_transaction_author_id(tx_id: int | str) -> Optional[int]:
                     return int(u_row['user_id'])
     return None
 
-def can_user_modify_transaction(tx_id: int | str, user_id: int, user_role: str) -> bool:
+def can_user_modify_transaction(tx_id: int | str, user_id: int, user_role: str, workspace_id: Optional[str] = None) -> bool:
     """Evaluates whether the caller can edit or delete this transaction."""
+    if workspace_id is not None:
+        try:
+            tid = int(tx_id)
+        except (ValueError, TypeError):
+            return False
+        tx = get_transaction_by_id(tid, workspace_id=workspace_id)
+        if not tx:
+            return False
     if user_role in ('owner', 'admin'):
         return True
     if user_role == 'member':
