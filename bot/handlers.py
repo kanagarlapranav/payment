@@ -742,6 +742,27 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     
     ws_id = ws_ctx.workspace_id if ws_ctx else get_default_workspace_id()
 
+    # Enforce unified undo authorization at dispatch (B9 / P1-N2)
+    if action in ("undo_action", "undo_confirm", "undo_cancel"):
+        caller_id = update.effective_user.id if update.effective_user else None
+        if not (is_owner(update) or is_admin_user(update)):
+            from database.db import get_db_connection
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT user_id FROM undo_log WHERE (workspace_id = ? OR workspace_id IS NULL) AND used_at IS NULL ORDER BY id DESC LIMIT 1",
+                    (ws_id,)
+                )
+                row = cursor.fetchone()
+                if not row or row["user_id"] != caller_id:
+                    try:
+                        ans = query.answer("⛔ You can only undo your own actions.", show_alert=True)
+                        if asyncio.iscoroutine(ans):
+                            await ans
+                    except Exception:
+                        pass
+                    return
+
     # --- 0. Interactive Home Menu Navigation ---
     if action == "nav":
         nav_target = parts[1] if len(parts) > 1 else "home"
@@ -2227,9 +2248,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await safe_edit_callback_message(query, "❌ Nothing was saved: Failed to delete transaction.", reply_markup=get_back_to_menu_keyboard())
 
     elif action in ("delete_cancel", "select_delete_cancel"):
-        if not is_admin_user(update):
-            await query.answer("❌ Only the bot owner can cancel deletions.", show_alert=True)
-            return
         await query.answer("❌ Deletion cancelled.", show_alert=False)
         context.user_data.pop('action', None)
         await safe_edit_callback_message(
@@ -2240,9 +2258,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     elif action == "undo_action":
-        if not is_admin_user(update):
-            await query.answer("❌ Only the bot owner can undo changes.", show_alert=True)
-            return
         await query.answer()
         from services.undo_service import perform_undo
         chat_id = update.effective_chat.id if update.effective_chat else None
@@ -2259,14 +2274,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await safe_edit_callback_message(query, f"❌ Nothing was saved: {msg}", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
 
     elif action == "undo_confirm":
-        if not is_admin_user(update):
-            try:
-                ans = query.answer("❌ Only the bot owner can undo changes.", show_alert=True)
-                if asyncio.iscoroutine(ans):
-                    await ans
-            except Exception:
-                pass
-            return
         try:
             ans = query.answer("↩️ Processing Undo...", show_alert=False)
             if asyncio.iscoroutine(ans):
@@ -2296,14 +2303,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     elif action == "undo_cancel":
-        if not is_admin_user(update):
-            try:
-                ans = query.answer("❌ Only the bot owner can cancel.", show_alert=True)
-                if asyncio.iscoroutine(ans):
-                    await ans
-            except Exception:
-                pass
-            return
         try:
             ans = query.answer("Undo cancelled.", show_alert=False)
             if asyncio.iscoroutine(ans):
