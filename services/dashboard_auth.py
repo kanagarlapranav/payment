@@ -251,6 +251,14 @@ def exchange_code_for_session(code: str, client_ip: str = "", is_https: bool = F
         record_failed_attempt(client_ip)
         return False, "Invalid login code. Please generate a new one via /dashboard in Telegram.", ""
 
+    if not workspace_id or str(workspace_id) in ("0", ""):
+        try:
+            from database.queries import get_default_workspace_id
+            workspace_id = get_default_workspace_id()
+        except Exception:
+            from config import DEFAULT_WORKSPACE_ID
+            workspace_id = DEFAULT_WORKSPACE_ID
+
     # Generate session ID and CSRF token
     session_id = secrets.token_hex(32)
     session_h = _hash_val(session_id)
