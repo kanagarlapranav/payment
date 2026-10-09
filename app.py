@@ -300,9 +300,9 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
 
             if success:
                 session_id = result_msg
-                # Redirect to /dashboard with session param (as resilient fallback for mobile in-app browsers) and HttpOnly session cookie set
+                # Redirect to clean /dashboard with HttpOnly session cookie set (avoiding session in URL)
                 extra = {
-                    'Location': f'/dashboard?session={session_id}',
+                    'Location': '/dashboard',
                     'Set-Cookie': cookie_header
                 }
                 self._send_security_headers(303, 'text/html; charset=utf-8', extra_headers=extra)
