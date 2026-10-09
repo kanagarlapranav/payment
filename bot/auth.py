@@ -75,9 +75,9 @@ CALLBACK_ROLE_POLICY = {
     "nav": "viewer", "filter": "viewer", "sort": "viewer",
     "cafe_stats": "viewer", "cafe_view_menu": "viewer", "tx_view": "viewer",
     "ws_switch": "viewer", "ws_reset": "viewer", "ws_reset_menu": "viewer",
-    "ws_new_prompt": "viewer",
 
     # Member & above
+    "ws_new_prompt": "member",
     "save_p": "member", "force_save_p": "member", "edit_p": "member",
     "ep_field": "member", "ep_back": "member", "cat_p": "member",
     "set_pcat": "member", "cancel_p": "member", "quick_add": "member",

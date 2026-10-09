@@ -464,3 +464,33 @@ def test_cross_workspace_undo_insert_protection():
     assert tx1_check is not None
     assert tx1_check.get('deleted_at') is None
 
+
+def test_workspace_create_requires_member_role():
+    """Verify /workspace create rejects viewer-role users and allows member-role users."""
+    async def _test():
+        viewer_id = 9998881
+        member_id = 9998882
+        group_chat_id = -100555666
+
+        ws = get_or_create_workspace(chat_id=group_chat_id, chat_type="group", title="Main Team")
+        add_workspace_member(ws.id, viewer_id, role="viewer")
+        add_workspace_member(ws.id, member_id, role="member")
+
+        # Viewer tries to create workspace
+        up_viewer = make_mock_update(user_id=viewer_id, chat_id=group_chat_id, chat_type="group", text="/workspace create Hackathon")
+        ctx_viewer = MagicMock()
+        ctx_viewer.args = ["create", "Hackathon"]
+        await workspace_command(up_viewer, ctx_viewer)
+        call_args = [str(call) for call in up_viewer.message.reply_text.call_args_list]
+        assert any("Access Restricted" in c or "Member" in c or "⛔" in c for c in call_args)
+
+        # Member tries to create workspace
+        up_member = make_mock_update(user_id=member_id, chat_id=group_chat_id, chat_type="group", text="/workspace create MemberProject")
+        ctx_member = MagicMock()
+        ctx_member.args = ["create", "MemberProject"]
+        await workspace_command(up_member, ctx_member)
+        call_args_m = [str(call) for call in up_member.message.reply_text.call_args_list]
+        assert any("New Workspace Created" in c for c in call_args_m)
+
+    asyncio.run(_test())
+

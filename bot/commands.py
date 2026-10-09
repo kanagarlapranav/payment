@@ -2078,6 +2078,9 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Subcommand: /workspace create <name> or /workspace new <name>
     if context.args and context.args[0].lower() in ('create', 'new', 'add'):
+        from bot.auth import require_member
+        if not await require_member(update):
+            return
         new_title = " ".join(context.args[1:]).strip()
         if not new_title:
             await update.message.reply_text(
