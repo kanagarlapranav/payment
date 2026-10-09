@@ -472,3 +472,68 @@ def test_recurring_payments_tenant_isolation(test_workspaces):
     assert get_recurring_by_id(rec_a_id, workspace_id=ws_a_id) is None
     assert get_recurring_by_id(rec_b_id, workspace_id=ws_b_id) is not None
     assert len(get_all_recurring(workspace_id=ws_b_id)) == 1
+
+
+def test_cafeteria_custom_menu_items_tenant_isolation(test_workspaces):
+    """Custom cafeteria menu items are strictly isolated between tenants during add, read, and delete."""
+    from services.cafeteria_service import (
+        add_custom_menu_item,
+        delete_custom_menu_item,
+        get_all_menu_items
+    )
+    from database.db import get_custom_menu_items, delete_custom_menu_item_by_id
+    ws_a_id, ws_b_id = test_workspaces
+
+    # 1. Add custom items to Workspace A and Workspace B
+    ok_a, msg_a = add_custom_menu_item("Mysore Pak", 40.0, category="Snacks & Tea", workspace_id=ws_a_id)
+    assert ok_a is True
+
+    ok_b, msg_b = add_custom_menu_item("Filter Coffee Special", 25.0, category="Snacks & Tea", workspace_id=ws_b_id)
+    assert ok_b is True
+
+    # 2. Both workspaces can have an item with the same name without colliding
+    ok_same_a, _ = add_custom_menu_item("Special Tea", 15.0, category="Snacks & Tea", workspace_id=ws_a_id)
+    ok_same_b, _ = add_custom_menu_item("Special Tea", 18.0, category="Snacks & Tea", workspace_id=ws_b_id)
+    assert ok_same_a is True
+    assert ok_same_b is True
+
+    # 3. Reading custom menu items is strictly isolated
+    items_a = get_custom_menu_items(workspace_id=ws_a_id)
+    names_a = [it['name'] for it in items_a]
+    assert "Mysore Pak" in names_a
+    assert "Filter Coffee Special" not in names_a
+    assert "Special Tea" in names_a
+    special_tea_a = next(it for it in items_a if it['name'] == "Special Tea")
+    assert special_tea_a['price'] == 15.0
+
+    items_b = get_custom_menu_items(workspace_id=ws_b_id)
+    names_b = [it['name'] for it in items_b]
+    assert "Filter Coffee Special" in names_b
+    assert "Mysore Pak" not in names_b
+    assert "Special Tea" in names_b
+    special_tea_b = next(it for it in items_b if it['name'] == "Special Tea")
+    assert special_tea_b['price'] == 18.0
+
+    # 4. Cross-tenant deletion by name is rejected
+    del_cross, _ = delete_custom_menu_item("Mysore Pak", workspace_id=ws_b_id)
+    assert del_cross is False
+    # Verify still present in Workspace A
+    names_a_after = [it['name'] for it in get_custom_menu_items(workspace_id=ws_a_id)]
+    assert "Mysore Pak" in names_a_after
+
+    # 5. Cross-tenant deletion by ID is rejected
+    item_a_id = next(it['id'] for it in items_a if it['name'] == "Mysore Pak")
+    del_id_cross, _ = delete_custom_menu_item_by_id(item_a_id, workspace_id=ws_b_id)
+    assert del_id_cross is False
+    names_a_after_id = [it['name'] for it in get_custom_menu_items(workspace_id=ws_a_id)]
+    assert "Mysore Pak" in names_a_after_id
+
+    # 6. Own-tenant deletion succeeds and leaves Workspace B intact
+    del_own, _ = delete_custom_menu_item("Mysore Pak", workspace_id=ws_a_id)
+    assert del_own is True
+    names_a_final = [it['name'] for it in get_custom_menu_items(workspace_id=ws_a_id)]
+    assert "Mysore Pak" not in names_a_final
+
+    names_b_final = [it['name'] for it in get_custom_menu_items(workspace_id=ws_b_id)]
+    assert "Filter Coffee Special" in names_b_final
+    assert "Special Tea" in names_b_final
