@@ -2166,7 +2166,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             from database.db import get_db_connection
             with get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,))
+                cursor.execute("SELECT * FROM transactions WHERE id = ? AND workspace_id = ?", (tx_id, ws_id))
                 raw_row = cursor.fetchone()
             if raw_row and raw_row['deleted_at']:
                 cur_bal = get_balance_setting(workspace_id=ws_id)
@@ -2253,7 +2253,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             from database.db import get_db_connection
             with get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,))
+                cursor.execute("SELECT * FROM transactions WHERE id = ? AND workspace_id = ?", (tx_id, ws_id))
                 raw_row = cursor.fetchone()
             if raw_row and raw_row['deleted_at']:
                 cur_bal = get_balance_setting(workspace_id=ws_id)
