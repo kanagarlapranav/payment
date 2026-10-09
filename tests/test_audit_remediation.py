@@ -24,6 +24,7 @@ Covers:
 """
 
 import os
+import io
 import json
 import uuid
 import time
@@ -591,9 +592,22 @@ def test_scheduler_digest_retry_on_failure():
 def test_html_error_response_escaping():
     """HTML error responses must escape malicious scripts in query or result strings."""
     malicious_input = "<script>alert('xss')</script>"
-    escaped = html.escape(malicious_input)
-    assert "<script>" not in escaped
-    assert "&lt;script&gt;" in escaped
+    handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
+    handler.path = f"/auth?code={malicious_input}"
+    handler.client_address = ('127.0.0.1', 5000)
+    handler.headers = {}
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+    handler.wfile = io.BytesIO()
+
+    with patch("services.dashboard_auth.exchange_code_for_session", return_value=(False, f"Invalid code: {malicious_input}", "")):
+        handler.do_GET()
+
+    body = handler.wfile.getvalue().decode('utf-8')
+    assert "<script>" not in body
+    assert "&lt;script&gt;" in body
+    assert "Access Denied" in body
 
 
 # ---------------------------------------------------------------------------
