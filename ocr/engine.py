@@ -5,6 +5,7 @@ from config import TESSERACT_CMD, logger
 
 _rapid_ocr = None
 _ocr_lock = threading.Lock()
+_ocr_inference_lock = threading.Lock()
 
 
 def get_rapid_ocr_engine():
@@ -29,7 +30,8 @@ def warmup_ocr():
         if engine:
             import numpy as np
             dummy = np.ones((64, 64, 3), dtype=np.uint8) * 255
-            engine(dummy)
+            with _ocr_inference_lock:
+                engine(dummy)
             logger.info("OCR model pre-warmed successfully with initial inference.")
     except Exception as e:
         logger.debug(f"OCR warmup notice: {e}")
@@ -139,7 +141,8 @@ def extract_text_from_image(image_path: str) -> str:
                 logger.debug(f"Image scaling notice: {scale_err}")
                 ocr_target = image_path
 
-            result, _ = engine(ocr_target)
+            with _ocr_inference_lock:
+                result, _ = engine(ocr_target)
             if result:
                 lines = _sort_rapid_ocr_boxes(result)
                 text = "\n".join(lines).strip()
@@ -155,7 +158,8 @@ def extract_text_from_image(image_path: str) -> str:
                 proc_path = preprocess_image_for_ocr(ocr_target)
                 if proc_path and proc_path != ocr_target and os.path.exists(proc_path):
                     try:
-                        res2, _ = engine(proc_path)
+                        with _ocr_inference_lock:
+                            res2, _ = engine(proc_path)
                         if res2:
                             lines2 = _sort_rapid_ocr_boxes(res2)
                             text2 = "\n".join(lines2).strip()

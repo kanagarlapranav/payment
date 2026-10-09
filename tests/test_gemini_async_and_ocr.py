@@ -366,3 +366,43 @@ def test_rapid_ocr_short_text_retained_as_fallback(tmp_path):
          patch("shutil.which", return_value=None):
         text = extract_text_from_image(str(img_file))
         assert text == "₹500"
+
+
+def test_rapid_ocr_inference_lock_serialization(tmp_path):
+    """Verify C-N26: RapidOCR inference is serialized via _ocr_inference_lock across concurrent threads."""
+    import threading
+    from ocr.engine import extract_text_from_image, _ocr_inference_lock
+
+    img_file = tmp_path / "concurrent_receipt.jpg"
+    img = Image.new("RGB", (200, 100), color="white")
+    img.save(img_file)
+
+    active_count = 0
+    max_active = 0
+    count_lock = threading.Lock()
+
+    def fake_engine(target):
+        nonlocal active_count, max_active
+        # The inference lock must be locked when engine runs
+        assert _ocr_inference_lock.locked()
+        with count_lock:
+            active_count += 1
+            if active_count > max_active:
+                max_active = active_count
+        time.sleep(0.05)
+        with count_lock:
+            active_count -= 1
+        return ([[[[0, 0], [10, 0], [10, 10], [0, 10]], "Test Merchant 100", 0.99]], None)
+
+    threads = []
+    with patch("ocr.engine.get_rapid_ocr_engine", return_value=fake_engine):
+        for _ in range(3):
+            t = threading.Thread(target=extract_text_from_image, args=(str(img_file),))
+            threads.append(t)
+            t.start()
+        for t in threads:
+            t.join()
+
+    # Even though 3 threads ran concurrently, at most 1 was inside fake_engine at any time
+    assert max_active == 1
+

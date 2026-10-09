@@ -3,17 +3,20 @@ import asyncio
 from ocr.engine import extract_text_from_image
 from config import logger
 
+import threading
 _OCR_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocr_worker")
 _OCR_PIPELINE_TIMEOUT = 30.0
+_EXECUTOR_LOCK = threading.Lock()
 
 
 def _reset_ocr_executor():
     global _OCR_EXECUTOR
-    try:
-        _OCR_EXECUTOR.shutdown(wait=False, cancel_futures=True)
-    except Exception as e:
-        logger.warning(f"Error shutting down hung OCR executor: {e}")
-    _OCR_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocr_worker")
+    with _EXECUTOR_LOCK:
+        try:
+            _OCR_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+        except Exception as e:
+            logger.warning(f"Error shutting down hung OCR executor: {e}")
+        _OCR_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocr_worker")
 
 
 async def perform_ocr_async(image_path: str, timeout: float = _OCR_PIPELINE_TIMEOUT, engine_fn=None) -> str:
