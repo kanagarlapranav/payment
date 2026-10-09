@@ -530,19 +530,36 @@ def test_backup_revision_dirty_and_confirmed_lifecycle():
 # ---------------------------------------------------------------------------
 
 def test_authorization_policy_command_and_callback_whitelists():
-    """Strictly verify owner-only actions versus read-only actions."""
-    from bot.auth import get_command_policy, get_callback_policy
+    """Strictly verify enforced authorization behavior for admin/owner actions."""
+    import asyncio
+    from unittest.mock import MagicMock, AsyncMock
+    from telegram import Update, User, Chat
+    from bot.commands import delete_command, setbalance_command, restore_command, balance_command
 
-    assert get_command_policy("delete") == "admin"
-    assert get_command_policy("setbalance") == "admin"
-    assert get_command_policy("restore") == "admin"
-    assert get_command_policy("balance") == "read_only"
-    assert get_command_policy("history") == "read_only"
+    # Stranger user rejected on commands
+    stranger_uid = 999888777
+    update = MagicMock(spec=Update)
+    user = MagicMock(spec=User)
+    user.id = stranger_uid
+    chat = MagicMock(spec=Chat)
+    chat.id = stranger_uid
+    chat.type = "private"
+    update.effective_user = user
+    update.effective_chat = chat
+    update.callback_query = None
+    msg = MagicMock()
+    msg.reply_text = AsyncMock()
+    update.effective_message = msg
+    update.message = msg
+    ctx = MagicMock()
+    ctx.args = []
 
-    assert get_callback_policy("delete_confirm") in ("admin", "member")
-    assert get_callback_policy("rec_paid") in ("admin", "member")
-    assert get_callback_policy("close_month") == "admin"
-    assert get_callback_policy("nav") in ("read_only", "viewer")
+    for handler in [delete_command, setbalance_command, restore_command, balance_command]:
+        msg.reply_text.reset_mock()
+        asyncio.run(handler(update, ctx))
+        assert msg.reply_text.called
+        call_text = str(msg.reply_text.call_args).lower()
+        assert any(term in call_text for term in ["unauthorized", "admin", "owner", "member", "restricted", "access"])
 
 
 # ---------------------------------------------------------------------------

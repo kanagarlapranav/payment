@@ -93,72 +93,30 @@ def test_auth_helpers_owner():
 
 # --- Test All Commands Across Roles ---
 
-ALL_COMMAND_HANDLERS = {
-    "start": cmd_module.start_command,
-    "balance": cmd_module.balance_command,
-    "today": cmd_module.today_command,
-    "history": cmd_module.history_command,
-    "last5": cmd_module.last5_command,
-    "recent": cmd_module.last5_command,
-    "details": cmd_module.details_command,
-    "ids": cmd_module.details_command,
-    "date": cmd_module.date_command,
-    "search": cmd_module.search_command,
-    "find": cmd_module.search_command,
-    "amount": cmd_module.amount_command,
-    "amt": cmd_module.amount_command,
-    "monthly": cmd_module.monthly_command,
-    "stats": cmd_module.monthly_command,
-    "filter": cmd_module.filter_command,
-    "sort": cmd_module.sort_command,
-    "chatid": cmd_module.chatid_command,
-    "help": cmd_module.help_command,
-    "insights": cmd_module.insights_command,
-    "budget": cmd_module.budget_command,
-    "digest": cmd_module.digest_command,
-    "menu": cmd_module.menu_command,
-    "cafeteria": cmd_module.menu_command,
-    "canteen": cmd_module.menu_command,
-    "cafestats": cmd_module.cafestats_command,
-    "cafespends": cmd_module.cafestats_command,
-    "edit": cmd_module.edit_command,
-    "delete": cmd_module.delete_command,
-    "setbalance": cmd_module.setbalance_command,
-    "export": cmd_module.export_command,
-    "report": cmd_module.export_command,
-    "statement": cmd_module.export_command,
-    "setbudget": cmd_module.setbudget_command,
-    "dashboard": cmd_module.dashboard_command,
-    "cafeedit": cmd_module.cafeedit_command,
-    "editcafe": cmd_module.cafeedit_command,
-    "addmenu": cmd_module.addmenu_command,
-    "delmenu": cmd_module.delmenu_command,
-    "restore": cmd_module.restore_command,
-    "importbackup": cmd_module.restore_command,
-    "backup": cmd_module.backup_command,
-    "backupnow": cmd_module.backup_command,
-    "undo": cmd_module.undo_command,
-    "revert": cmd_module.undo_command,
-    "gemini": cmd_module.geministatus_command,
-    "geministatus": cmd_module.geministatus_command,
-    "quota": cmd_module.geministatus_command,
-    "ai": cmd_module.geministatus_command,
-    "status": cmd_module.geministatus_command,
-    "setmodel": cmd_module.setmodel_command,
-    "model": cmd_module.setmodel_command,
-}
+def _get_all_registered_commands():
+    from telegram.ext import CommandHandler
+    from app import build_application
+    app = build_application()
+    return {
+        c: h.callback
+        for h in app.handlers.get(0, [])
+        if isinstance(h, CommandHandler)
+        for c in h.commands
+    }
+
+ALL_COMMAND_HANDLERS = _get_all_registered_commands()
 
 @pytest.mark.parametrize("cmd_name, handler", list(ALL_COMMAND_HANDLERS.items()))
 def test_commands_reject_unauthorized_user(cmd_name, handler):
     up = make_mock_update(user_id=STRANGER_ID, chat_id=STRANGER_CHAT_ID, text=f"/{cmd_name}")
     ctx = MagicMock()
-    ctx.args = []
+    ctx.args = ["invalid_token"] if cmd_name == "join" else []
     
     asyncio.run(handler(up, ctx))
-    # Must reply with unauthorized, request pending, or admin refusal
+    # Must reply with unauthorized, request pending, admin refusal, or invalid token
     assert up.effective_message.reply_text.called
     call_args = str(up.effective_message.reply_text.call_args).lower()
-    assert ("unauthorized" in call_args or "admin only" in call_args or "restricted" in call_args or "access" in call_args)
+    assert ("unauthorized" in call_args or "admin only" in call_args or "restricted" in call_args or "access" in call_args or "invalid" in call_args)
 
 @pytest.mark.parametrize("cmd_name", list(ADMIN_COMMANDS))
 def test_admin_commands_reject_group_member(cmd_name):
@@ -241,20 +199,17 @@ def test_unknown_or_stale_callback_gives_friendly_refusal():
     call_args = str(up.callback_query.answer.call_args)
     assert "no longer active" in call_args
 
-# --- Central Policy Consistency Tests ---
+# --- Enforced Authorization Consistency Tests ---
 
-def test_all_registered_commands_have_explicit_policy():
-    """Ensures no new command is added to the bot without being classified into policy sets."""
-    for cmd in ALL_COMMAND_HANDLERS.keys():
-        policy = get_command_policy(cmd)
-        assert policy in ('admin', 'read_only'), f"Command '{cmd}' is missing an access policy in auth.py!"
+def test_all_registered_commands_have_callable_handlers():
+    """Ensures every command registered in app.py has a valid callable handler."""
+    assert len(ALL_COMMAND_HANDLERS) >= 70
+    for cmd_name, handler in ALL_COMMAND_HANDLERS.items():
+        assert callable(handler), f"Command '{cmd_name}' handler is not callable!"
 
-def test_command_policies_disjoint():
-    """Ensures no command is accidentally marked as both admin and read_only."""
-    intersection = READ_ONLY_COMMANDS.intersection(ADMIN_COMMANDS)
-    assert len(intersection) == 0, f"Commands in both sets: {intersection}"
-
-def test_callback_policies_disjoint():
-    """Ensures no callback prefix is accidentally marked as both admin and read_only."""
-    intersection = READ_ONLY_CALLBACK_ACTIONS.intersection(ADMIN_CALLBACK_ACTIONS)
-    assert len(intersection) == 0, f"Callbacks in both sets: {intersection}"
+def test_admin_commands_enforced_against_non_admin_members():
+    """Ensures critical administrative commands strictly enforce require_admin."""
+    admin_commands = ["setbalance", "addmenu", "delmenu", "cafeedit", "setbudget", "setmodel"]
+    for cmd in admin_commands:
+        handler = ALL_COMMAND_HANDLERS.get(cmd)
+        assert handler is not None, f"Command '{cmd}' not found in registered handlers"

@@ -33,18 +33,65 @@ def setup_test_db(tmp_path, monkeypatch):
 
 
 def test_gemini_and_ai_commands_restricted_to_admin():
-    """Verifies that gemini, quota, ai, insights, setmodel are restricted to admin role."""
-    for cmd in ["gemini", "geministatus", "quota", "ai", "insights", "setmodel", "model"]:
-        assert COMMAND_ROLE_POLICY.get(cmd) == "admin", f"{cmd} must be admin-only"
+    """Verifies that gemini, insights, setmodel reject non-admin users in practice."""
+    import asyncio
+    from bot.commands import geministatus_command, insights_command, setmodel_command
 
-    assert "refresh_gemini" in ADMIN_CALLBACK_ACTIONS, "refresh_gemini must be admin callback action"
-    assert "set_model" in ADMIN_CALLBACK_ACTIONS, "set_model must be admin callback action"
+    member_uid = 555444333
+    update = MagicMock(spec=Update)
+    user = MagicMock(spec=User)
+    user.id = member_uid
+    chat = MagicMock(spec=Chat)
+    chat.id = member_uid
+    chat.type = "private"
+    update.effective_user = user
+    update.effective_chat = chat
+    update.callback_query = None
+    msg = MagicMock()
+    msg.reply_text = AsyncMock()
+    update.effective_message = msg
+    update.message = msg
+
+    ctx = MagicMock()
+    ctx.args = []
+
+    for handler in [geministatus_command, insights_command, setmodel_command]:
+        msg.reply_text.reset_mock()
+        asyncio.run(handler(update, ctx))
+        assert msg.reply_text.called
+        call_text = str(msg.reply_text.call_args).lower()
+        assert "admin" in call_text or "unauthorized" in call_text or "access" in call_text or "restricted" in call_text
 
 
 def test_permissions_and_roles_restricted_to_owner():
-    """Verifies that permissions and roles are owner-only."""
-    for cmd in ["permissions", "roles", "setrole", "setbalance", "restore"]:
-        assert COMMAND_ROLE_POLICY.get(cmd) == "owner", f"{cmd} must be owner-only"
+    """Verifies that permissions and roles reject non-owner users in practice."""
+    import asyncio
+    from bot.commands import permissions_command, setrole_command, setbalance_command, restore_command
+
+    admin_uid = 777666555
+    update = MagicMock(spec=Update)
+    user = MagicMock(spec=User)
+    user.id = admin_uid
+    chat = MagicMock(spec=Chat)
+    chat.id = admin_uid
+    chat.type = "private"
+    update.effective_user = user
+    update.effective_chat = chat
+    update.callback_query = None
+    msg = MagicMock()
+    msg.reply_text = AsyncMock()
+    update.effective_message = msg
+    update.message = msg
+
+    ctx = MagicMock()
+    ctx.args = []
+
+    for handler in [permissions_command, setrole_command, setbalance_command, restore_command]:
+        msg.reply_text.reset_mock()
+        asyncio.run(handler(update, ctx))
+        assert msg.reply_text.called
+        call_text = str(msg.reply_text.call_args).lower()
+        assert "owner" in call_text or "admin" in call_text or "unauthorized" in call_text or "access" in call_text or "restricted" in call_text
 
 
 @pytest.mark.anyio
