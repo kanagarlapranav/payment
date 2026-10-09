@@ -12,7 +12,7 @@ from utils.validation import (
     validate_string_length,
     CENT,
 )
-from config import logger
+from config import logger, RESTRICTED_USER_IDS, is_restricted_user, RESTRICTED_USER_NAMES
 
 def increment_revision_and_mark_dirty(conn) -> int:
     """
@@ -338,24 +338,27 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                     else:
                         cursor.execute("UPDATE workspace_members SET role = 'owner', is_active = 1 WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, owner_id))
 
-                # Ensure Nagendra is in the group workspace
-                cursor.execute("SELECT id, role FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, 8343764796))
-                nag_row = cursor.fetchone()
-                if not nag_row:
-                    cursor.execute("""
-                        INSERT OR REPLACE INTO workspace_members 
-                        (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
-                        VALUES (?, ?, 'nagendra', 'Nagendra', 'member', 1, ?, ?)
-                    """, (grp_id, 8343764796, now_utc, now_utc))
-                else:
-                    if nag_row['role'] == 'owner':
-                        cursor.execute("UPDATE workspace_members SET role = 'member', is_active = 1 WHERE workspace_id = ? AND telegram_user_id = 8343764796", (grp_id,))
+                # Ensure restricted users are in the group workspace as members
+                for r_uid in RESTRICTED_USER_IDS:
+                    cursor.execute("SELECT id, role FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, r_uid))
+                    r_row = cursor.fetchone()
+                    r_disp, r_uname = RESTRICTED_USER_NAMES.get(r_uid, ("Member", "member"))
+                    if not r_row:
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO workspace_members 
+                            (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
+                            VALUES (?, ?, ?, ?, 'member', 1, ?, ?)
+                        """, (grp_id, r_uid, r_uname, r_disp, now_utc, now_utc))
+                    else:
+                        if r_row['role'] == 'owner':
+                            cursor.execute("UPDATE workspace_members SET role = 'member', is_active = 1 WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, r_uid))
 
             # 2. Collect all known user IDs with their best display names / usernames
             known_users: dict[int, tuple[str, str]] = {}
             if owner_id:
                 known_users[owner_id] = ("Pranav", "pranav")
-            known_users[8343764796] = ("Nagendra", "nagendra")
+            for r_uid in RESTRICTED_USER_IDS:
+                known_users[r_uid] = RESTRICTED_USER_NAMES.get(r_uid, ("Member", "member"))
 
             # From workspace_members
             cursor.execute("SELECT telegram_user_id, display_name, username FROM workspace_members")
@@ -400,7 +403,10 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
 
                 cursor.execute("SELECT id, title FROM workspaces WHERE chat_id = ? AND is_active = 1", (uid,))
                 ws_row = cursor.fetchone()
-                clean_name = "Nagendra" if uid == 8343764796 else (dname if dname and not dname.startswith("User ") else (uname or f"User {uid}"))
+                if uid in RESTRICTED_USER_NAMES:
+                    clean_name = RESTRICTED_USER_NAMES[uid][0]
+                else:
+                    clean_name = (dname if dname and not dname.startswith("User ") else (uname or f"User {uid}"))
                 ws_title = f"{clean_name} (Personal)"
                 user_role = 'member'
 
@@ -423,7 +429,7 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                         """, (ws_id, owner_id, now_utc, now_utc))
                 else:
                     curr_title = ws_row['title'] or ""
-                    if curr_title in ("Workspace", "Primary Workspace", "") or curr_title == str(uid) or curr_title.startswith("Chat_") or (uid == 8343764796 and curr_title != ws_title):
+                    if curr_title in ("Workspace", "Primary Workspace", "") or curr_title == str(uid) or curr_title.startswith("Chat_") or (is_restricted_user(uid) and curr_title != ws_title):
                         cursor.execute(
                             "UPDATE workspaces SET title = ?, updated_at = ? WHERE id = ?",
                             (ws_title, now_utc, ws_row['id'])
@@ -438,8 +444,9 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                                 VALUES (?, ?, 'owner', 'Owner', 'owner', 1, ?, ?)
                             """, (ws_row['id'], owner_id, now_utc, now_utc))
 
-            # 5. Enforce Nagendra (8343764796) is never owner across all workspaces
-            cursor.execute("UPDATE workspace_members SET role = 'member' WHERE telegram_user_id = 8343764796 AND role = 'owner'")
+            # 5. Enforce restricted users are never owner across all workspaces
+            for r_uid in RESTRICTED_USER_IDS:
+                cursor.execute("UPDATE workspace_members SET role = 'member' WHERE telegram_user_id = ? AND role = 'owner'", (r_uid,))
 
             # 6. Recalculate balance for default workspace
             cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
@@ -521,7 +528,7 @@ def add_workspace_member(
     """
     valid_roles = {'owner', 'admin', 'member', 'viewer'}
     clean_role = role.lower() if role and role.lower() in valid_roles else 'member'
-    if int(telegram_user_id) == 8343764796 and clean_role == 'owner':
+    if is_restricted_user(telegram_user_id) and clean_role == 'owner':
         clean_role = 'member'
     now_utc = utc_now_iso()
     with LEDGER_LOCK:
@@ -560,8 +567,8 @@ def update_workspace_member_role(workspace_id: str, telegram_user_id: int, new_r
     valid_roles = {'owner', 'admin', 'member', 'viewer'}
     if not new_role or new_role.lower() not in valid_roles:
         raise ValueError(f"Invalid role: {new_role}. Allowed: {sorted(valid_roles)}")
-    if int(telegram_user_id) == 8343764796 and new_role.lower() == 'owner':
-        raise ValueError("Nagendra cannot be assigned the owner role.")
+    if is_restricted_user(telegram_user_id) and new_role.lower() == 'owner':
+        raise ValueError("Restricted users cannot be assigned the owner role.")
     now_utc = utc_now_iso()
     with LEDGER_LOCK:
         with get_db_connection() as conn:
@@ -723,7 +730,7 @@ def set_user_permission_and_role(telegram_user_id: int, role: str, is_active: bo
     """Updates role and active status for a user, optionally scoped to a specific workspace."""
     valid_roles = {'owner', 'admin', 'member', 'viewer'}
     clean_role = role.lower() if role and role.lower() in valid_roles else 'member'
-    if int(telegram_user_id) == 8343764796 and clean_role == 'owner':
+    if is_restricted_user(telegram_user_id) and clean_role == 'owner':
         clean_role = 'member'
     active_val = 1 if is_active else 0
     now_utc = utc_now_iso()
@@ -732,8 +739,8 @@ def set_user_permission_and_role(telegram_user_id: int, role: str, is_active: bo
             cursor = conn.cursor()
             cursor.execute("SELECT username, display_name FROM access_requests WHERE telegram_user_id = ?", (int(telegram_user_id),))
             ar_row = cursor.fetchone()
-            uname = ar_row['username'] if ar_row and ar_row['username'] else ("nagendra" if int(telegram_user_id) == 8343764796 else "")
-            dname = ar_row['display_name'] if ar_row and ar_row['display_name'] else ("Nagendra" if int(telegram_user_id) == 8343764796 else "")
+            uname = ar_row['username'] if ar_row and ar_row['username'] else ("nagendra" if is_restricted_user(telegram_user_id) else "")
+            dname = ar_row['display_name'] if ar_row and ar_row['display_name'] else ("Nagendra" if is_restricted_user(telegram_user_id) else "")
 
             # Check existing workspace members for better username/display_name
             cursor.execute("SELECT username, display_name FROM workspace_members WHERE telegram_user_id = ? AND (username != '' OR display_name != '') LIMIT 1", (int(telegram_user_id),))

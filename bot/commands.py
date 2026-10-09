@@ -2266,17 +2266,19 @@ async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         target_uid = m.telegram_user_id
                         target_display = m.display_name
                         break
-            # Special check for Nagendra
-            if not target_uid and 'nagendra' in uname:
-                target_uid = 8343764796
+            # Special check for Nagendra / restricted users
+            from config import RESTRICTED_USER_IDS, is_restricted_user
+            if not target_uid and 'nagendra' in uname and RESTRICTED_USER_IDS:
+                target_uid = RESTRICTED_USER_IDS[0]
                 target_display = "Nagendra"
 
     if not target_uid:
         await update.message.reply_text(f"❌ Member '{context.args[0]}' not found in this workspace.")
         return
 
-    if target_uid == 8343764796 and new_role == 'owner':
-        await update.message.reply_text("⛔ Nagendra cannot be assigned the owner role.")
+    from config import is_restricted_user
+    if is_restricted_user(target_uid) and new_role == 'owner':
+        await update.message.reply_text("⛔ This user is restricted and cannot be assigned the owner role.")
         return
 
     try:
@@ -2334,8 +2336,9 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     target_uid = m.telegram_user_id
                     target_display = f"@{m.username}" if m.username else m.display_name
                     break
-            if not target_uid and 'nagendra' in uname:
-                target_uid = 8343764796
+            from config import RESTRICTED_USER_IDS
+            if not target_uid and 'nagendra' in uname and RESTRICTED_USER_IDS:
+                target_uid = RESTRICTED_USER_IDS[0]
                 target_display = "Nagendra"
 
     if not target_uid:

@@ -23,12 +23,15 @@ GROUP_CHAT_ID = -1004310685141
 
 @pytest.fixture(autouse=True)
 def setup_test_state():
+    with get_db_connection() as conn:
+        conn.execute("DELETE FROM transactions")
+        conn.execute("DELETE FROM workspace_members")
+        conn.execute("DELETE FROM workspaces")
+        conn.execute("DELETE FROM workspace_settings")
+        conn.execute("DELETE FROM settings WHERE key = 'default_workspace_id' OR key LIKE 'user_active_ws:%'")
+        conn.commit()
     setup_database()
     _USER_ACTIVE_WORKSPACES.clear()
-    with get_db_connection() as conn:
-        conn.execute("DELETE FROM workspace_settings WHERE key LIKE 'user_active_ws:%'")
-        conn.execute("DELETE FROM settings WHERE key LIKE 'user_active_ws:%'")
-        conn.commit()
 
 
 def make_group_update(user_id: int, text: str = "120 dosa", username: str = "user", display_name: str = "User"):

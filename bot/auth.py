@@ -11,7 +11,7 @@ import html
 from telegram import Update
 from telegram.ext import ContextTypes
 import config
-from config import logger
+from config import logger, is_restricted_user
 from database.models import Workspace, WorkspaceMember
 
 # Role Hierarchy: Higher integer = higher permission level
@@ -191,8 +191,8 @@ def is_owner(update: Update, workspace_id: Optional[str] = None) -> bool:
     user_id = get_effective_user_id(update)
     if user_id is None:
         return False
-    # Nagendra (8343764796) is strictly a member only, never owner
-    if int(user_id) == 8343764796:
+    # Restricted users are strictly member only, never owner
+    if is_restricted_user(user_id):
         return False
     if is_super_admin(user_id):
         return True
@@ -449,7 +449,7 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
                         if not member or not member.is_active or getattr(member, 'status', 'active') in ('suspended', 'removed'):
                             return None
                         caller_role = member.role
-                    if user_id == 8343764796 and caller_role == 'owner':
+                    if is_restricted_user(user_id) and caller_role == 'owner':
                         caller_role = 'member'
                     return RequestContext(
                         workspace_id=switched_ws.id,
@@ -538,7 +538,7 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
                 )
                 caller_role = member.role if member else default_role
             elif chat_type == 'private':
-                role = 'member' if user_id == 8343764796 else 'owner'
+                role = 'member' if is_restricted_user(user_id) else 'owner'
                 member = add_workspace_member(
                     ws.id, user_id,
                     username=username,
@@ -549,7 +549,7 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
             else:
                 return None
 
-        if user_id == 8343764796 and caller_role == 'owner':
+        if is_restricted_user(user_id) and caller_role == 'owner':
             caller_role = 'member'
 
 

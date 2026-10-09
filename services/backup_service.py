@@ -890,10 +890,11 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (w.get('id'), w.get('chat_id'), w.get('chat_type', 'group'), w.get('title', 'Workspace'), w.get('is_active', 1), w.get('created_at', now_utc), w.get('updated_at', now_utc)))
 
+                from config import is_restricted_user
                 for m in data_dict.get("workspace_members", []):
                     if target_ws and str(m.get('workspace_id')) != str(target_ws):
                         continue
-                    m_role = 'member' if (int(m.get('telegram_user_id', 0)) == 8343764796 and m.get('role') == 'owner') else m.get('role', 'member')
+                    m_role = 'member' if (is_restricted_user(m.get('telegram_user_id', 0)) and m.get('role') == 'owner') else m.get('role', 'member')
                     cursor.execute("""
                         INSERT OR REPLACE INTO workspace_members (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)

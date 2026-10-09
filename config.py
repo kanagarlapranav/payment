@@ -109,6 +109,28 @@ SUPER_ADMIN_USER_IDS = [
 SUPER_ADMIN_IDS = SUPER_ADMIN_USER_IDS
 DEFAULT_FALLBACK_WORKSPACE_ID = os.getenv('DEFAULT_FALLBACK_WORKSPACE_ID', '')
 
+# Restricted users (strictly members only, never permitted owner privileges)
+raw_restricted_users = os.getenv('RESTRICTED_USER_IDS', '8343764796')
+RESTRICTED_USER_IDS = [
+    int(uid.strip())
+    for uid in raw_restricted_users.split(',')
+    if uid.strip() and (uid.strip().isdigit() or (uid.strip().startswith('-') and uid.strip()[1:].isdigit()))
+]
+
+def is_restricted_user(user_id) -> bool:
+    """Checks if a user is in the restricted users list."""
+    if user_id is None:
+        return False
+    try:
+        return int(user_id) in RESTRICTED_USER_IDS
+    except (ValueError, TypeError):
+        return False
+
+# Mapping of restricted user IDs to default (display_name, username)
+RESTRICTED_USER_NAMES = {
+    8343764796: ("Nagendra", "nagendra")
+}
+
 
 # OCR Configuration: avoid Windows path default on Linux/Render
 default_tesseract = r'C:\Program Files\Tesseract-OCR\tesseract.exe' if sys.platform == 'win32' else 'tesseract'
