@@ -30,6 +30,19 @@ from config import DB_PATH
 class TestBackupRestorePrompt6(unittest.TestCase):
     def setUp(self):
         setup_database()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT key, value FROM settings")
+            self._initial_settings = {row["key"]: row["value"] for row in cursor.fetchall()}
+
+    def tearDown(self):
+        if hasattr(self, "_initial_settings"):
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM settings")
+                for k, v in self._initial_settings.items():
+                    cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (k, v))
+                conn.commit()
 
     def test_newer_wins(self):
         """Incoming row with newer updated_at updates the local row."""
@@ -367,6 +380,14 @@ class TestBackupRestorePrompt6(unittest.TestCase):
             ''', (uid, now_iso, now_iso, now_iso))
             conn.commit()
 
+        # Snapshot transactions before clean wipe
+        saved_tx_rows = []
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM transactions")
+            col_names = [d[0] for d in cursor.description] if cursor.description else []
+            saved_tx_rows = [dict(zip(col_names, row)) for row in cursor.fetchall()]
+
         # Export backup with tombstone
         export_path = Path("data/test_restart_tombstone.json")
         try:
@@ -390,6 +411,16 @@ class TestBackupRestorePrompt6(unittest.TestCase):
         finally:
             if export_path.exists():
                 os.remove(export_path)
+            # Restore original transactions
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM transactions")
+                for r in saved_tx_rows:
+                    cols = list(r.keys())
+                    placeholders = ",".join(["?"] * len(cols))
+                    colnames_str = ",".join(cols)
+                    cursor.execute(f"INSERT INTO transactions ({colnames_str}) VALUES ({placeholders})", [r[c] for c in cols])
+                conn.commit()
 
     def test_startup_skip_logic_and_backup_blocked(self):
         """Startup skips restore when DB is populated or initialized; blocks backup on empty restore failure."""

@@ -13,6 +13,14 @@ from database.models import Transaction
 class TestGeminiChatStatus(unittest.TestCase):
     def setUp(self):
         gv.clear_status_cache()
+        from database.queries import get_model_setting
+        self._orig_model_setting = get_model_setting()
+
+    def tearDown(self):
+        gv.clear_status_cache()
+        if hasattr(self, "_orig_model_setting"):
+            from database.queries import set_model_setting
+            set_model_setting(self._orig_model_setting)
 
     def test_check_gemini_api_status_not_configured(self):
         with patch.object(gv, "get_effective_gemini_api_key", return_value=""):

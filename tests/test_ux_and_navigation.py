@@ -627,67 +627,71 @@ class TestUXAndNavigation(unittest.TestCase):
         """Verify saving an image receipt properly updates the message with 'Payment Saved!', real balance, and undo entry."""
         from unittest.mock import MagicMock, AsyncMock, patch
         from bot.handlers import handle_callback_query, set_pending_transaction
-        from database.queries import update_balance_setting
+        from database.queries import update_balance_setting, get_balance_setting
         from services.undo_service import get_last_action
         import uuid
         import asyncio
 
-        update_balance_setting(50000.0)
+        orig_bal = get_balance_setting()
+        try:
+            update_balance_setting(50000.0)
 
-        ref_no = f"IMG_REF_{uuid.uuid4().hex[:6]}"
-        tx_receipt = Transaction(
-            amount=250.0,
-            transaction_type="SENT",
-            person_name="Chai Point",
-            category="Food & Dining",
-            transaction_date="2026-09-23",
-            transaction_time="11:30 AM",
-            reference_number=ref_no
-        )
-        pid = f"pid_{uuid.uuid4().hex[:6]}"
-        set_pending_transaction(pid, tx_receipt)
+            ref_no = f"IMG_REF_{uuid.uuid4().hex[:6]}"
+            tx_receipt = Transaction(
+                amount=250.0,
+                transaction_type="SENT",
+                person_name="Chai Point",
+                category="Food & Dining",
+                transaction_date="2026-09-23",
+                transaction_time="11:30 AM",
+                reference_number=ref_no
+            )
+            pid = f"pid_{uuid.uuid4().hex[:6]}"
+            set_pending_transaction(pid, tx_receipt)
 
-        update = MagicMock()
-        query = MagicMock()
-        query.data = f"save_p:{pid}"
-        owner_id = 998877
-        query.from_user.id = owner_id
-        update.effective_user.id = owner_id
-        update.effective_chat.id = owner_id
-        query.message = MagicMock()
-        query.message.chat_id = owner_id
-        query.message.text = "Detected Receipt"
-        query.message.caption = None
-        query.message.photo = None
-        query.edit_message_text = AsyncMock()
-        query.answer = AsyncMock()
-        update.callback_query = query
-        context = MagicMock()
+            update = MagicMock()
+            query = MagicMock()
+            query.data = f"save_p:{pid}"
+            owner_id = 998877
+            query.from_user.id = owner_id
+            update.effective_user.id = owner_id
+            update.effective_chat.id = owner_id
+            query.message = MagicMock()
+            query.message.chat_id = owner_id
+            query.message.text = "Detected Receipt"
+            query.message.caption = None
+            query.message.photo = None
+            query.edit_message_text = AsyncMock()
+            query.answer = AsyncMock()
+            update.callback_query = query
+            context = MagicMock()
 
-        with patch('bot.handlers.is_owner', return_value=True), \
-             patch('bot.handlers.is_authorized_user', return_value=True), \
-             patch('bot.handlers.is_admin_user', return_value=True), \
-             patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
-             patch('services.task_manager.schedule_debounced_backup'):
-            asyncio.run(handle_callback_query(update, context))
+            with patch('bot.handlers.is_owner', return_value=True), \
+                 patch('bot.handlers.is_authorized_user', return_value=True), \
+                 patch('bot.handlers.is_admin_user', return_value=True), \
+                 patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
+                 patch('services.task_manager.schedule_debounced_backup'):
+                asyncio.run(handle_callback_query(update, context))
 
-        query.edit_message_text.assert_called_once()
-        saved_text = query.edit_message_text.call_args[0][0]
-        self.assertIn("Payment Saved!", saved_text)
-        self.assertIn("Chai Point", saved_text)
-        self.assertIn("₹250", saved_text)
-        # Verify balance is not missing or hardcoded, but matches real recalculated balance
-        from database.queries import get_transaction_by_reference
-        saved_db_tx = get_transaction_by_reference(ref_no)
-        self.assertIsNotNone(saved_db_tx)
-        self.assertIn("Current Balance:", saved_text)
-        self.assertIn(format_currency(saved_db_tx['balance_after']), saved_text)
+            query.edit_message_text.assert_called_once()
+            saved_text = query.edit_message_text.call_args[0][0]
+            self.assertIn("Payment Saved!", saved_text)
+            self.assertIn("Chai Point", saved_text)
+            self.assertIn("₹250", saved_text)
+            # Verify balance is not missing or hardcoded, but matches real recalculated balance
+            from database.queries import get_transaction_by_reference
+            saved_db_tx = get_transaction_by_reference(ref_no)
+            self.assertIsNotNone(saved_db_tx)
+            self.assertIn("Current Balance:", saved_text)
+            self.assertIn(format_currency(saved_db_tx['balance_after']), saved_text)
 
-        # Verify undo record exists
-        undo_act = get_last_action(chat_id=owner_id, user_id=owner_id)
-        self.assertIsNotNone(undo_act)
-        self.assertEqual(undo_act.get('action'), 'insert')
-        self.assertIsNotNone(undo_act.get('uid'))
+            # Verify undo record exists
+            undo_act = get_last_action(chat_id=owner_id, user_id=owner_id)
+            self.assertIsNotNone(undo_act)
+            self.assertEqual(undo_act.get('action'), 'insert')
+            self.assertIsNotNone(undo_act.get('uid'))
+        finally:
+            update_balance_setting(orig_bal)
 
     def test_safe_edit_callback_message_caption_and_fallback(self):
         """Verify safe_edit_callback_message routes to edit_message_caption for media and falls back to plain text."""

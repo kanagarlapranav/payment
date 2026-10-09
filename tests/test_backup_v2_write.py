@@ -79,6 +79,17 @@ class TestBackupV2WriteSide(unittest.TestCase):
         mock_bot = MagicMock()
         mock_bot.send_document = AsyncMock()
 
+        # Snapshot existing transactions and settings before simulating empty DB
+        saved_tx_rows = []
+        saved_settings_rows = {}
+        with LEDGER_LOCK, get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM transactions")
+            col_names = [d[0] for d in cursor.description] if cursor.description else []
+            saved_tx_rows = [dict(zip(col_names, row)) for row in cursor.fetchall()]
+            cursor.execute("SELECT key, value FROM settings")
+            saved_settings_rows = {row[0]: row[1] for row in cursor.fetchall()}
+
         try:
             # Step A: Simulate uninitialized zero-row database
             with LEDGER_LOCK, get_db_connection() as conn:
@@ -130,14 +141,18 @@ class TestBackupV2WriteSide(unittest.TestCase):
                     self.assertTrue(ok2)
                     mock_bot.send_document.assert_called_once()
             finally:
-                # Restore rows if any
+                # Restore original rows and settings
                 with LEDGER_LOCK, get_db_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute("DELETE FROM transactions")
+                    for r in saved_tx_rows:
+                        cols = list(r.keys())
+                        placeholders = ",".join(["?"] * len(cols))
+                        colnames_str = ",".join(cols)
+                        cursor.execute(f"INSERT INTO transactions ({colnames_str}) VALUES ({placeholders})", [r[c] for c in cols])
+                    for k, v in saved_settings_rows.items():
+                        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (k, v))
                     conn.commit()
-                if getattr(self, "db_backup", None):
-                    with open(DB_PATH, 'wb') as f:
-                        f.write(self.db_backup)
         finally:
             if test_path.exists():
                 test_path.unlink()
