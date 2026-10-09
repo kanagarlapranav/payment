@@ -802,8 +802,15 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
     elif action == "rec_paid":
         rec_id = int(parts[1])
         from services.recurring_service import mark_recurring_paid, get_recurring_by_id
-        tx_id, next_due = await asyncio.to_thread(mark_recurring_paid, rec_id, None, ws_id)
-        rec = await asyncio.to_thread(get_recurring_by_id, rec_id, ws_id)
+        try:
+            tx_id, next_due = await asyncio.to_thread(mark_recurring_paid, rec_id, None, ws_id)
+            rec = await asyncio.to_thread(get_recurring_by_id, rec_id, ws_id)
+            if not rec:
+                await query.answer("❌ Recurring payment not found.", show_alert=True)
+                return
+        except ValueError as err:
+            await query.answer(f"❌ {err}", show_alert=True)
+            return
         text = (
             f"✅ <b>Recurring Payment Logged to Ledger!</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -819,8 +826,15 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
     elif action == "rec_skip":
         rec_id = int(parts[1])
         from services.recurring_service import skip_recurring_due, get_recurring_by_id
-        next_due = await asyncio.to_thread(skip_recurring_due, rec_id, ws_id)
-        rec = await asyncio.to_thread(get_recurring_by_id, rec_id, ws_id)
+        try:
+            next_due = await asyncio.to_thread(skip_recurring_due, rec_id, ws_id)
+            rec = await asyncio.to_thread(get_recurring_by_id, rec_id, ws_id)
+            if not rec:
+                await query.answer("❌ Recurring payment not found.", show_alert=True)
+                return
+        except ValueError as err:
+            await query.answer(f"❌ {err}", show_alert=True)
+            return
         text = (
             f"⏭️ <b>Recurring Cycle Skipped</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
