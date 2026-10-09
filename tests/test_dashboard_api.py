@@ -32,32 +32,37 @@ class TestDashboardData(unittest.TestCase):
         self.assertNotIn("localStorage.setItem('dashboard_token'", content)
 
     def test_api_data_payload_structure(self):
-        balance = get_balance_setting()
-        monthly = get_monthly_summary(2026, 9)
-        cat_summary = get_category_summary(2026, 9)
-        budget_data = get_budget_info(2026, 9)
-        recent_txs = get_recent_transactions(limit=10)
-        all_txs = get_all_transactions()
+        handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
+        handler.path = '/api/data?year=2026&month=9'
+        handler.client_address = ('127.0.0.1', 1234)
+        handler.headers = {'Cookie': self.session_cookie}
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        handler.wfile = io.BytesIO()
 
-        payload = {
-            'period_name': "September 2026",
-            'current_balance': balance,
-            'total_received': monthly['total_received'],
-            'total_spent': monthly['total_sent'],
-            'net_savings': monthly['net_savings'],
-            'total_transactions': len(all_txs),
-            'budget_info': budget_data,
-            'categories': cat_summary,
-            'recent_transactions': recent_txs
-        }
+        handler.do_GET()
+        handler.send_response.assert_called_with(200)
 
-        # Verify JSON serializable
-        json_str = json.dumps(payload, default=str)
-        self.assertIsInstance(json_str, str)
-        parsed = json.loads(json_str)
-        self.assertEqual(parsed['current_balance'], balance)
-        self.assertIn('categories', parsed)
+        raw_body = handler.wfile.getvalue().decode('utf-8')
+        parsed = json.loads(raw_body)
+        
+        self.assertEqual(parsed['period_name'], "September 2026")
+        self.assertEqual(parsed['year'], 2026)
+        self.assertEqual(parsed['month'], 9)
+        self.assertIn('current_balance', parsed)
+        self.assertIn('total_received', parsed)
+        self.assertIn('total_spent', parsed)
+        self.assertIn('net_savings', parsed)
+        self.assertIn('total_transactions', parsed)
+        self.assertIn('month_transactions_count', parsed)
+        self.assertIn('comparison', parsed)
         self.assertIn('budget_info', parsed)
+        self.assertIn('categories', parsed)
+        self.assertIn('daily_series', parsed)
+        self.assertIn('top_payees', parsed)
+        self.assertIn('recent_transactions', parsed)
+        self.assertIn('backup_status', parsed)
 
     def test_handler_healthz_get(self):
         handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
