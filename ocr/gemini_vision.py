@@ -790,8 +790,31 @@ async def parse_text_with_gemini_async(
                 logger.warning("Invalid natural-language Gemini transaction type: %r", tx_type)
                 continue
 
-            person = str(p.get("person_name") or "Unknown").title()
-            cat = str(p.get("category") or "General")
+            raw_person = str(p.get("person_name") or "Unknown").strip()
+            try:
+                person = validate_name(raw_person, max_length=120, field_name="person_name") or "Unknown"
+            except ValueError:
+                person = raw_person[:120].strip() or "Unknown"
+            person = person.title()
+
+            raw_cat = str(p.get("category") or "General").strip()
+            canonical_categories = {
+                "food & dining": "Food & Dining",
+                "groceries": "Groceries",
+                "utilities": "Utilities",
+                "bills & utilities": "Bills & Utilities",
+                "transportation": "Transportation",
+                "travel & transport": "Travel & Transport",
+                "shopping": "Shopping",
+                "entertainment": "Entertainment",
+                "transfers": "Transfers",
+                "transfers & p2p": "Transfers & P2P",
+                "health": "Health",
+                "health & medical": "Health & Medical",
+                "income": "Income",
+                "general": "General",
+            }
+            cat = canonical_categories.get(raw_cat.lower(), "General")
             raw_d = str(p.get("transaction_date") or "today")
             d_obj = parse_date(raw_d)
 
