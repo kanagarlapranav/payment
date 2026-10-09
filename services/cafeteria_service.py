@@ -141,7 +141,7 @@ def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea"
 
         # Prevent duplicates against standard menu
         if any(it.name.lower() == name_clean.lower() for it in VEG_MENU):
-            return False, f"Item '<b>{name_clean}</b>' already exists in the menu."
+            return False, f"Item '{name_clean}' already exists in the menu."
 
         import sqlite3
         from utils.dates import utc_now_iso
@@ -156,7 +156,7 @@ def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea"
                     (name_clean, ws_id, ws_id, default_ws)
                 )
                 if cursor.fetchone():
-                    return False, f"Item '<b>{name_clean}</b>' already exists in the menu."
+                    return False, f"Item '{name_clean}' already exists in the menu."
 
                 cursor.execute(
                     "INSERT INTO custom_menu_items (name, price, category, is_veg, workspace_id, created_at) VALUES (?, ?, ?, 1, ?, ?)",
@@ -170,9 +170,9 @@ def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea"
                 export_database_to_json()
             except Exception:
                 pass
-            return True, f"✅ Added '<b>{name_clean}</b>' (₹{price_val:.0f}) to {category_clean}!"
+            return True, f"✅ Added '{name_clean}' (₹{price_val:.0f}) to {category_clean}!"
         except sqlite3.IntegrityError:
-            return False, f"Item '<b>{name_clean}</b>' already exists in the menu."
+            return False, f"Item '{name_clean}' already exists in the menu."
         except Exception as e:
             return False, f"Database error: {e}"
 
@@ -204,9 +204,9 @@ def delete_custom_menu_item(name: str, workspace_id: str) -> Tuple[bool, str]:
                         export_database_to_json()
                     except Exception:
                         pass
-                    return True, f"🗑️ Removed '<b>{name}</b>' from menu."
+                    return True, f"🗑️ Removed '{name}' from menu."
                 else:
-                    return False, f"Item '<b>{name}</b>' not found in custom items."
+                    return False, f"Item '{name}' not found in custom items."
         except Exception as e:
             return False, f"Error deleting item: {e}"
 
