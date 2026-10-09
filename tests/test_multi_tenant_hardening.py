@@ -327,3 +327,90 @@ def test_core_queries_required_workspace_id_default_deny(test_workspaces):
     # 4. Correct workspace succeeds
     assert update_transaction(tx_id, {"amount": 200.0}, workspace_id=ws_a_id) is True
     assert delete_transaction(tx_id, workspace_id=ws_a_id) is True
+
+
+def test_monthly_close_tenant_isolation(test_workspaces):
+    """Monthly review metrics, closing, and persistence are strictly isolated between tenants."""
+    from services.monthly_review_service import (
+        calculate_monthly_closing_metrics,
+        close_and_record_monthly_review,
+        get_monthly_review
+    )
+    ws_a_id, ws_b_id = test_workspaces
+    year, month = 2026, 9
+
+    # Seed transactions in Workspace A: Income 10,000, Expense 3,000
+    with LEDGER_LOCK, get_db_connection() as conn:
+        cursor = conn.cursor()
+        now = "2026-09-15T12:00:00"
+        cursor.execute("""
+            INSERT INTO transactions (
+                workspace_id, transaction_type, amount, person_name,
+                category, balance_before, balance_after, uid,
+                transaction_date, transaction_time, occurred_at, created_at, updated_at
+            ) VALUES (?, 'RECEIVED', 10000.0, 'Client A', 'Salary', 0.0, 10000.0, ?, '2026-09-01', '10:00:00', ?, ?, ?)
+        """, (ws_a_id, uuid.uuid4().hex, now, now, now))
+        cursor.execute("""
+            INSERT INTO transactions (
+                workspace_id, transaction_type, amount, person_name,
+                category, balance_before, balance_after, uid,
+                transaction_date, transaction_time, occurred_at, created_at, updated_at
+            ) VALUES (?, 'SENT', 3000.0, 'Rent Landlord', 'Rent', 10000.0, 7000.0, ?, '2026-09-05', '11:00:00', ?, ?, ?)
+        """, (ws_a_id, uuid.uuid4().hex, now, now, now))
+
+        # Seed transactions in Workspace B: Income 25,000, Expense 15,000
+        cursor.execute("""
+            INSERT INTO transactions (
+                workspace_id, transaction_type, amount, person_name,
+                category, balance_before, balance_after, uid,
+                transaction_date, transaction_time, occurred_at, created_at, updated_at
+            ) VALUES (?, 'RECEIVED', 25000.0, 'Client B', 'Business', 0.0, 25000.0, ?, '2026-09-02', '10:00:00', ?, ?, ?)
+        """, (ws_b_id, uuid.uuid4().hex, now, now, now))
+        cursor.execute("""
+            INSERT INTO transactions (
+                workspace_id, transaction_type, amount, person_name,
+                category, balance_before, balance_after, uid,
+                transaction_date, transaction_time, occurred_at, created_at, updated_at
+            ) VALUES (?, 'SENT', 15000.0, 'Vendor Supplies', 'Inventory', 25000.0, 10000.0, ?, '2026-09-10', '15:00:00', ?, ?, ?)
+        """, (ws_b_id, uuid.uuid4().hex, now, now, now))
+        conn.commit()
+
+    # 1. Verify isolated metrics calculation
+    metrics_a = calculate_monthly_closing_metrics(year, month, workspace_id=ws_a_id)
+    assert metrics_a['total_income'] == 10000.0
+    assert metrics_a['total_expense'] == 3000.0
+    assert metrics_a['net_savings'] == 7000.0
+    assert metrics_a['top_category'] == 'Rent'
+    assert metrics_a['top_payee'] == 'Rent Landlord'
+
+    metrics_b = calculate_monthly_closing_metrics(year, month, workspace_id=ws_b_id)
+    assert metrics_b['total_income'] == 25000.0
+    assert metrics_b['total_expense'] == 15000.0
+    assert metrics_b['net_savings'] == 10000.0
+    assert metrics_b['top_category'] == 'Inventory'
+    assert metrics_b['top_payee'] == 'Vendor Supplies'
+
+    # 2. Close month in Workspace A only
+    close_a = close_and_record_monthly_review(year, month, notes="Closed Tenant A", workspace_id=ws_a_id)
+    assert close_a['is_closed'] is True
+
+    # 3. Verify Workspace B is NOT closed and has no record
+    rev_b = get_monthly_review(year, month, workspace_id=ws_b_id)
+    assert rev_b is None
+
+    # 4. Verify Workspace A has closed record persisted
+    rev_a = get_monthly_review(year, month, workspace_id=ws_a_id)
+    assert rev_a is not None
+    assert rev_a['workspace_id'] == ws_a_id
+    assert rev_a['notes'] == "Closed Tenant A"
+    assert rev_a['net_savings'] == 7000.0
+
+    # 5. Close month in Workspace B and ensure both coexist under composite unique key
+    close_b = close_and_record_monthly_review(year, month, notes="Closed Tenant B", workspace_id=ws_b_id)
+    assert close_b['is_closed'] is True
+
+    rev_b_after = get_monthly_review(year, month, workspace_id=ws_b_id)
+    assert rev_b_after is not None
+    assert rev_b_after['workspace_id'] == ws_b_id
+    assert rev_b_after['notes'] == "Closed Tenant B"
+    assert rev_b_after['net_savings'] == 10000.0

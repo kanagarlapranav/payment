@@ -334,6 +334,7 @@ def setup_database():
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS monthly_reviews (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        workspace_id TEXT,
                         year INTEGER NOT NULL,
                         month INTEGER NOT NULL,
                         total_income REAL NOT NULL,
@@ -352,7 +353,7 @@ def setup_database():
                         reviewed_at TEXT NOT NULL,
                         notes TEXT,
                         created_at TEXT NOT NULL,
-                        UNIQUE(year, month)
+                        UNIQUE(workspace_id, year, month)
                     )
                 ''')
 
@@ -386,6 +387,52 @@ def setup_database():
                     t_cols = [row[1] for row in cursor.fetchall()]
                     if "workspace_id" not in t_cols:
                         cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN workspace_id TEXT")
+
+                # Check if monthly_reviews has old UNIQUE(year, month) constraint and rebuild
+                cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='monthly_reviews'")
+                mr_sql_row = cursor.fetchone()
+                if mr_sql_row and mr_sql_row[0] and "UNIQUE(year, month)" in mr_sql_row[0]:
+                    cursor.execute("""
+                        CREATE TABLE monthly_reviews_v5 (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            workspace_id TEXT,
+                            year INTEGER NOT NULL,
+                            month INTEGER NOT NULL,
+                            total_income REAL NOT NULL,
+                            total_expense REAL NOT NULL,
+                            net_savings REAL NOT NULL,
+                            savings_rate_pct REAL NOT NULL,
+                            top_category TEXT,
+                            top_category_amount REAL,
+                            top_payee TEXT,
+                            top_payee_amount REAL,
+                            max_transaction_id INTEGER,
+                            max_transaction_amount REAL,
+                            budget_allocated REAL,
+                            budget_spent_pct REAL,
+                            is_closed INTEGER DEFAULT 1,
+                            reviewed_at TEXT NOT NULL,
+                            notes TEXT,
+                            created_at TEXT NOT NULL,
+                            UNIQUE(workspace_id, year, month)
+                        )
+                    """)
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO monthly_reviews_v5 (
+                            id, workspace_id, year, month, total_income, total_expense, net_savings, savings_rate_pct,
+                            top_category, top_category_amount, top_payee, top_payee_amount,
+                            max_transaction_id, max_transaction_amount, budget_allocated, budget_spent_pct,
+                            is_closed, reviewed_at, notes, created_at
+                        )
+                        SELECT
+                            id, workspace_id, year, month, total_income, total_expense, net_savings, savings_rate_pct,
+                            top_category, top_category_amount, top_payee, top_payee_amount,
+                            max_transaction_id, max_transaction_amount, budget_allocated, budget_spent_pct,
+                            is_closed, reviewed_at, notes, created_at
+                        FROM monthly_reviews
+                    """)
+                    cursor.execute("DROP TABLE monthly_reviews")
+                    cursor.execute("ALTER TABLE monthly_reviews_v5 RENAME TO monthly_reviews")
 
                 try:
                     cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_ws_ym ON monthly_reviews(workspace_id, year, month)')
