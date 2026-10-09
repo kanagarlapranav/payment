@@ -200,7 +200,7 @@ def reconstruct_transaction_from_card(text: str):
                 cat = m_cat2.group(1).strip()
                 
         # 3. Parse Date and Time
-        tx_date = date.today()
+        tx_date = get_current_time_in_tz().date()
         tx_time = ""
         m_date = re.search(r'📅\s*([^\n\r🏦]+)', clean)
         date_raw = m_date.group(1).strip() if m_date else ""

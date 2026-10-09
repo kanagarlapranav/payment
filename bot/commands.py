@@ -22,7 +22,7 @@ from bot.keyboards import (
 
 def render_home_menu_text(workspace_id: str = None, user_id: int = None) -> str:
     """Generates the main Home Menu dashboard card with optional per-user scoping."""
-    now = datetime.now()
+    now = get_current_time_in_tz()
     overall = get_overall_summary(workspace_id=workspace_id, user_id=user_id)
     balance = overall.current_balance
     today_stats = get_today_summary(workspace_id=workspace_id, user_id=user_id)
@@ -1398,9 +1398,8 @@ async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ws_id = ctx.workspace_id if ctx else None
     from services.category_service import format_spending_insights
     from bot.keyboards import get_insights_keyboard
-    from datetime import datetime
     
-    now = datetime.now()
+    now = get_current_time_in_tz()
     year = now.year
     month = now.month
     
@@ -1422,9 +1421,8 @@ async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ws_id = ctx.workspace_id if ctx else None
     from services.budget_service import format_budget_status
     from bot.keyboards import get_budget_keyboard
-    from datetime import datetime
     
-    now = datetime.now()
+    now = get_current_time_in_tz()
     year = now.year
     month = now.month
     
