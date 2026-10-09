@@ -244,6 +244,12 @@ def test_deterministic_confidence_calculation():
     )
     assert c4 <= 40
 
+    # 5. Amount substring inside 1500 must NOT match 500 -> 50%
+    c5 = gv.compute_deterministic_confidence(
+        amount=500.0, reference_number=None, tx_type="SENT", ocr_text="Paid 1500 to Store"
+    )
+    assert c5 == 50
+
 
 def test_sanitize_error_message_redacts_keys_and_paths():
     """Error sanitization redacts API keys and filesystem paths."""

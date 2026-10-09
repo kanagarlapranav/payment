@@ -438,7 +438,7 @@ def compute_deterministic_confidence(
     tx_type: str,
     ocr_text: str = ""
 ) -> int:
-    if tx_type not in ("SENT", "RECEIVED") or tx_type == "UNKNOWN":
+    if tx_type not in ("SENT", "RECEIVED"):
         return 40
 
     if amount <= 0:
@@ -447,23 +447,38 @@ def compute_deterministic_confidence(
     if not ocr_text:
         return 70
 
-    ocr_upper = ocr_text.upper()
     amt_str_clean = f"{amount:.2f}".rstrip('0').rstrip('.')
     amt_str_full = f"{amount:.2f}"
-    amt_int = str(int(amount)) if amount == int(amount) else None
 
-    amount_found = (
-        amt_str_clean in ocr_text or
-        amt_str_full in ocr_text or
-        (amt_int and amt_int in ocr_text) or
-        f"₹{amt_str_clean}" in ocr_text or
-        f"RS.{amt_str_clean}" in ocr_upper or
-        f"RS {amt_str_clean}" in ocr_upper
-    )
+    patterns = []
+    if amount == int(amount):
+        int_val = int(amount)
+        # Matches 500 or 500.00 with word/symbol boundaries (not 1500 or 5000)
+        patterns.append(rf'(?<!\d){int_val}(?:\.00)?(?!\d)')
+    else:
+        clean_re = re.escape(amt_str_clean)
+        full_re = re.escape(amt_str_full)
+        patterns.append(rf'(?<!\d)(?:{full_re}|{clean_re})(?!\d)')
+
+    amount_found = False
+    for p in patterns:
+        m = re.search(p, ocr_text)
+        if m:
+            start, end = m.start(), m.end()
+            # If preceded by '.', ensure it is not part of a decimal like 1.500
+            if start > 0 and ocr_text[start - 1] == '.' and start > 1 and ocr_text[start - 2].isdigit():
+                continue
+            # If followed by '.', ensure it is not a different fractional amount (e.g., 500 in 500.75)
+            if end < len(ocr_text) and ocr_text[end] == '.' and end + 1 < len(ocr_text) and ocr_text[end + 1].isdigit():
+                rest = ocr_text[end:end + 4]
+                if not re.match(r'^\.00?(?!\d)', rest):
+                    continue
+            amount_found = True
+            break
 
     ref_found = False
     if reference_number and len(reference_number) >= 6:
-        ref_found = reference_number in ocr_text
+        ref_found = bool(re.search(rf'(?<!\d){re.escape(reference_number)}(?!\d)', ocr_text))
 
     if amount_found and ref_found:
         return 98
