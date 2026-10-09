@@ -1048,7 +1048,9 @@ def can_user_modify_transaction(tx_id: int | str, user_id: int, user_role: str, 
 
 def get_user_recent_transactions(user_id: int, workspace_id: str = None, limit: int = 6) -> list:
     """Fetches recent active transactions created by a specific user."""
-    ws_id = workspace_id or get_default_workspace_id()
+    default_ws = get_default_workspace_id()
+    ws_id = workspace_id or default_ws
+    ws_filter = "(t.workspace_id = ? OR t.workspace_id IS NULL)" if ws_id == default_ws else "t.workspace_id = ?"
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("PRAGMA table_info(transactions)")
@@ -1056,20 +1058,20 @@ def get_user_recent_transactions(user_id: int, workspace_id: str = None, limit: 
         has_uid = "telegram_user_id" in cols
 
         if has_uid:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT DISTINCT t.* FROM transactions t
                 LEFT JOIN undo_log u ON u.uid = t.uid AND u.action = 'INSERT'
-                WHERE (t.workspace_id = ? OR t.workspace_id IS NULL)
+                WHERE {ws_filter}
                   AND t.deleted_at IS NULL
                   AND (t.telegram_user_id = ? OR u.user_id = ?)
                 ORDER BY t.occurred_at DESC, t.id DESC
                 LIMIT ?
             """, (ws_id, int(user_id), int(user_id), limit))
         else:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT DISTINCT t.* FROM transactions t
                 JOIN undo_log u ON u.uid = t.uid AND u.action = 'INSERT'
-                WHERE (t.workspace_id = ? OR t.workspace_id IS NULL)
+                WHERE {ws_filter}
                   AND t.deleted_at IS NULL
                   AND u.user_id = ?
                 ORDER BY t.occurred_at DESC, t.id DESC
@@ -2121,9 +2123,11 @@ def get_pending_receipt(pending_id: str, workspace_id: Optional[str] = None):
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        default_ws = get_default_workspace_id()
         if workspace_id:
+            ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if workspace_id == default_ws else "workspace_id = ?"
             cursor.execute(
-                "SELECT data_json, workspace_id FROM pending_receipts WHERE pending_id = ? AND (workspace_id = ? OR workspace_id IS NULL)",
+                f"SELECT data_json, workspace_id FROM pending_receipts WHERE pending_id = ? AND {ws_filter}",
                 (pending_id, workspace_id)
             )
         else:
@@ -2161,9 +2165,11 @@ def delete_pending_receipt(pending_id: str, workspace_id: Optional[str] = None) 
     """Deletes a pending receipt transaction from SQLite."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        default_ws = get_default_workspace_id()
         if workspace_id:
+            ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if workspace_id == default_ws else "workspace_id = ?"
             cursor.execute(
-                "DELETE FROM pending_receipts WHERE pending_id = ? AND (workspace_id = ? OR workspace_id IS NULL)",
+                f"DELETE FROM pending_receipts WHERE pending_id = ? AND {ws_filter}",
                 (pending_id, workspace_id)
             )
         else:
