@@ -6,9 +6,18 @@ def preprocess_image_for_ocr(image_path: str) -> str:
         return image_path
 
     try:
-        img = cv2.imread(image_path)
+        import os
+        # Read image safely with unicode path support on Windows
+        try:
+            with open(image_path, "rb") as f:
+                img_array = np.frombuffer(f.read(), np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        except Exception:
+            img = cv2.imread(image_path)
+
         if img is None:
             return image_path
+
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         height, width = gray.shape
         if height < 1000 or width < 1000:
@@ -16,12 +25,18 @@ def preprocess_image_for_ocr(image_path: str) -> str:
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         gray = clahe.apply(gray)
         gray = cv2.bilateralFilter(gray, 5, 50, 50)
-        import os
+
         root, ext = os.path.splitext(image_path)
         ext = ext if ext else '.jpg'
         processed_path = f"{root}_processed{ext}"
-        cv2.imwrite(processed_path, gray)
-        return processed_path
+
+        # Write image safely with unicode path support using cv2.imencode + .tofile
+        success, buf = cv2.imencode(ext, gray)
+        if success:
+            buf.tofile(processed_path)
+            return processed_path
+        else:
+            cv2.imwrite(processed_path, gray)
+            return processed_path
     except Exception:
         return image_path
-

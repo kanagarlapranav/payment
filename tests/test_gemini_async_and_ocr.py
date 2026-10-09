@@ -342,6 +342,19 @@ def test_preprocess_image_uses_splitext(tmp_path):
         os.remove(processed)
 
 
+def test_preprocess_image_unicode_path(tmp_path):
+    """preprocess_image_for_ocr handles unicode paths on Windows via imencode and tofile."""
+    unicode_dir = tmp_path / "₹_payments_₹"
+    unicode_dir.mkdir(parents=True, exist_ok=True)
+    img_path = str(unicode_dir / "receipt_₹_test.png")
+    img = Image.new("RGB", (1200, 1200), color="gray")
+    img.save(img_path)
+
+    processed = preprocess_image_for_ocr(img_path)
+    assert os.path.exists(processed)
+    assert processed.endswith("_processed.png")
+
+
 # --- 6. Whitelist in update_transaction ---
 
 def test_update_transaction_whitelist_and_live_rows():
