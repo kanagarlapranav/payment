@@ -304,6 +304,68 @@ class TestDashboardSecurity(unittest.TestCase):
         self.assertIn("bPerson.textContent = tx.person_name", html)
         self.assertIn("name.textContent = p.person_name", html)
 
+    def test_dashboard_command_group_chat_delivers_via_dm(self):
+        """In group/supergroup chats, dashboard_command sends link via DM and posts privacy note in group."""
+        import asyncio
+        from config import TELEGRAM_USER_ID
+        from bot.commands import dashboard_command
+
+        mock_update = MagicMock()
+        mock_update.effective_user.id = TELEGRAM_USER_ID
+        mock_update.effective_chat.type = "supergroup"
+        mock_update.effective_chat.id = -100123456789
+        mock_update.message.reply_text = AsyncMock()
+        mock_context = MagicMock()
+        mock_context.bot.send_message = AsyncMock()
+
+        async def _run():
+            await dashboard_command(mock_update, mock_context)
+            # DM sent to user with /auth?code=
+            mock_context.bot.send_message.assert_called_once()
+            dm_call_kwargs = mock_context.bot.send_message.call_args[1]
+            self.assertEqual(dm_call_kwargs["chat_id"], TELEGRAM_USER_ID)
+            self.assertIn("/auth?code=", dm_call_kwargs["text"])
+
+            # Group reply does NOT leak /auth?code=
+            mock_update.message.reply_text.assert_called_once()
+            group_reply_text = mock_update.message.reply_text.call_args[0][0]
+            self.assertNotIn("/auth?code=", group_reply_text)
+            self.assertIn("private message", group_reply_text.lower())
+
+        asyncio.run(_run())
+
+    def test_invite_member_command_group_chat_delivers_via_dm(self):
+        """In group/supergroup chats, invite_member_command sends token via DM and posts privacy note in group."""
+        import asyncio
+        from config import TELEGRAM_USER_ID
+        from bot.commands import invite_member_command
+
+        mock_update = MagicMock()
+        mock_update.effective_user.id = TELEGRAM_USER_ID
+        mock_update.effective_chat.type = "supergroup"
+        mock_update.effective_chat.id = -100123456789
+        mock_update.message.reply_text = AsyncMock()
+        mock_context = MagicMock()
+        mock_context.args = []
+        mock_context.bot.send_message = AsyncMock()
+
+        async def _run():
+            with patch("bot.auth.require_admin", AsyncMock(return_value=True)):
+                await invite_member_command(mock_update, mock_context)
+                # DM sent with join token
+                mock_context.bot.send_message.assert_called_once()
+                dm_call_kwargs = mock_context.bot.send_message.call_args[1]
+                self.assertEqual(dm_call_kwargs["chat_id"], TELEGRAM_USER_ID)
+                self.assertIn("/join ", dm_call_kwargs["text"])
+
+                # Group reply does NOT leak the raw join token
+                mock_update.message.reply_text.assert_called_once()
+                group_reply_text = mock_update.message.reply_text.call_args[0][0]
+                self.assertNotIn("/join ", group_reply_text)
+                self.assertIn("private message", group_reply_text.lower())
+
+        asyncio.run(_run())
+
 
 if __name__ == '__main__':
     unittest.main()

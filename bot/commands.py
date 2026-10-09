@@ -1519,6 +1519,39 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += "\n\n💡 <i>Notice: You are currently viewing a switched workspace. Tap 'Reset to My Workspace' to return to your personal ledger.</i>"
 
     markup = InlineKeyboardMarkup(buttons)
+    is_group = bool(update.effective_chat and getattr(update.effective_chat, "type", None) in ('group', 'supergroup'))
+    if is_group:
+        sent_dm = False
+        try:
+            if context and hasattr(context, "bot") and user_id:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=msg,
+                    reply_markup=markup,
+                    parse_mode='HTML'
+                )
+                sent_dm = True
+        except Exception as e:
+            logger.warning(f"Could not send dashboard link via DM to {user_id}: {e}")
+
+        if sent_dm:
+            await update.message.reply_text(
+                "🔒 <i>I've sent your secure dashboard link in a private message to protect your login session.</i>",
+                parse_mode='HTML'
+            )
+        else:
+            bot_username = ""
+            try:
+                bot_info = await context.bot.get_me()
+                bot_username = f" (@{bot_info.username})" if bot_info and getattr(bot_info, "username", None) else ""
+            except Exception:
+                pass
+            await update.message.reply_text(
+                f"🔒 <b>Security Notice:</b> To protect your login credentials from group visibility, please open a private chat with me{bot_username} and send <code>/dashboard</code> there.",
+                parse_mode='HTML'
+            )
+        return
+
     try:
         await update.message.reply_text(msg, reply_markup=markup, parse_mode='HTML')
     except Exception as e:
@@ -2545,6 +2578,38 @@ async def invite_member_command(update: Update, context: ContextTypes.DEFAULT_TY
         f"<code>/join {raw_token}</code>\n\n"
         f"<i>Note: The raw token is shown only once and cannot be recovered if lost.</i>"
     )
+    is_group = bool(update.effective_chat and getattr(update.effective_chat, "type", None) in ('group', 'supergroup'))
+    if is_group:
+        sent_dm = False
+        try:
+            if context and hasattr(context, "bot") and ctx.user_id:
+                await context.bot.send_message(
+                    chat_id=ctx.user_id,
+                    text=text,
+                    parse_mode='HTML'
+                )
+                sent_dm = True
+        except Exception as e:
+            logger.warning(f"Could not send invite token via DM to {ctx.user_id}: {e}")
+
+        if sent_dm:
+            await update.message.reply_text(
+                "🎟️ <i>Workspace invitation created! I've sent the invite token to you in a private message to keep it secure.</i>",
+                parse_mode='HTML'
+            )
+        else:
+            bot_username = ""
+            try:
+                bot_info = await context.bot.get_me()
+                bot_username = f" (@{bot_info.username})" if bot_info and getattr(bot_info, "username", None) else ""
+            except Exception:
+                pass
+            await update.message.reply_text(
+                f"🎟️ <b>Security Notice:</b> To prevent exposing raw invite tokens to group members, please open a private chat with me{bot_username} and run <code>/invite_member</code> there.",
+                parse_mode='HTML'
+            )
+        return
+
     await update.message.reply_text(text, parse_mode='HTML')
 
 
