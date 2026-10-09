@@ -2355,8 +2355,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         undo_command, workspace_command, members_command, setrole_command, permissions_command
     )
     cmd_lower = text.lower()
+    cmd_tokens = cmd_lower.split()
+    cmd_token = cmd_tokens[0] if cmd_tokens else ""
     
-    if cmd_lower.startswith((r'\workspace', 'workspace', '/workspace', r'\workspaces', 'workspaces', '/workspaces')):
+    if cmd_token in (r'\workspace', 'workspace', '/workspace', r'\workspaces', 'workspaces', '/workspaces'):
         parts = text.split(maxsplit=1)
         context.args = parts[1].split() if len(parts) > 1 else []
         await workspace_command(update, context)
@@ -2367,12 +2369,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif cmd_lower in (r'\members', 'members', '/members', r'\team', 'team', '/team'):
         await members_command(update, context)
         return
-    elif cmd_lower.startswith((r'\setrole', 'setrole', '/setrole')):
+    elif cmd_token in (r'\setrole', 'setrole', '/setrole'):
         parts = text.split(maxsplit=1)
         context.args = parts[1].split() if len(parts) > 1 else []
         await setrole_command(update, context)
         return
-    elif cmd_lower.startswith((r'\admin', 'admin', '/admin', r'\makeadmin', 'makeadmin', '/makeadmin', r'\promote', 'promote', '/promote')):
+    elif cmd_token in (r'\admin', 'admin', '/admin', r'\makeadmin', 'makeadmin', '/makeadmin', r'\promote', 'promote', '/promote'):
         from bot.commands import admin_command
         parts = text.split(maxsplit=1)
         context.args = parts[1].split() if len(parts) > 1 else []
@@ -2385,12 +2387,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from bot.commands import backup_command
         await backup_command(update, context)
         return
-    elif cmd_lower.startswith((r'\delete', 'delete', '/delete')):
+    elif cmd_token in (r'\delete', 'delete', '/delete'):
         parts = text.split(maxsplit=1)
         context.args = parts[1].split() if len(parts) > 1 else []
         await delete_command(update, context)
         return
-    elif cmd_lower.startswith((r'\edit', 'edit', '/edit')):
+    elif cmd_token in (r'\edit', 'edit', '/edit'):
         parts = text.split(maxsplit=1)
         context.args = parts[1].split() if len(parts) > 1 else []
         await edit_command(update, context)
@@ -2401,17 +2403,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif cmd_lower in (r'\balance', 'balance', '/balance'):
         await balance_command(update, context)
         return
-    elif cmd_lower.startswith((r'\date', 'date ', '/date ')):
+    elif cmd_token in (r'\date', 'date', '/date'):
         parts = text.split(maxsplit=1)
         context.args = [parts[1]] if len(parts) > 1 else []
         await date_command(update, context)
         return
-    elif cmd_lower.startswith((r'\search', 'search ', '/search ')):
+    elif cmd_token in (r'\search', 'search', '/search'):
         parts = text.split(maxsplit=1)
         context.args = [parts[1]] if len(parts) > 1 else []
         await search_command(update, context)
         return
-    elif cmd_lower.startswith((r'\amount', 'amount ', '/amount ')):
+    elif cmd_token in (r'\amount', 'amount', '/amount'):
         parts = text.split(maxsplit=1)
         context.args = [parts[1]] if len(parts) > 1 else []
         await amount_command(update, context)
@@ -2440,43 +2442,43 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from bot.commands import geministatus_command
         await geministatus_command(update, context)
         return
-    elif cmd_lower.startswith((r'\setmodel', 'setmodel', '/setmodel', r'\model', 'model', '/model')):
+    elif cmd_token in (r'\setmodel', 'setmodel', '/setmodel', r'\model', 'model', '/model'):
         parts = text.split(maxsplit=1)
         context.args = parts[1:] if len(parts) > 1 else []
         from bot.commands import setmodel_command
         await setmodel_command(update, context)
         return
-    elif cmd_lower.startswith((r'\digest', 'digest', '/digest')):
+    elif cmd_token in (r'\digest', 'digest', '/digest'):
         parts = text.split(maxsplit=1)
         context.args = parts[1:] if len(parts) > 1 else []
         from bot.commands import digest_command
         await digest_command(update, context)
         return
-    elif cmd_lower.startswith((r'\insights', 'insights', '/insights')):
+    elif cmd_token in (r'\insights', 'insights', '/insights'):
         parts = text.split(maxsplit=1)
         context.args = parts[1:] if len(parts) > 1 else []
         from bot.commands import insights_command
         await insights_command(update, context)
         return
-    elif cmd_lower.startswith((r'\budget', 'budget', '/budget')):
+    elif cmd_token in (r'\budget', 'budget', '/budget'):
         parts = text.split(maxsplit=1)
         context.args = parts[1:] if len(parts) > 1 else []
         from bot.commands import budget_command
         await budget_command(update, context)
         return
-    elif cmd_lower.startswith((r'\setbudget', 'setbudget', '/setbudget')):
+    elif cmd_token in (r'\setbudget', 'setbudget', '/setbudget'):
         parts = text.split(maxsplit=1)
         context.args = parts[1:] if len(parts) > 1 else []
         from bot.commands import setbudget_command
         await setbudget_command(update, context)
         return
-    elif cmd_lower.startswith((r'\setbalance', 'setbalance', '/setbalance')):
+    elif cmd_token in (r'\setbalance', 'setbalance', '/setbalance'):
         parts = text.split(maxsplit=1)
         context.args = parts[1:] if len(parts) > 1 else []
         from bot.commands import setbalance_command
         await setbalance_command(update, context)
         return
-    elif cmd_lower.startswith((r'\export', 'export', '/export', 'statement', '/statement', 'report', '/report')):
+    elif cmd_token in (r'\export', 'export', '/export', 'statement', '/statement', r'\statement', 'report', '/report', r'\report'):
         parts = text.split(maxsplit=1)
         context.args = parts[1:] if len(parts) > 1 else []
         from bot.commands import export_command
@@ -2490,12 +2492,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from bot.commands import cafestats_command
         await cafestats_command(update, context)
         return
-    elif cmd_lower.startswith((r'\cafeedit', 'cafeedit', '/cafeedit', 'editcafe', '/editcafe')):
+    elif cmd_token in (r'\cafeedit', 'cafeedit', '/cafeedit', 'editcafe', '/editcafe', r'\editcafe'):
         parts = text.split(maxsplit=1)
         context.args = [parts[1]] if len(parts) > 1 else []
         from bot.commands import cafeedit_command
         await cafeedit_command(update, context)
         return
+
         
     # Quick standalone amount search: if user just sends a number like "5000" or "400"
     clean_num = text.replace(',', '').replace('₹', '').strip()

@@ -653,6 +653,27 @@ class TestUXAndNavigation(unittest.TestCase):
             mock_edit.assert_called_once()
             self.assertEqual(context.args, ['42'])
 
+        with patch('bot.handlers.require_authorized', AsyncMock(return_value=True)), \
+             patch('bot.commands.export_command', AsyncMock()) as mock_export:
+
+            # 'export csv' triggers export
+            asyncio.run(handle_text(make_update("export csv"), context))
+            mock_export.assert_called_once()
+            mock_export.reset_mock()
+
+            # 'report pdf' triggers export
+            asyncio.run(handle_text(make_update("report pdf"), context))
+            mock_export.assert_called_once()
+            mock_export.reset_mock()
+
+            # 'exported' and 'reporting' do NOT trigger export
+            asyncio.run(handle_text(make_update("exported data yesterday"), context))
+            mock_export.assert_not_called()
+
+            asyncio.run(handle_text(make_update("reporting this issue"), context))
+            mock_export.assert_not_called()
+
+
     def test_save_p_on_image_receipt_shows_saved_card_and_real_balance(self):
         """Verify saving an image receipt properly updates the message with 'Payment Saved!', real balance, and undo entry."""
         from unittest.mock import MagicMock, AsyncMock, patch
