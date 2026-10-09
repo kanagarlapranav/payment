@@ -1693,11 +1693,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         chat_type = req.get('chat_type', 'private') if req else 'private'
         req_ws_id = req.get('workspace_id') if req else None
 
-        # Update access request status to approved
-        approver_id = getattr(query.from_user, 'id', 0)
-        update_access_request_status(target_uid, 'approved', reviewed_by=approver_id)
-        set_user_permission_and_role(target_uid, role, is_active=True)
-
         target_ws_id = None
         # Provision or join workspace and membership
         if req_ws_id:
@@ -1725,7 +1720,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
 
         if not target_ws_id:
-            target_ws_id = get_default_workspace_id()
+            target_ws_id = ws_id or get_default_workspace_id()
+
+        # Update access request status to approved and set scoped role
+        approver_id = getattr(query.from_user, 'id', 0)
+        update_access_request_status(target_uid, 'approved', reviewed_by=approver_id)
+        set_user_permission_and_role(target_uid, role, is_active=True, workspace_id=target_ws_id)
 
         # Audit log event
         log_audit_event(
@@ -1860,11 +1860,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if owner_id and target_uid == int(owner_id) and setting in ('viewer', 'revoke'):
             await query.answer("⛔ The workspace owner's access cannot be revoked.", show_alert=True)
             return
-        if setting == 'owner' and owner_id and target_uid != int(owner_id):
-            await query.answer("⛔ Only the primary bot owner can hold the owner role.", show_alert=True)
+        if setting == 'owner':
+            await query.answer("⛔ The owner role cannot be granted via callback.", show_alert=True)
             return
+        if setting not in ('member', 'admin', 'viewer', 'revoke'):
+            setting = 'member'
         from database.queries import set_user_permission_and_role
-        target_ws_scope = ws_id if (ws_ctx and ws_ctx.chat_type in ('group', 'supergroup')) else None
+        target_ws_scope = ws_id
         if setting == "revoke":
             set_user_permission_and_role(target_uid, "viewer", is_active=False, workspace_id=target_ws_scope)
             try:

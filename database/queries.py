@@ -750,8 +750,31 @@ def set_user_permission_and_role(telegram_user_id: int, role: str, is_active: bo
                 if ex_row['username']: uname = ex_row['username']
                 if ex_row['display_name']: dname = ex_row['display_name']
 
-            if workspace_id:
-                target_ws_id = str(workspace_id)
+            target_ws_id = str(workspace_id or "")
+            if target_ws_id:
+                cursor.execute("""
+                    SELECT id FROM workspace_members 
+                    WHERE workspace_id = ? AND telegram_user_id = ?
+                """, (target_ws_id, int(telegram_user_id)))
+                if not cursor.fetchone():
+                    cursor.execute("""
+                        SELECT workspace_id FROM workspace_members 
+                        WHERE telegram_user_id = ? 
+                        ORDER BY joined_at DESC LIMIT 1
+                    """, (int(telegram_user_id),))
+                    other_row = cursor.fetchone()
+                    if other_row:
+                        target_ws_id = str(other_row['workspace_id'])
+            else:
+                cursor.execute("""
+                    SELECT workspace_id FROM workspace_members 
+                    WHERE telegram_user_id = ? 
+                    ORDER BY joined_at DESC LIMIT 1
+                """, (int(telegram_user_id),))
+                found_row = cursor.fetchone()
+                target_ws_id = str(found_row['workspace_id']) if found_row else str(get_default_workspace_id() or "")
+
+            if target_ws_id:
                 cursor.execute("""
                     SELECT id FROM workspace_members 
                     WHERE workspace_id = ? AND telegram_user_id = ?
@@ -768,24 +791,6 @@ def set_user_permission_and_role(telegram_user_id: int, role: str, is_active: bo
                         SET role = ?, is_active = ?, updated_at = ?
                         WHERE workspace_id = ? AND telegram_user_id = ?
                     """, (clean_role, active_val, now_utc, target_ws_id, int(telegram_user_id)))
-            else:
-                cursor.execute("""
-                    UPDATE workspace_members 
-                    SET role = ?, is_active = ?, updated_at = ?
-                    WHERE telegram_user_id = ?
-                """, (clean_role, active_val, now_utc, int(telegram_user_id)))
-
-                def_ws_id = get_default_workspace_id()
-                if def_ws_id:
-                    cursor.execute("""
-                        SELECT id FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?
-                    """, (def_ws_id, int(telegram_user_id)))
-                    if not cursor.fetchone():
-                        cursor.execute("""
-                            INSERT OR REPLACE INTO workspace_members 
-                            (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (def_ws_id, int(telegram_user_id), uname, dname, clean_role, active_val, now_utc, now_utc))
 
             req_status = 'approved' if is_active else 'rejected'
             cursor.execute("""

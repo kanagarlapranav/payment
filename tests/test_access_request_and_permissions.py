@@ -257,7 +257,55 @@ async def test_is_owner_always_true_for_global_owner_in_private_dm():
     chat.id = owner_id
     chat.type = "private"
     update.effective_user = user
-    update.effective_chat = chat
-    update.callback_query = None
-
     assert is_owner(update) is True
+
+
+@pytest.mark.anyio
+async def test_set_user_permission_and_role_does_not_mutate_other_workspaces():
+    """Verify that updating a user's role in workspace A does not change their role in workspace B."""
+    target_uid = 999888777
+    ws_a = get_or_create_workspace(chat_id="33333", chat_type="group", title="WSA", creator_user_id=8379948573)
+    ws_b = get_or_create_workspace(chat_id="44444", chat_type="group", title="WSB", creator_user_id=8379948573)
+
+    add_workspace_member(ws_a.id, target_uid, username="isolated_user", role="member")
+    add_workspace_member(ws_b.id, target_uid, username="isolated_user", role="viewer")
+
+    # Update role in ws_a to admin
+    set_user_permission_and_role(target_uid, "admin", is_active=True, workspace_id=ws_a.id)
+
+    # Verify ws_a is admin, ws_b is still viewer
+    mem_a = get_workspace_member(ws_a.id, target_uid)
+    mem_b = get_workspace_member(ws_b.id, target_uid)
+    assert mem_a.role == "admin"
+    assert mem_b.role == "viewer"
+
+
+@pytest.mark.anyio
+async def test_perm_set_rejects_owner_role_grant_via_callback():
+    """Verify that owner role cannot be granted via callback."""
+    owner_id = 8379948573
+    target_uid = 888777666
+    ws = get_or_create_workspace(chat_id="55555", chat_type="group", title="WS_Perm", creator_user_id=owner_id)
+    add_workspace_member(ws.id, target_uid, username="candidate", role="member")
+
+    update = MagicMock(spec=Update)
+    query = MagicMock(spec=CallbackQuery)
+    query.data = f"perm_set:{target_uid}:owner"
+    query.answer = AsyncMock()
+    user = MagicMock(spec=User)
+    user.id = owner_id
+    query.from_user = user
+    update.callback_query = query
+    update.effective_user = user
+    chat = MagicMock(spec=Chat)
+    chat.id = 55555
+    chat.type = "group"
+    update.effective_chat = chat
+    context = MagicMock()
+
+    with patch("bot.handlers.is_owner", return_value=True):
+        await handlers_module.handle_callback_query(update, context)
+
+    query.answer.assert_called_with("⛔ The owner role cannot be granted via callback.", show_alert=True)
+    mem = get_workspace_member(ws.id, target_uid)
+    assert mem.role == "member"
