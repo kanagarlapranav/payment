@@ -255,6 +255,7 @@ def setup_database():
                         UNIQUE(workspace_id, name)
                     )
                 ''')
+                cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_menu_ws_name ON custom_menu_items(workspace_id, name)')
                 
                 # Payee Category Memory table (remembers user categorization preferences per payee)
                 cursor.execute('''

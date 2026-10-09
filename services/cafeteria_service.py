@@ -139,17 +139,28 @@ def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea"
         if any(nvk in name_clean.lower() for nvk in non_veg_keywords) or not is_veg:
             return False, "⚠️ Only vegetarian items are permitted in this cafeteria tracker."
 
-        # Prevent duplicates
-        all_items = get_all_menu_items(workspace_id=ws_id)
-        if any(it.name.lower() == name_clean.lower() for it in all_items):
+        # Prevent duplicates against standard menu
+        if any(it.name.lower() == name_clean.lower() for it in VEG_MENU):
             return False, f"Item '<b>{name_clean}</b>' already exists in the menu."
+
+        import sqlite3
+        from utils.dates import utc_now_iso
+        now_utc = utc_now_iso()
+        default_ws = get_default_workspace_id()
 
         try:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "INSERT OR REPLACE INTO custom_menu_items (name, price, category, is_veg, workspace_id) VALUES (?, ?, ?, 1, ?)",
-                    (name_clean, price_val, category_clean, ws_id)
+                    "SELECT id FROM custom_menu_items WHERE LOWER(name) = LOWER(?) AND (workspace_id = ? OR (workspace_id IS NULL AND ? = ?))",
+                    (name_clean, ws_id, ws_id, default_ws)
+                )
+                if cursor.fetchone():
+                    return False, f"Item '<b>{name_clean}</b>' already exists in the menu."
+
+                cursor.execute(
+                    "INSERT INTO custom_menu_items (name, price, category, is_veg, workspace_id, created_at) VALUES (?, ?, ?, 1, ?, ?)",
+                    (name_clean, price_val, category_clean, ws_id, now_utc)
                 )
                 from database.queries import increment_revision_and_mark_dirty
                 increment_revision_and_mark_dirty(conn)
@@ -160,8 +171,11 @@ def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea"
             except Exception:
                 pass
             return True, f"✅ Added '<b>{name_clean}</b>' (₹{price_val:.0f}) to {category_clean}!"
+        except sqlite3.IntegrityError:
+            return False, f"Item '<b>{name_clean}</b>' already exists in the menu."
         except Exception as e:
             return False, f"Database error: {e}"
+
 
 
 def delete_custom_menu_item(name: str, workspace_id: str) -> Tuple[bool, str]:

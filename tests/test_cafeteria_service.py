@@ -103,7 +103,24 @@ class TestCafeteriaService(unittest.TestCase):
         all_items_after = get_all_menu_items()
         self.assertFalse(any(i.name == "Special Paneer Roll" for i in all_items_after))
 
+    def test_add_custom_menu_item_rejects_duplicates(self):
+        from services.cafeteria_service import add_custom_menu_item, delete_custom_menu_item
+        from database.queries import get_default_workspace_id
+        ws_id = get_default_workspace_id()
+
+        succ, msg = add_custom_menu_item("Unique Veg Cutlet", 30, "Snacks", workspace_id=ws_id)
+        self.assertTrue(succ)
+
+        # Attempting to add duplicate item with same name (even differing case) must fail
+        succ_dup, msg_dup = add_custom_menu_item("unique veg cutlet", 35, "Snacks", workspace_id=ws_id)
+        self.assertFalse(succ_dup)
+        self.assertIn("already exists", msg_dup.lower())
+
+        delete_custom_menu_item("Unique Veg Cutlet", workspace_id=ws_id)
+
+
 if __name__ == '__main__':
     unittest.main()
+
 
 
