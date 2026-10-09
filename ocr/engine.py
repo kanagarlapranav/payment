@@ -4,23 +4,39 @@ from PIL import Image
 from config import TESSERACT_CMD, logger
 
 _rapid_ocr = None
+_rapid_ocr_last_attempt = 0.0
+_RAPID_OCR_RETRY_INTERVAL = 60.0  # Retry failed init after 60 seconds
 _ocr_lock = threading.Lock()
 _ocr_inference_lock = threading.Lock()
 
 
 def get_rapid_ocr_engine():
-    global _rapid_ocr
-    if _rapid_ocr is None:
-        with _ocr_lock:
-            if _rapid_ocr is None:  # Double-check inside lock
-                try:
-                    from rapidocr_onnxruntime import RapidOCR
-                    _rapid_ocr = RapidOCR()
-                    logger.info("RapidOCR engine initialized successfully.")
-                except Exception as e:
-                    logger.warning(f"Could not initialize RapidOCR: {e}")
-                    _rapid_ocr = False
-    return _rapid_ocr if _rapid_ocr is not False else None
+    global _rapid_ocr, _rapid_ocr_last_attempt
+    import time
+    now = time.time()
+
+    if _rapid_ocr and _rapid_ocr is not False:
+        return _rapid_ocr
+
+    if _rapid_ocr is False and (now - _rapid_ocr_last_attempt) < _RAPID_OCR_RETRY_INTERVAL:
+        return None
+
+    with _ocr_lock:
+        if _rapid_ocr and _rapid_ocr is not False:
+            return _rapid_ocr
+        if _rapid_ocr is False and (time.time() - _rapid_ocr_last_attempt) < _RAPID_OCR_RETRY_INTERVAL:
+            return None
+
+        _rapid_ocr_last_attempt = time.time()
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            _rapid_ocr = RapidOCR()
+            logger.info("RapidOCR engine initialized successfully.")
+            return _rapid_ocr
+        except Exception as e:
+            logger.warning(f"Could not initialize RapidOCR: {e}")
+            _rapid_ocr = False
+            return None
 
 
 def warmup_ocr():
