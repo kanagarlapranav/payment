@@ -583,3 +583,74 @@ def test_cafeteria_custom_menu_items_tenant_isolation(test_workspaces):
     names_b_final = [it['name'] for it in get_custom_menu_items(workspace_id=ws_b_id)]
     assert "Filter Coffee Special" in names_b_final
     assert "Special Tea" in names_b_final
+
+
+def test_duplicate_detection_strict_workspace_scoping(test_workspaces):
+    """find_potential_duplicate strictly scopes checks to the given workspace, preventing false positives."""
+    from database.queries import insert_transaction_with_balance, find_potential_duplicate
+    from database.models import Transaction
+    ws_a_id, ws_b_id = test_workspaces
+
+    t_a = Transaction(
+        transaction_type="SENT",
+        amount=123.0,
+        person_name="Strict Payee",
+        reference_number="REF_STRICT_123",
+        transaction_date="2026-10-09",
+        transaction_time="10:00 AM",
+        workspace_id=ws_a_id
+    )
+    insert_transaction_with_balance(t_a)
+
+    # In Workspace A: duplicate is detected
+    dup_a = find_potential_duplicate(
+        amount=123.0,
+        reference_number="REF_STRICT_123",
+        person_name="Strict Payee",
+        tx_date="2026-10-09",
+        workspace_id=ws_a_id
+    )
+    assert dup_a is not None
+
+    # In Workspace B: must NOT match Workspace A's transaction
+    dup_b = find_potential_duplicate(
+        amount=123.0,
+        reference_number="REF_STRICT_123",
+        person_name="Strict Payee",
+        tx_date="2026-10-09",
+        workspace_id=ws_b_id
+    )
+    assert dup_b is None
+
+
+def test_insert_transaction_surfaces_value_error_on_integrity_conflict(test_workspaces):
+    """Insert conflicts/races surface as ValueError rather than raw sqlite3.IntegrityError."""
+    from database.queries import insert_transaction_with_balance
+    from database.models import Transaction
+    import pytest
+    ws_a_id, _ = test_workspaces
+
+    t1 = Transaction(
+        transaction_type="SENT",
+        amount=200.0,
+        person_name="Conflict Payee",
+        reference_number="REF_CONFLICT_999",
+        transaction_date="2026-10-09",
+        transaction_time="11:00 AM",
+        workspace_id=ws_a_id
+    )
+    insert_transaction_with_balance(t1)
+
+    # Attempting to insert another transaction with duplicate live reference raises ValueError
+    t2 = Transaction(
+        transaction_type="SENT",
+        amount=300.0,
+        person_name="Another Payee",
+        reference_number="REF_CONFLICT_999",
+        transaction_date="2026-10-09",
+        transaction_time="11:05 AM",
+        workspace_id=ws_a_id
+    )
+    with pytest.raises(ValueError) as excinfo:
+        insert_transaction_with_balance(t2)
+    assert "Duplicate live reference number" in str(excinfo.value) or "conflict" in str(excinfo.value).lower()

@@ -970,7 +970,10 @@ def insert_transaction_with_balance(t: Transaction) -> int:
                     occurred_at, created_at, updated_at
                 )
 
-            cursor.execute(query, values)
+            try:
+                cursor.execute(query, values)
+            except sqlite3.IntegrityError as ie:
+                raise ValueError(f"Transaction conflict or duplicate entry: {ie}") from ie
             new_id = cursor.lastrowid
             t.id = new_id
 
@@ -1795,20 +1798,20 @@ def find_potential_duplicate(
     tx_date: str = None,
     workspace_id: str = None
 ):
-    """Checks if a similar transaction already exists strictly within the workspace (by reference number or amount/payee/date)."""
-    default_ws = get_default_workspace_id()
-    ws_id = workspace_id or default_ws
-    ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    """Checks if a similar transaction already exists strictly within the target workspace (by reference number or amount/payee/date)."""
+    ws_id = workspace_id or get_default_workspace_id()
+    if not ws_id:
+        return None
     with get_db_connection() as conn:
         cursor = conn.cursor()
         
         # Check by reference number first (strongest indicator)
         if reference_number and len(str(reference_number).strip()) > 3:
             clean_ref = str(reference_number).strip()
-            cursor.execute(f"""
+            cursor.execute("""
                 SELECT * FROM transactions 
                 WHERE reference_number = ? 
-                  AND {ws_filter}
+                  AND workspace_id = ?
                   AND deleted_at IS NULL 
                 ORDER BY id DESC LIMIT 1
             """, (clean_ref, ws_id))
@@ -1823,21 +1826,21 @@ def find_potential_duplicate(
             if person_name and person_name.strip():
                 clean_person = person_name.strip().lower()
                 if tx_date:
-                    cursor.execute(f"""
+                    cursor.execute("""
                         SELECT * FROM transactions 
                         WHERE abs(amount - ?) < 0.01 
                           AND lower(person_name) LIKE ?
                           AND abs(julianday(transaction_date) - julianday(?)) <= 2
-                          AND {ws_filter}
+                          AND workspace_id = ?
                           AND deleted_at IS NULL
                         ORDER BY id DESC LIMIT 1
                     """, (float(amount), f"%{clean_person}%", tx_date, ws_id))
                 else:
-                    cursor.execute(f"""
+                    cursor.execute("""
                         SELECT * FROM transactions 
                         WHERE abs(amount - ?) < 0.01 
                           AND lower(person_name) LIKE ?
-                          AND {ws_filter}
+                          AND workspace_id = ?
                           AND deleted_at IS NULL
                         ORDER BY id DESC LIMIT 1
                     """, (float(amount), f"%{clean_person}%", ws_id))
