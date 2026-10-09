@@ -49,5 +49,53 @@ class TestUndoService(unittest.TestCase):
         self.assertFalse(success)
         self.assertIn("No recent action", msg)
 
+    def test_undo_insert_null_workspace_record(self):
+        from services.undo_service import record_insert_action
+        from database.queries import get_transaction_by_uid, get_default_workspace_id
+        t = Transaction()
+        t.transaction_type = "SENT"
+        t.amount = 200.0
+        t.person_name = "Legacy Store"
+        t.transaction_date = "2026-10-09"
+        t.workspace_id = None
+        tx_id = insert_transaction(t)
+        with get_db_connection() as conn:
+            conn.cursor().execute("UPDATE transactions SET workspace_id = NULL WHERE id = ?", (tx_id,))
+            conn.commit()
+
+        tx = get_transaction_by_id(tx_id)
+        self.assertIsNotNone(tx)
+        uid = tx['uid']
+
+        record_insert_action(uid, chat_id=123, user_id=456, workspace_id="")
+        success, msg = perform_undo(chat_id=123, user_id=456, workspace_id="")
+        self.assertTrue(success, f"Undo failed: {msg}")
+        self.assertIn("Removed newly added transaction", msg)
+
+        tx_check = get_transaction_by_uid(uid, workspace_id=get_default_workspace_id())
+        self.assertIsNotNone(tx_check['deleted_at'])
+
+    def test_undo_insert_non_default_workspace(self):
+        from services.undo_service import record_insert_action
+        from database.queries import get_or_create_workspace, get_transaction_by_uid
+        ws = get_or_create_workspace(chat_id=-100999888, chat_type="group", title="Tenant WS")
+        t = Transaction()
+        t.transaction_type = "SENT"
+        t.amount = 350.0
+        t.person_name = "Tenant Cafe"
+        t.transaction_date = "2026-10-09"
+        t.workspace_id = ws.id
+        tx_id = insert_transaction(t)
+        tx = get_transaction_by_id(tx_id, workspace_id=ws.id)
+        uid = tx['uid']
+
+        record_insert_action(uid, chat_id=-100999888, user_id=777, workspace_id=ws.id)
+        success, msg = perform_undo(chat_id=-100999888, user_id=777, workspace_id=ws.id)
+        self.assertTrue(success, f"Undo failed: {msg}")
+        self.assertIn("Removed newly added transaction", msg)
+
+        tx_check = get_transaction_by_uid(uid, workspace_id=ws.id)
+        self.assertIsNotNone(tx_check['deleted_at'])
+
 if __name__ == '__main__':
     unittest.main()

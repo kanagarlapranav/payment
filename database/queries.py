@@ -1471,7 +1471,8 @@ def delete_transaction(tx_id: int, workspace_id: str = None) -> bool:
                 return False
             default_ws = get_default_workspace_id()
             row_ws = row['workspace_id'] or default_ws
-            if workspace_id is not None and row_ws != workspace_id:
+            ws_filter = str(workspace_id).strip() if (workspace_id and str(workspace_id).strip()) else None
+            if ws_filter is not None and row_ws != ws_filter:
                 return False
             ws_id = row_ws
 
@@ -1507,7 +1508,8 @@ def delete_transaction_by_uid(uid: str, workspace_id: str = None) -> bool:
                 return False
             default_ws = get_default_workspace_id()
             row_ws = row['workspace_id'] or default_ws
-            if workspace_id is not None and row_ws != workspace_id:
+            ws_filter = str(workspace_id).strip() if (workspace_id and str(workspace_id).strip()) else None
+            if ws_filter is not None and row_ws != ws_filter:
                 return False
             ws_id = row_ws
 

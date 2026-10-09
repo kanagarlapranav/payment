@@ -30,7 +30,11 @@ def _resolve_scope(chat_id: int | None, user_id: int | None, workspace_id: str |
     """Resolves effective chat_id, user_id, and workspace_id."""
     c_id = int(chat_id) if chat_id is not None else int(TELEGRAM_GROUP_ID or TELEGRAM_USER_ID or 0)
     u_id = int(user_id) if user_id is not None else int(TELEGRAM_USER_ID or 0)
-    ws_id = str(workspace_id) if workspace_id else ""
+    if workspace_id and str(workspace_id).strip():
+        ws_id = str(workspace_id).strip()
+    else:
+        from database.queries import get_default_workspace_id
+        ws_id = get_default_workspace_id()
     return c_id, u_id, ws_id
 
 
@@ -101,6 +105,14 @@ def record_insert_action(
         return False
 
     valid_uid = validate_uid(uid)
+    if not tx_ws_id:
+        with get_db_connection() as conn_lookup:
+            cur = conn_lookup.cursor()
+            cur.execute("SELECT workspace_id FROM transactions WHERE uid = ?", (valid_uid,))
+            t_row = cur.fetchone()
+            if t_row and t_row['workspace_id']:
+                tx_ws_id = t_row['workspace_id']
+
     c_id, u_id, resolved_ws_id = _resolve_scope(chat_id, user_id, tx_ws_id)
     now_utc = utc_now_iso()
 
@@ -253,6 +265,17 @@ def perform_undo(
             action = row['action']
             uid = row['uid']
             rec_ws_id = row['workspace_id'] or ws_id
+            if not rec_ws_id:
+                with get_db_connection() as c_check:
+                    cur_c = c_check.cursor()
+                    cur_c.execute("SELECT workspace_id FROM transactions WHERE uid = ?", (uid,))
+                    t_row = cur_c.fetchone()
+                    if t_row and t_row['workspace_id']:
+                        rec_ws_id = t_row['workspace_id']
+                    else:
+                        from database.queries import get_default_workspace_id
+                        rec_ws_id = get_default_workspace_id()
+
             created_at_str = row['created_at']
 
             # Check 10-minute expiration window
@@ -262,7 +285,8 @@ def perform_undo(
                     created_dt = created_dt.replace(tzinfo=timezone.utc)
                 age_seconds = (datetime.now(timezone.utc) - created_dt).total_seconds()
             except (ValueError, TypeError):
-                age_seconds = 0
+                # Fail closed on unparseable timestamps (P2-bq)
+                age_seconds = 999999
 
             now_iso = utc_now_iso()
 
@@ -273,7 +297,7 @@ def perform_undo(
 
         # Execute undo action with strict workspace scoping
         if action == 'delete':
-            tx = get_transaction_by_uid(uid, workspace_id=rec_ws_id) if rec_ws_id else get_transaction_by_uid(uid)
+            tx = get_transaction_by_uid(uid, workspace_id=rec_ws_id)
             if not tx:
                 return False, "Recovery is not possible: transaction record does not belong to this workspace or no longer exists."
 
@@ -323,7 +347,7 @@ def perform_undo(
             )
 
         elif action == 'insert':
-            tx = get_transaction_by_uid(uid, live_only=True, workspace_id=rec_ws_id) if rec_ws_id else get_transaction_by_uid(uid, live_only=True)
+            tx = get_transaction_by_uid(uid, live_only=True, workspace_id=rec_ws_id)
             if not tx:
                 return False, "Transaction is already deleted or no longer exists."
 
@@ -357,7 +381,7 @@ def perform_undo(
             )
 
         elif action == 'edit':
-            tx = get_transaction_by_uid(uid, workspace_id=rec_ws_id) if rec_ws_id else get_transaction_by_uid(uid)
+            tx = get_transaction_by_uid(uid, workspace_id=rec_ws_id)
             if not tx:
                 return False, "Transaction record no longer exists or does not belong to this workspace."
 
