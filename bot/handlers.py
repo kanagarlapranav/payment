@@ -592,7 +592,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         dup_warning = f"⚠️ Similar to #{dup['id']} ({dup.get('match_reason', 'duplicate')}) — duplicate?" if dup else None
 
         # 3. Store in pending for interactive confirmation
-        pending_id = uuid.uuid4().hex[:10]
+        pending_id = uuid.uuid4().hex
         set_pending_transaction(pending_id, transaction, workspace_id=ws_id)
 
         # 4. Render the polished Confirmation Card requested by user
@@ -1003,7 +1003,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             return
         
         from database.models import Transaction
-        dup_pending_id = uuid.uuid4().hex[:10]
+        dup_pending_id = uuid.uuid4().hex
         dup_tx = Transaction(
             amount=orig_tx['amount'],
             transaction_type=orig_tx['transaction_type'],
@@ -2946,7 +2946,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             workspace_id=ws_id,
             telegram_user_id=update.effective_user.id if update.effective_user else None
         )
-        pid = uuid.uuid4().hex[:10]
+        pid = uuid.uuid4().hex
         set_pending_transaction(pid, t, workspace_id=ws_id)
         card_text = format_receipt_card(t)
         await update.message.reply_text(
@@ -2965,7 +2965,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 transaction.workspace_id = ws_id
             if update.effective_user:
                 transaction.telegram_user_id = update.effective_user.id
-            pid = uuid.uuid4().hex[:10]
+            pid = uuid.uuid4().hex
             set_pending_transaction(pid, transaction, workspace_id=ws_id)
             card_text = format_receipt_card(transaction)
             await update.message.reply_text(
@@ -3099,7 +3099,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text("⚠️ Transaction already recorded.")
                 return
             elif confidence >= 30:
-                tx_id = uuid.uuid4().hex[:10]
+                tx_id = uuid.uuid4().hex
                 set_pending_transaction(tx_id, transaction, workspace_id=ws_id)
                 card_text = format_receipt_card(transaction)
                 await update.message.reply_text(card_text, reply_markup=get_confirmation_card_keyboard(tx_id), parse_mode='HTML')
