@@ -366,6 +366,21 @@ class TestDashboardSecurity(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_cross_process_single_use_auth_code_exchange_prevented(self):
+        """Verifies that concurrent cross-process exchange attempts fail when rowcount != 1 (C-N19)."""
+        from services.dashboard_auth import create_one_time_code, exchange_code_for_session
+        code = create_one_time_code(workspace_id="test_ws", user_id=123, role="admin")
+
+        # First exchange succeeds
+        success1, session_or_err1, _ = exchange_code_for_session(code, client_ip="10.0.0.1")
+        self.assertTrue(success1)
+
+        # Second concurrent or repeated exchange must fail
+        success2, session_or_err2, _ = exchange_code_for_session(code, client_ip="10.0.0.2")
+        self.assertFalse(success2)
+        self.assertIn("already used", session_or_err2.lower())
+
 
 if __name__ == '__main__':
     unittest.main()
+

@@ -186,6 +186,7 @@ def exchange_code_for_session(code: str, client_ip: str = "", is_https: bool = F
 
     # 2. Check DB to ensure single-use and persistence
     db_code_row = None
+    consumed = False
     try:
         with LEDGER_LOCK:
             with get_db_connection() as conn:
@@ -197,15 +198,17 @@ def exchange_code_for_session(code: str, client_ip: str = "", is_https: bool = F
                 """, (code_h,))
                 db_code_row = cursor.fetchone()
                 if db_code_row:
-                    cursor.execute("""
-                        UPDATE dashboard_auth_codes SET used_at = ? WHERE code_hash = ? AND used_at IS NULL
-                    """, (now, code_h))
-                    conn.commit()
+                    if db_code_row['used_at'] is None and now <= db_code_row['expires_at']:
+                        cursor.execute("""
+                            UPDATE dashboard_auth_codes SET used_at = ? WHERE code_hash = ? AND used_at IS NULL
+                        """, (now, code_h))
+                        consumed = (cursor.rowcount == 1)
+                        conn.commit()
     except Exception as e:
         logger.warning(f"Error querying dashboard_auth_codes from DB: {e}")
 
     if db_code_row:
-        if db_code_row['used_at'] is not None or now > db_code_row['expires_at']:
+        if not consumed or db_code_row['used_at'] is not None or now > db_code_row['expires_at']:
             record_failed_attempt(client_ip)
             return False, "Invalid login code: code has expired or was already used. Please request a new code via /dashboard in Telegram.", ""
         user_id = db_code_row['user_id']
