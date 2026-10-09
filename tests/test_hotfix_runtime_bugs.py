@@ -86,15 +86,6 @@ class TestHotfixRuntimeBugs(unittest.IsolatedAsyncioTestCase):
         Bug 3: Verify standalone amount input (e.g. '500') invokes search_transactions
         with exact_amount= parameter rather than invalid amount= parameter.
         """
-        t = Transaction(
-            transaction_type="SENT",
-            amount=500.0,
-            person_name="Search Merchant",
-            transaction_date=datetime.now().date(),
-            transaction_time="11:00 AM"
-        )
-        commit_transaction(t)
-
         update = MagicMock()
         update.message = MagicMock()
         update.message.text = "500"
@@ -102,11 +93,35 @@ class TestHotfixRuntimeBugs(unittest.IsolatedAsyncioTestCase):
         update.effective_chat.id = 12345
         update.effective_user.id = 12345
 
+        from database.queries import get_default_workspace_id
+        from bot.auth import RequestContext
+        def_ws_id = get_default_workspace_id()
+        mock_ctx = RequestContext(
+            workspace_id=def_ws_id,
+            chat_id="12345",
+            chat_type="private",
+            user_id=12345,
+            username="tester",
+            display_name="Tester",
+            role="owner"
+        )
+
+        t = Transaction(
+            transaction_type="SENT",
+            amount=500.0,
+            person_name="Search Merchant",
+            transaction_date=datetime.now().date(),
+            transaction_time="11:00 AM",
+            workspace_id=def_ws_id
+        )
+        commit_transaction(t)
+
         context = MagicMock()
         context.user_data = {}
         context.args = []
 
-        with patch("bot.handlers.require_authorized", new_callable=AsyncMock, return_value=True), \
+        with patch("bot.handlers.get_workspace_context", return_value=mock_ctx), \
+             patch("bot.handlers.require_authorized", new_callable=AsyncMock, return_value=True), \
              patch("bot.auth.is_authorized_user", return_value=True), \
              patch("bot.commands.amount_command", new_callable=AsyncMock) as mock_amt_cmd:
             await handle_text(update, context)
