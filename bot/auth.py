@@ -121,8 +121,6 @@ ADMIN_CALLBACK_ACTIONS = {k for k, v in CALLBACK_ROLE_POLICY.items() if v in ('a
 READ_ONLY_CALLBACK_ACTIONS = {k for k, v in CALLBACK_ROLE_POLICY.items() if v == 'viewer'}
 
 
-from typing import Optional, Dict, Any
-
 @dataclass
 class RequestContext:
     """Carries resolved tenant workspace and membership identity for an incoming Telegram interaction."""
@@ -713,9 +711,9 @@ async def require_authorized(update: Update, context: Optional[ContextTypes.DEFA
     owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
     if owner_id:
         try:
-            bot = update.get_bot() if hasattr(update, 'get_bot') else getattr(update, '_bot', None)
-            if not bot and context:
-                bot = context.bot
+            bot = getattr(context, 'bot', None) if context else None
+            if not bot and hasattr(update, 'get_bot'):
+                bot = update.get_bot()
             if bot:
                 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
                 time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
