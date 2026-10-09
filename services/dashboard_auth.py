@@ -309,7 +309,7 @@ def exchange_code_for_session(code: str, client_ip: str = "", is_https: bool = F
     secure_flag = "; Secure" if is_https or os.getenv("ENVIRONMENT") == "production" or os.getenv("RENDER") else ""
     cookie_header = f"session_id={session_id}; Path=/; Max-Age={int(SESSION_EXPIRY_SECONDS)}; HttpOnly; SameSite=Lax{secure_flag}"
     
-    logger.info(f"Successfully exchanged code for session {session_id[:8]}... (workspace_id={workspace_id}, role={role}).")
+    logger.info(f"Successfully exchanged code for session for user {user_id} (workspace_id={workspace_id}, role={role}).")
     return True, session_id, cookie_header
 
 
