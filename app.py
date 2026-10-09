@@ -328,7 +328,8 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
         session_from_param = query_params.get("session", [""])[0].strip()
         session_info = get_session_info_from_cookie(cookie_header, session_from_param)
         has_session = (session_info is not None) or validate_session(cookie_header) or (bool(session_from_param) and validate_session_id(session_from_param))
-        ws_id = session_info.get("workspace_id") if session_info else None
+        from database.queries import get_default_workspace_id
+        ws_id = (session_info.get("workspace_id") if session_info else None) or get_default_workspace_id()
 
         # 3. Web dashboard frontend UI
         if path in ('/dashboard', '/'):
