@@ -199,3 +199,35 @@ def test_dashboard_data_api_and_csv_export_workspace_isolation():
     res_csv = simulate_request('/api/export.csv', cookie_a)
     assert "Alpha Vendor" in res_csv
     assert "Beta Vendor" not in res_csv
+
+
+def test_restore_workspace_from_json_validates_invariants():
+    """Verify that restore_workspace_from_json recalculates and rejects corrupted invariants."""
+    import hashlib
+    from services.backup_service import restore_workspace_from_json
+    ws = get_or_create_workspace(chat_id="998811", chat_type="private", title="Invariant Test", creator_user_id=101)
+    
+    # Payload with invalid UID format violating ledger invariants
+    bad_payload = {
+        "format_version": "workspace_v1",
+        "workspace_id": ws.id,
+        "exported_at": "2026-10-09T00:00:00Z",
+        "transactions": [
+            {
+                "uid": "INVALID_NOT_HEX_UID",
+                "transaction_type": "SENT",
+                "amount": 100.0,
+                "person_name": "Actor 1",
+                "transaction_date": "2026-10-09",
+                "reference_number": "REF-999"
+            }
+        ],
+        "settings": []
+    }
+    canonical = json.dumps(bad_payload, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+    bad_payload["checksum"] = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+    
+    res = restore_workspace_from_json(ws.id, bad_payload)
+    assert res["success"] is False
+    assert "invariants" in res["error"].lower()
+

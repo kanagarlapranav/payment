@@ -431,7 +431,7 @@ def resequence_transaction_ids() -> None:
     logger.debug("resequence_transaction_ids called — skipped to preserve stable permanent transaction IDs.")
     return
 
-def validate_ledger_invariants(db_path=None, workspace_id: str = None) -> List[str]:
+def validate_ledger_invariants(db_path=None, workspace_id: str = None, conn=None) -> List[str]:
     """
     Validates all ledger integrity invariants against the SQLite database.
     Multi-tenant aware: checks reference uniqueness and continuity per workspace.
@@ -448,13 +448,18 @@ def validate_ledger_invariants(db_path=None, workspace_id: str = None) -> List[s
     """
     errors: List[str] = []
 
-    with get_db_connection(db_path=db_path) as conn:
-        cursor = conn.cursor()
+    cm = get_db_connection(db_path=db_path) if conn is None else None
+    active_conn = conn if conn is not None else cm.__enter__()
+    try:
+        cursor = active_conn.cursor()
         from database.queries import get_default_workspace_id
         default_ws = get_default_workspace_id()
 
         # 1. Inspect all rows (live and deleted) for structural validity
-        cursor.execute("SELECT * FROM transactions ORDER BY id ASC")
+        if workspace_id:
+            cursor.execute("SELECT * FROM transactions WHERE workspace_id = ? ORDER BY id ASC", (str(workspace_id),))
+        else:
+            cursor.execute("SELECT * FROM transactions ORDER BY id ASC")
         all_txs = cursor.fetchall()
 
         seen_live_refs = {}
@@ -632,6 +637,9 @@ def validate_ledger_invariants(db_path=None, workspace_id: str = None) -> List[s
             # Check that current_balance matches the end of the chain
             if ws_current_bal is not None and ws_current_bal != expected_balance:
                 errors.append(f"Workspace {ws}: current_balance mismatch (expected {expected_balance}, found {ws_current_bal})")
+    finally:
+        if cm is not None:
+            cm.__exit__(None, None, None)
 
     return errors
 

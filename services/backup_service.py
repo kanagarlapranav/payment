@@ -1568,6 +1568,8 @@ def restore_workspace_from_json(workspace_id: str, data_dict: dict, actor_user_i
                             insert_data[col] = str(workspace_id)
                         elif col == 'uid':
                             insert_data[col] = tx.get('uid') or tx.get('transaction_uid') or uuid.uuid4().hex
+                        elif col in ('balance_before', 'balance_after'):
+                            insert_data[col] = float(tx.get(col, 0.0) or 0.0)
                         elif col in tx:
                             insert_data[col] = tx[col]
                     if insert_data:
@@ -1641,8 +1643,13 @@ def restore_workspace_from_json(workspace_id: str, data_dict: dict, actor_user_i
                     ))
 
                 # Recalculate balance for this workspace
-                from services.balance_service import recalculate_in_connection
+                from services.balance_service import recalculate_in_connection, validate_ledger_invariants
                 recalculate_in_connection(conn, workspace_id=str(workspace_id))
+
+                inv_errors = validate_ledger_invariants(workspace_id=str(workspace_id), conn=conn)
+                if inv_errors:
+                    conn.rollback()
+                    raise ValueError(f"Ledger invariants violated after restore: {'; '.join(inv_errors)}")
 
                 from database.queries import increment_revision_and_mark_dirty
                 increment_revision_and_mark_dirty(conn)
