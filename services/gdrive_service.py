@@ -139,14 +139,68 @@ def upload_statement_to_drive(file_path: str) -> str | None:
     """Uploads a PDF or Excel statement report to Google Drive."""
     return upload_file_to_drive(file_path, destination_folder_name="Statements")
 
-def upload_backup_to_drive(file_path: str) -> str | None:
-    """Uploads a JSON database backup snapshot to Google Drive."""
+def rotate_drive_backups(max_retention: int = 7) -> int:
+    """
+    Rotates old JSON backups in Google Drive 'Backups' subfolder,
+    keeping only the newest max_retention files.
+    Returns the count of successfully deleted older backup files.
+    """
+    if not is_gdrive_available():
+        return 0
+
+    try:
+        service = _get_gdrive_service()
+        if not service:
+            return 0
+
+        parent_id = GDRIVE_FOLDER_ID
+        backups_folder_id = _get_or_create_subfolder(service, "Backups", parent_id=parent_id)
+        if not backups_folder_id:
+            return 0
+
+        q = f"'{backups_folder_id}' in parents and trashed = false"
+        results = service.files().list(
+            q=q,
+            spaces='drive',
+            fields='files(id, name, createdTime)',
+            orderBy='createdTime desc',
+            pageSize=100
+        ).execute()
+
+        files = results.get('files', [])
+        deleted_count = 0
+        if len(files) > max_retention:
+            for old_file in files[max_retention:]:
+                old_id = old_file.get('id')
+                old_name = old_file.get('name')
+                try:
+                    service.files().delete(fileId=old_id).execute()
+                    deleted_count += 1
+                    logger.info(f"Rotated old Google Drive backup {old_name} (ID: {old_id})")
+                except Exception as del_err:
+                    logger.warning(f"Could not delete old Google Drive backup {old_id}: {del_err}")
+
+        return deleted_count
+    except Exception as e:
+        logger.error(f"Error rotating Google Drive backups: {e}", exc_info=True)
+        return 0
+
+def upload_backup_to_drive(file_path: str, max_retention: int = 7) -> str | None:
+    """
+    Uploads a JSON database backup snapshot to Google Drive.
+    Upon successful upload, records a confirmed backup (clearing is_dirty),
+    updates last_drive_backup_at/last_gdrive_backup_at, and rotates old backups retaining max_retention.
+    """
     drive_id = upload_file_to_drive(file_path, destination_folder_name="Backups")
     if drive_id:
         try:
             from database.db import get_db_connection, LEDGER_LOCK
+            from services.backup_service import record_confirmed_backup
             from utils.dates import utc_now_iso
             now_utc = utc_now_iso()
+
+            record_confirmed_backup(timestamp_iso=now_utc)
+
             with LEDGER_LOCK:
                 with get_db_connection() as conn:
                     conn.execute(
@@ -154,10 +208,12 @@ def upload_backup_to_drive(file_path: str) -> str | None:
                         (now_utc, now_utc)
                     )
                     conn.execute(
-                        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_confirmed_backup_at', ?, ?)",
+                        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_gdrive_backup_at', ?, ?)",
                         (now_utc, now_utc)
                     )
                     conn.commit()
+
+            rotate_drive_backups(max_retention=max_retention)
         except Exception as e:
-            logger.debug(f"Notice updating last_drive_backup_at: {e}")
+            logger.debug(f"Notice updating backup settings after Drive upload: {e}")
     return drive_id
