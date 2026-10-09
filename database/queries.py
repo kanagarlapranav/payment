@@ -254,7 +254,8 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                     if top_tx and top_tx['workspace_id']:
                         new_grp_id = str(top_tx['workspace_id'])
                     else:
-                        new_grp_id = "d2b59f0c-e09a-40cf-9497-819cecfe4173"
+                        from config import DEFAULT_FALLBACK_WORKSPACE_ID
+                        new_grp_id = DEFAULT_FALLBACK_WORKSPACE_ID or str(uuid.uuid4())
 
                 c_title = (current_chat_title or "Payment").strip()
                 if not c_title.endswith("(Group)"):
@@ -292,7 +293,8 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                 canonical_default_ws_id = group_workspaces_list[0]['id']
 
             if not canonical_default_ws_id:
-                canonical_default_ws_id = "d2b59f0c-e09a-40cf-9497-819cecfe4173"
+                from config import DEFAULT_FALLBACK_WORKSPACE_ID
+                canonical_default_ws_id = DEFAULT_FALLBACK_WORKSPACE_ID or str(uuid.uuid4())
 
             cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('default_workspace_id', ?, ?)", (canonical_default_ws_id, now_utc))
 
