@@ -916,13 +916,9 @@ async def require_owner(update: Update, silent: bool = False) -> bool:
 
 
 def get_command_policy(command: str) -> Optional[str]:
-    """Returns 'admin', 'read_only', or None for unknown commands."""
-    cmd = command.lower().lstrip('/')
-    if cmd in ADMIN_COMMANDS:
-        return 'admin'
-    if cmd in READ_ONLY_COMMANDS:
-        return 'read_only'
-    return None
+    """Returns role policy directly from COMMAND_ROLE_POLICY as the single source of truth."""
+    cmd = command.lower().lstrip('/').lstrip('\\')
+    return COMMAND_ROLE_POLICY.get(cmd)
 
 
 def get_callback_policy(action: str) -> Optional[str]:
