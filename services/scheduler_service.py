@@ -244,9 +244,9 @@ def complete_workspace_job(workspace_id: str, job_name: str, scheduled_date: str
         logger.warning(f"Failed to record job status for workspace {workspace_id}: {e}")
 
 
-async def daily_digest_job(context: ContextTypes.DEFAULT_TYPE):
+async def daily_digest_job(context: ContextTypes.DEFAULT_TYPE, target_date_str: str = None):
     """PTB JobQueue handler for daily financial digest with multi-workspace fan-out and per-workspace failure isolation."""
-    today_str = get_current_ist_time().strftime("%Y-%m-%d")
+    today_str = target_date_str or get_current_ist_time().strftime("%Y-%m-%d")
 
     # 1. Try fan-out to all active workspaces
     from database.queries import get_active_workspaces, get_workspace_setting
@@ -268,12 +268,12 @@ async def daily_digest_job(context: ContextTypes.DEFAULT_TYPE):
 
                 last_sent = get_workspace_setting(ws_id, 'last_digest_sent_date')
                 if last_sent == today_str:
-                    logger.info(f"Daily digest for workspace {ws_id} already sent today. Skipping.")
+                    logger.info(f"Daily digest for workspace {ws_id} already sent for {today_str}. Skipping.")
                     continue
 
                 # Idempotent job claim check
                 if not claim_workspace_job(ws_id, "daily_digest", today_str):
-                    logger.info(f"Daily digest for workspace {ws_id} already claimed/completed. Skipping.")
+                    logger.info(f"Daily digest for workspace {ws_id} already claimed/completed for {today_str}. Skipping.")
                     continue
 
                 success = await send_daily_digest_with_retry(context.bot, chat_id, today_str, workspace_id=ws_id)
@@ -306,8 +306,38 @@ async def daily_digest_job(context: ContextTypes.DEFAULT_TYPE):
     await send_daily_digest_with_retry(context.bot, target_chat_id, today_str)
 
 
+async def check_missed_daily_digest(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Checks if a scheduled daily digest was missed (e.g. bot was down at 22:00 IST)
+    and executes catch-up delivery.
+    """
+    try:
+        now_ist = get_current_ist_time()
+        digest_time = parse_digest_time()
+        if now_ist.time() >= digest_time:
+            target_date = now_ist.strftime("%Y-%m-%d")
+        else:
+            from datetime import timedelta
+            target_date = (now_ist.date() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        logger.info(f"Running missed daily digest catch-up check for date {target_date}...")
+        await daily_digest_job(context, target_date_str=target_date)
+    except Exception as e:
+        logger.warning(f"Notice running missed daily digest catch-up: {e}")
+
+
+# Retry tracking state for dirty cloud backups
+_BACKUP_RETRY_FAILURES = 0
+_BACKUP_RETRY_NEXT_ATTEMPT = 0.0
+_BACKUP_RETRY_ALERTED = False
+
+
 async def backup_retry_job(context: ContextTypes.DEFAULT_TYPE):
-    """PTB JobQueue handler for periodic dirty backup retries (runs every 60s)."""
+    """
+    PTB JobQueue handler for periodic dirty backup retries (runs every 60s).
+    Implements exponential backoff on failure and sends give-up alert after persistent failures.
+    """
+    global _BACKUP_RETRY_FAILURES, _BACKUP_RETRY_NEXT_ATTEMPT, _BACKUP_RETRY_ALERTED
     try:
         is_dirty = False
         with get_db_connection() as conn:
@@ -317,11 +347,55 @@ async def backup_retry_job(context: ContextTypes.DEFAULT_TYPE):
             if row and row["value"] == "1":
                 is_dirty = True
 
-        if is_dirty:
-            logger.info("Backup retry job: database is dirty. Triggering cloud backup to Telegram...")
-            from services.backup_service import backup_to_telegram
-            target_chat_id = TELEGRAM_GROUP_ID or TELEGRAM_USER_ID
-            await backup_to_telegram(context.bot, target_chat_id)
+        if not is_dirty:
+            if _BACKUP_RETRY_FAILURES > 0:
+                _BACKUP_RETRY_FAILURES = 0
+                _BACKUP_RETRY_NEXT_ATTEMPT = 0.0
+                _BACKUP_RETRY_ALERTED = False
+            return
+
+        import time as _pytime
+        if _pytime.time() < _BACKUP_RETRY_NEXT_ATTEMPT:
+            logger.debug(f"Backup retry job: in backoff until {_BACKUP_RETRY_NEXT_ATTEMPT}. Skipping.")
+            return
+
+        logger.info("Backup retry job: database is dirty. Triggering cloud backup to Telegram...")
+        from services.backup_service import backup_to_telegram
+        target_chat_id = TELEGRAM_GROUP_ID or TELEGRAM_USER_ID
+        ok = await backup_to_telegram(context.bot, target_chat_id)
+
+        if ok:
+            _BACKUP_RETRY_FAILURES = 0
+            _BACKUP_RETRY_NEXT_ATTEMPT = 0.0
+            _BACKUP_RETRY_ALERTED = False
+            logger.info("Backup retry job: cloud backup succeeded, reset retry state.")
+        else:
+            _BACKUP_RETRY_FAILURES += 1
+            # Exponential backoff: 60s, 120s, 240s, 480s, 960s, max 3600s
+            delay = min(60 * (2 ** (_BACKUP_RETRY_FAILURES - 1)), 3600)
+            _BACKUP_RETRY_NEXT_ATTEMPT = _pytime.time() + delay
+            logger.warning(
+                f"Backup retry job: cloud backup failed (consecutive failure #{_BACKUP_RETRY_FAILURES}). "
+                f"Backing off next attempt by {delay}s."
+            )
+            if _BACKUP_RETRY_FAILURES >= 5 and not _BACKUP_RETRY_ALERTED:
+                _BACKUP_RETRY_ALERTED = True
+                owner_id = TELEGRAM_USER_ID
+                if owner_id and context.bot:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=owner_id,
+                            text=(
+                                "🚨 <b>Cloud Backup Alert</b>\n\n"
+                                f"Persistent backup failure: {_BACKUP_RETRY_FAILURES} consecutive attempts failed.\n"
+                                "Database remains dirty. Retries backed off to 1 hour.\n"
+                                "Please inspect bot logs and cloud credentials."
+                            ),
+                            parse_mode="HTML"
+                        )
+                        logger.error("Backup retry job: give-up alert sent to owner.")
+                    except Exception as alert_err:
+                        logger.warning(f"Failed to send backup give-up alert: {alert_err}")
     except Exception as e:
         logger.debug(f"Backup retry job notice: {e}")
 
@@ -349,6 +423,13 @@ def register_scheduler_jobs(application):
         daily_digest_job,
         time=digest_time,
         name="daily_digest_job"
+    )
+
+    logger.info("Registering missed daily digest catch-up job (once after 15s)...")
+    application.job_queue.run_once(
+        check_missed_daily_digest,
+        when=15,
+        name="missed_digest_catchup_job"
     )
 
     logger.info("Registering periodic dirty backup retry job (every 60s)...")

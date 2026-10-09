@@ -153,6 +153,10 @@ def upload_backup_to_drive(file_path: str) -> str | None:
                         "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_drive_backup_at', ?, ?)",
                         (now_utc, now_utc)
                     )
+                    conn.execute(
+                        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('last_confirmed_backup_at', ?, ?)",
+                        (now_utc, now_utc)
+                    )
                     conn.commit()
         except Exception as e:
             logger.debug(f"Notice updating last_drive_backup_at: {e}")

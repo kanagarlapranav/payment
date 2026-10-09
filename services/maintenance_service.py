@@ -17,13 +17,16 @@ def purge_eligible_tombstones(db_path=None) -> int:
     """
     with LEDGER_LOCK, get_db_connection(db_path=db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT value FROM settings WHERE key = 'last_confirmed_backup_at'")
-        row = cursor.fetchone()
-        if not row or not row['value']:
+        cursor.execute(
+            "SELECT value FROM settings WHERE key IN ('last_confirmed_backup_at', 'last_drive_backup_at')"
+        )
+        rows = cursor.fetchall()
+        timestamps = [r['value'] for r in rows if r and r['value']]
+        if not timestamps:
             logger.info("Tombstone purge skipped: no confirmed backup upload on record.")
             return 0
 
-        last_backup_iso = row['value']
+        last_backup_iso = max(timestamps)
         now_utc = datetime.now(timezone.utc)
         cutoff_365 = (now_utc - timedelta(days=365)).isoformat()
 
