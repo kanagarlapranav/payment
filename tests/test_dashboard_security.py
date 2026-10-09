@@ -4,7 +4,7 @@ Comprehensive Security and Authentication Test Suite for Dashboard (PROMPT 10):
    - /dashboard, /, /api/data, /api/transactions, /api/export.csv return 401 without valid session.
    - /healthz remains public (200 OK) and HEAD remains supported.
 2. Single-Use 60s One-Time Code:
-   - Valid code exchanges for HttpOnly, SameSite=Strict session cookie and 303 redirects to /dashboard (removing code from URL).
+   - Valid code exchanges for HttpOnly, SameSite=Lax session cookie and 303 redirects to /dashboard (removing code from URL).
    - Reused code fails.
    - Expired code (>60s) fails.
    - Invalid code fails.

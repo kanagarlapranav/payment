@@ -8,7 +8,7 @@ Security Architecture:
    - Stored hashed in SQLite (dashboard_auth_codes) and in-memory cache.
 2. Persistent Session Cookie:
    - Exchanged via GET /auth?code=...
-   - HttpOnly, SameSite=Strict, Secure (over HTTPS or production), 30-minute validity.
+   - HttpOnly, SameSite=Lax (safe for Telegram in-app browser navigation), Secure (over HTTPS or production), 30-minute validity.
    - Stored hashed in SQLite (dashboard_sessions) and in-memory cache.
    - Live membership & role revalidated against workspace_members on access.
 3. Rate Limiting:
