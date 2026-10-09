@@ -253,6 +253,14 @@ def is_authorized_user(update: Update, workspace_id: Optional[str] = None) -> bo
     """
     Returns True if caller has active membership in the target/current workspace,
     or is emergency SUPER_ADMIN. Group membership or chat_id alone does not grant access.
+
+    P2-ax Architecture Note:
+    Telegram command permissions are evaluated in real-time against SQLite
+    (workspace_members, access_requests) rather than relying on in-memory role caches.
+    This guarantees that permission revocations, role promotions, or workspace switches
+    take effect immediately on the very next Telegram command.
+    In contrast, Web Dashboard sessions use short-lived cached session tokens (30m)
+    backed by `dashboard_sessions` in `services/dashboard_auth.py`.
     """
     user_id = get_effective_user_id(update)
     chat_id = get_effective_chat_id(update)

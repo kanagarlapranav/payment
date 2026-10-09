@@ -15,6 +15,9 @@ Security Architecture:
    - In-memory rate limiting on failed auth attempts per client IP (max 5 failures per 5 minutes).
 4. Security Headers:
    - CSP, X-Content-Type-Options: nosniff, Referrer-Policy: no-referrer, Cache-Control: no-store on APIs.
+5. Permission Caching Model (P2-ax):
+   - Telegram: Direct real-time evaluation against database rows on every interaction for zero-latency revocation.
+   - Web: Session cache in memory + SQLite dashboard_sessions with 30-minute validity; invalidated explicitly on logout/revocation or expiry.
 """
 
 import time
