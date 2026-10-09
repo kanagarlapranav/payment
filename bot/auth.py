@@ -438,8 +438,8 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
             except (ValueError, TypeError):
                 pass
 
-        # Check if user has switched active workspace (applies to private DMs and global owner)
-        if chat_type == 'private' or is_global_owner:
+        # Check if user has switched active workspace (applies strictly to private DMs, never group chats)
+        if chat_type == 'private':
             active_ws_id = get_user_active_workspace(user_id)
             if active_ws_id:
                 switched_ws = get_workspace_by_id(active_ws_id)

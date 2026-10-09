@@ -102,7 +102,7 @@ def test_auto_provisioning_and_friend_workspace_discovery():
 
 
 def test_group_chat_workspace_switching_and_reset():
-    """Verifies that an owner in a group chat can switch active workspace to their personal ledger or friend's ledger."""
+    """Verifies that an owner in a group chat always resolves to the group workspace (DM switch does not leak to group)."""
     async def _test():
         owner_id = 8379948573
         friend_id = 8343764796
@@ -113,22 +113,27 @@ def test_group_chat_workspace_switching_and_reset():
             ws_grp = get_or_create_workspace(chat_id=group_chat_id, chat_type="supergroup", title="Payment (Group)", creator_user_id=owner_id)
             ws_friend = get_or_create_workspace(chat_id=friend_id, chat_type="dm", title="Nagendra (Personal)", creator_user_id=friend_id)
 
-            up = make_mock_update(user_id=owner_id, chat_id=group_chat_id, chat_type="supergroup", text="/workspaces")
+            up_grp = make_mock_update(user_id=owner_id, chat_id=group_chat_id, chat_type="supergroup", text="/workspaces")
+            up_dm = make_mock_update(user_id=owner_id, chat_id=owner_id, chat_type="private", text="/workspaces")
             
             # 1. Initially in group chat, active workspace is the group workspace
             set_user_active_workspace(owner_id, None)
-            ctx = get_workspace_context(up)
+            ctx = get_workspace_context(up_grp)
             assert ctx.workspace_id == ws_grp.id
 
-            # 2. Owner switches active workspace to friend's workspace from group chat
+            # 2. Owner sets active workspace (in DM): group chat MUST NOT be overridden
             set_user_active_workspace(owner_id, ws_friend.id)
-            ctx_switched = get_workspace_context(up)
-            assert ctx_switched.workspace_id == ws_friend.id
-            assert ctx_switched.workspace.title == "Nagendra (Personal)"
+            ctx_grp = get_workspace_context(up_grp)
+            assert ctx_grp.workspace_id == ws_grp.id
+
+            # In private DM, active workspace is honored
+            ctx_dm = get_workspace_context(up_dm)
+            assert ctx_dm.workspace_id == ws_friend.id
+            assert ctx_dm.workspace.title == "Nagendra (Personal)"
 
             # 3. Owner resets active workspace
             set_user_active_workspace(owner_id, None)
-            ctx_reset = get_workspace_context(up)
+            ctx_reset = get_workspace_context(up_grp)
             assert ctx_reset.workspace_id == ws_grp.id
 
     asyncio.run(_test())
