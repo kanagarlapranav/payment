@@ -391,10 +391,10 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                     pass
 
             # 3. For every known user, ensure a DM personal workspace exists (chat_id = uid, chat_type = 'dm')
-            # NOTE: Owner (Pranav) explicitly uses Payment (Group) only - skip personal workspace creation for owner.
+            # NOTE: Owner uses Payment (Group) directly - do not auto-provision personal workspace for owner.
             for uid, (dname, uname) in known_users.items():
                 if uid <= 0 or (owner_id and uid == owner_id):
-                    continue  # groups have negative chat_ids; owner only uses Payment (Group)
+                    continue  # groups have negative chat_ids; owner uses group directly
 
                 cursor.execute("SELECT id, title FROM workspaces WHERE chat_id = ? AND is_active = 1", (uid,))
                 ws_row = cursor.fetchone()
@@ -436,31 +436,14 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                                 VALUES (?, ?, 'owner', 'Owner', 'owner', 1, ?, ?)
                             """, (ws_row['id'], owner_id, now_utc, now_utc))
 
-            # 4. Clean up any personal workspace for owner (Pranav) - user requested Payment (Group) only
-            cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
-            d_row = cursor.fetchone()
-            default_ws_id = str(d_row['value']) if d_row and d_row['value'] else get_default_workspace_id()
-
-            if owner_id:
-                cursor.execute("SELECT id FROM workspaces WHERE chat_id = ?", (owner_id,))
-                personal_rows = cursor.fetchall()
-                for p_row in personal_rows:
-                    p_id = p_row['id']
-                    cursor.execute("UPDATE transactions SET workspace_id = ? WHERE workspace_id = ?", (default_ws_id, p_id))
-                    cursor.execute("DELETE FROM workspace_members WHERE workspace_id = ?", (p_id,))
-                    cursor.execute("DELETE FROM workspaces WHERE id = ?", (p_id,))
-                cursor.execute("DELETE FROM workspace_settings WHERE key = ?", (f"user_active_ws:{owner_id}",))
-                cursor.execute("DELETE FROM settings WHERE key = ?", (f"user_active_ws:{owner_id}",))
-                try:
-                    from bot.auth import clear_user_active_workspace_cache
-                    clear_user_active_workspace_cache(owner_id)
-                except Exception:
-                    pass
-
             # 5. Enforce Nagendra (8343764796) is never owner across all workspaces
             cursor.execute("UPDATE workspace_members SET role = 'member' WHERE telegram_user_id = 8343764796 AND role = 'owner'")
 
             # 6. Recalculate balance for default workspace
+            cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
+            d_row = cursor.fetchone()
+            default_ws_id = str(d_row['value']) if d_row and d_row['value'] else get_default_workspace_id()
+
             from services.balance_service import recalculate_in_connection
             try:
                 recalculate_in_connection(conn, workspace_id=default_ws_id)
