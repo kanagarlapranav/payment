@@ -22,6 +22,19 @@ def log_audit_event(
 ) -> bool:
     """
     Appends an immutable audit record for a tenant action.
+
+    Args:
+        workspace_id: Unique UUID string identifier of the target workspace.
+        actor_user_id: Telegram user ID performing the action.
+        action: Identifier for the executed operation (e.g., 'member_add', 'export').
+        resource: Target entity or resource modified (e.g., 'workspace_member', 'ledger').
+        actor_role: Role of the actor (e.g. 'owner', 'admin', 'member'). Auto-resolved if None.
+        request_id: Optional correlation ID for tracing.
+        result: Outcome of the action ('success', 'failure', 'denied').
+        details: Optional JSON-serializable dictionary with supplemental event metadata.
+
+    Returns:
+        bool: True if audit record was successfully persisted, False otherwise.
     """
     if not workspace_id:
         return False
@@ -75,6 +88,13 @@ def log_audit_event(
 def get_workspace_audit_logs(workspace_id: str, limit: int = 50) -> List[Dict[str, Any]]:
     """
     Fetches the recent audit events for a given workspace.
+
+    Args:
+        workspace_id: Unique UUID string identifier of the target workspace.
+        limit: Maximum number of audit records to retrieve (default: 50).
+
+    Returns:
+        List[Dict[str, Any]]: List of audit log records ordered from newest to oldest.
     """
     if not workspace_id:
         return []
@@ -105,3 +125,8 @@ def get_workspace_audit_logs(workspace_id: str, limit: int = 50) -> List[Dict[st
     except Exception as e:
         logger.error(f"Failed to fetch audit logs for workspace={workspace_id}: {e}")
         return []
+
+
+# Canonical function aliases
+record_audit_event = log_audit_event
+list_audit_events = get_workspace_audit_logs

@@ -644,11 +644,22 @@ resolve_context = resolve_workspace_context
 
 async def require_authorized(update: Update, context: Optional[ContextTypes.DEFAULT_TYPE] = None) -> bool:
     """
-    Ensures the user/chat has basic read-only or workspace authorization.
-    If unauthorized:
-    - If status is 'pending', notifies user that access request is pending approval.
-    - If status is 'rejected' or user is deactivated, notifies user that access is denied.
-    - If new user, creates an access request in database and sends approval request with inline buttons to the bot owner.
+    Ensures the user or chat has basic read-only or workspace authorization.
+
+    Evaluates authorization in multiple tiers:
+    1. Authorized user/chat: returns True immediately.
+    2. Unauthorized interaction:
+       - Increments 'auth_denials' metric.
+       - If access request is 'pending', notifies the user that approval is pending.
+       - If access request is 'rejected' or user is deactivated, notifies access denied.
+       - If first-time user, submits an access request and dispatches inline approval prompt to bot owner.
+
+    Args:
+        update: Incoming Telegram Update object containing user and message/callback details.
+        context: Optional Telegram bot callback context.
+
+    Returns:
+        bool: True if authorized to proceed with command/interaction, False if denied.
     """
     if is_authorized_user(update):
         return True
