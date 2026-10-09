@@ -2,6 +2,7 @@ import unittest
 import os
 import json
 import uuid
+import tempfile
 from decimal import Decimal
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -29,6 +30,7 @@ from config import DB_PATH
 
 class TestBackupRestorePrompt6(unittest.TestCase):
     def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
         setup_database()
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -36,6 +38,8 @@ class TestBackupRestorePrompt6(unittest.TestCase):
             self._initial_settings = {row["key"]: row["value"] for row in cursor.fetchall()}
 
     def tearDown(self):
+        if hasattr(self, "tmp_dir"):
+            self.tmp_dir.cleanup()
         if hasattr(self, "_initial_settings"):
             with get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -267,7 +271,7 @@ class TestBackupRestorePrompt6(unittest.TestCase):
     def test_repeated_restore_is_idempotent(self):
         """Re-importing the same backup is completely idempotent."""
         # Export current state
-        export_path = Path("data/test_idempotent.json")
+        export_path = Path(self.tmp_dir.name) / "test_idempotent.json"
         try:
             data = export_database_to_json(output_path=export_path)
             self.assertTrue(export_path.exists())
@@ -389,7 +393,7 @@ class TestBackupRestorePrompt6(unittest.TestCase):
             saved_tx_rows = [dict(zip(col_names, row)) for row in cursor.fetchall()]
 
         # Export backup with tombstone
-        export_path = Path("data/test_restart_tombstone.json")
+        export_path = Path(self.tmp_dir.name) / "test_restart_tombstone.json"
         try:
             backup_data = export_database_to_json(output_path=export_path)
             self.assertTrue(export_path.exists())
