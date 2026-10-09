@@ -1161,19 +1161,48 @@ async def backup_to_telegram(bot, chat_id: str = None, timeout: float = 20.0, fo
         ledger_status = "live" if live_count > 0 else "empty active ledger"
         caption = f"#PAYMENT_TRACKER_BACKUP_V2 ☁️ Auto-Backup Rev {rev} ({tx_count} records, {live_count} {ledger_status})"
 
+        is_group = str(target_chat).startswith('-')
         group_ws = None
-        if str(target_chat).startswith('-'):
+        if is_group:
             try:
                 from database.queries import get_workspace_by_chat_id
                 group_ws = get_workspace_by_chat_id(int(target_chat))
             except Exception:
                 group_ws = None
 
-        if group_ws and str(target_chat) != str(TELEGRAM_USER_ID):
-            ws_backup_path = DATA_DIR / f"payment_tracker_backup_{group_ws.id}.json"
-            ws_data = export_workspace_backup(group_ws.id, output_path=ws_backup_path)
-            upload_path = ws_backup_path if ws_data and ws_backup_path.exists() else BACKUP_JSON_PATH
-            upload_filename = f"payment_tracker_{group_ws.title.replace(' ', '_')}_backup.json"
+        if is_group:
+            # Group chats MUST receive strictly workspace-scoped JSON backups.
+            # Full database backup (all tenants) must NEVER be uploaded to group chats.
+            if not group_ws:
+                logger.warning(
+                    f"Refusing to upload full database backup to unmapped group chat {target_chat}. "
+                    "Full database backups are restricted to owner private DM."
+                )
+                if TELEGRAM_USER_ID and str(target_chat) != str(TELEGRAM_USER_ID):
+                    logger.info(f"Redirecting full database backup to owner private DM ({TELEGRAM_USER_ID}).")
+                    target_chat = TELEGRAM_USER_ID
+                    upload_path = BACKUP_JSON_PATH
+                    upload_filename = "payment_tracker_backup.json"
+                else:
+                    return False
+            else:
+                ws_backup_path = DATA_DIR / f"payment_tracker_backup_{group_ws.id}.json"
+                ws_data = export_workspace_backup(group_ws.id, output_path=ws_backup_path)
+                if not (ws_data and ws_backup_path.exists()):
+                    logger.warning(
+                        f"Failed to export workspace-scoped backup for group {target_chat} (workspace {group_ws.id}). "
+                        "Refusing full database fallback."
+                    )
+                    if TELEGRAM_USER_ID and str(target_chat) != str(TELEGRAM_USER_ID):
+                        logger.info(f"Redirecting full database backup to owner private DM ({TELEGRAM_USER_ID}).")
+                        target_chat = TELEGRAM_USER_ID
+                        upload_path = BACKUP_JSON_PATH
+                        upload_filename = "payment_tracker_backup.json"
+                    else:
+                        return False
+                else:
+                    upload_path = ws_backup_path
+                    upload_filename = f"payment_tracker_{group_ws.title.replace(' ', '_')}_backup.json"
         else:
             upload_path = BACKUP_JSON_PATH
             upload_filename = "payment_tracker_backup.json"

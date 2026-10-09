@@ -231,3 +231,50 @@ def test_restore_workspace_from_json_validates_invariants():
     assert res["success"] is False
     assert "invariants" in res["error"].lower()
 
+
+def test_backup_to_telegram_group_scoping(monkeypatch, tmp_path):
+    """Verify C-N20: Group chats receive strictly workspace-scoped JSON backups, full DB goes to owner DM only."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    from services.backup_service import backup_to_telegram
+
+    # Create workspace with chat_id = -10012345
+    group_chat_id = -10012345
+    ws = get_or_create_workspace(chat_id=str(group_chat_id), chat_type="group", title="Finance Team", creator_user_id=101)
+    t = Transaction(amount=250.0, transaction_type="SENT", person_name="Coffee", workspace_id=ws.id)
+    insert_transaction(t)
+
+    mock_bot = AsyncMock()
+    fake_msg = MagicMock()
+    fake_msg.message_id = 42
+    mock_bot.send_document.return_value = fake_msg
+
+    # Test 1: Mapped group chat receives workspace-scoped file
+    monkeypatch.setattr("services.backup_service.TELEGRAM_USER_ID", "999999")
+    ok = asyncio.run(backup_to_telegram(mock_bot, chat_id=str(group_chat_id), force=True))
+    assert ok is True
+
+    # Check calls to send_document
+    # First call must be to group_chat_id with workspace filename
+    call_args_list = mock_bot.send_document.call_args_list
+    group_call = [c for c in call_args_list if c.kwargs.get("chat_id") == str(group_chat_id)]
+    assert len(group_call) == 1
+    assert "Finance_Team_backup.json" in group_call[0].kwargs.get("filename")
+
+    # Second call (mirror) must be to TELEGRAM_USER_ID with full backup filename
+    owner_call = [c for c in call_args_list if c.kwargs.get("chat_id") == "999999"]
+    assert len(owner_call) == 1
+    assert owner_call[0].kwargs.get("filename") == "payment_tracker_backup.json"
+
+    # Test 2: Unmapped group chat (-10099999) must NOT receive full db backup; redirects to owner DM
+    mock_bot.reset_mock()
+    unmapped_group_id = -10099999
+    ok_unmapped = asyncio.run(backup_to_telegram(mock_bot, chat_id=str(unmapped_group_id), force=True))
+    assert ok_unmapped is True
+
+    unmapped_group_calls = [c for c in mock_bot.send_document.call_args_list if c.kwargs.get("chat_id") == str(unmapped_group_id)]
+    assert len(unmapped_group_calls) == 0  # Group never received document!
+    owner_redirect_calls = [c for c in mock_bot.send_document.call_args_list if c.kwargs.get("chat_id") == "999999"]
+    assert len(owner_redirect_calls) == 1
+
+
