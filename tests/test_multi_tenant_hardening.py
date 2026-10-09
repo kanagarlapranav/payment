@@ -17,7 +17,8 @@ from database.queries import (
     insert_transaction, get_all_transactions, update_workspace_member_role
 )
 from services.invite_service import (
-    create_workspace_invite, validate_and_redeem_invite, revoke_workspace_invite
+    create_workspace_invite, validate_and_redeem_invite, revoke_workspace_invite,
+    ban_workspace_user, is_user_banned_from_workspace
 )
 from services.audit_service import (
     log_audit_event, get_workspace_audit_logs
@@ -121,6 +122,38 @@ def test_invite_revocation(test_workspaces):
     success, msg, _, _ = validate_and_redeem_invite(raw_token, user_id=9993)
     assert success is False
     assert "revoked" in msg.lower()
+
+
+def test_invite_redemption_rejects_removed_suspended_or_banned_user(test_workspaces):
+    ws_a_id, _ = test_workspaces
+    raw_token, invite_id = create_workspace_invite(
+        workspace_id=ws_a_id,
+        creator_user_id=5001,
+        intended_role="member",
+        max_uses=10
+    )
+
+    # 1. Test user with status 'removed'
+    with get_db_connection() as conn:
+        conn.execute("""
+            INSERT INTO workspace_members (
+                workspace_id, telegram_user_id, username, display_name,
+                role, is_active, status, joined_at, updated_at
+            ) VALUES (?, 7771, 'bad_actor', 'Bad Actor', 'member', 0, 'removed', '2026-01-01T00:00:00', '2026-01-01T00:00:00')
+        """, (ws_a_id,))
+        conn.commit()
+
+    ok, err_msg, _, _ = validate_and_redeem_invite(raw_token, user_id=7771)
+    assert ok is False
+    assert "removed or suspended" in err_msg.lower()
+
+    # 2. Test user explicitly banned
+    ban_workspace_user(ws_a_id, 7772, banned_by=5001)
+    assert is_user_banned_from_workspace(ws_a_id, 7772) is True
+
+    ok2, err_msg2, _, _ = validate_and_redeem_invite(raw_token, user_id=7772)
+    assert ok2 is False
+    assert "banned" in err_msg2.lower()
 
 
 def test_workspace_audit_logging(test_workspaces):

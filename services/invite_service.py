@@ -159,6 +159,14 @@ def validate_and_redeem_invite(
             if uses_count >= max_uses:
                 return False, "❌ This invite has reached its maximum usage limit.", None, None
 
+            # Check if user is banned
+            cursor.execute("""
+                SELECT value FROM workspace_settings
+                WHERE workspace_id = ? AND key = ?
+            """, (ws_id, f"banned_user:{int(user_id)}"))
+            if cursor.fetchone():
+                return False, "⛔ You are banned from this workspace and cannot rejoin.", None, None
+
             # Check if user is already an active member before consuming
             cursor.execute("""
                 SELECT role, is_active, status FROM workspace_members
@@ -166,8 +174,11 @@ def validate_and_redeem_invite(
             """, (ws_id, int(user_id)))
             mem_row = cursor.fetchone()
 
-            if mem_row and mem_row['is_active'] and mem_row['status'] == 'active':
-                return False, f"ℹ️ You are already an active member of <b>{ws_title}</b>.", ws_id, mem_row['role']
+            if mem_row:
+                if mem_row['is_active'] and mem_row['status'] == 'active':
+                    return False, f"ℹ️ You are already an active member of <b>{ws_title}</b>.", ws_id, mem_row['role']
+                if mem_row['status'] in ('suspended', 'removed'):
+                    return False, "⛔ You were removed or suspended from this workspace and cannot rejoin via invite link.", None, None
 
             # Atomic conditional consumption of invite
             cursor.execute("""
@@ -206,3 +217,58 @@ def validate_and_redeem_invite(
     )
 
     return True, f"🎉 Successfully joined <b>{ws_title}</b> as <b>{role.title()}</b>!", ws_id, role
+
+
+def is_user_banned_from_workspace(workspace_id: str, telegram_user_id: int | str) -> bool:
+    """Checks if a user is banned or suspended/removed from a workspace."""
+    if not workspace_id or not telegram_user_id:
+        return False
+    uid = int(telegram_user_id)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT value FROM workspace_settings
+            WHERE workspace_id = ? AND key = ?
+        """, (str(workspace_id), f"banned_user:{uid}"))
+        if cursor.fetchone():
+            return True
+        cursor.execute("""
+            SELECT status FROM workspace_members
+            WHERE workspace_id = ? AND telegram_user_id = ?
+        """, (str(workspace_id), uid))
+        row = cursor.fetchone()
+        if row and row['status'] in ('suspended', 'removed'):
+            return True
+    return False
+
+
+def ban_workspace_user(workspace_id: str, telegram_user_id: int | str, banned_by: int | str | None = None) -> bool:
+    """Bans a user from a workspace, updating workspace_settings and member status."""
+    if not workspace_id or not telegram_user_id:
+        return False
+    uid = int(telegram_user_id)
+    now_utc = datetime.now(timezone.utc).isoformat()
+    with LEDGER_LOCK:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at)
+                VALUES (?, ?, '1', ?)
+            """, (str(workspace_id), f"banned_user:{uid}", now_utc))
+            cursor.execute("""
+                UPDATE workspace_members
+                SET is_active = 0, status = 'suspended', updated_at = ?
+                WHERE workspace_id = ? AND telegram_user_id = ?
+            """, (now_utc, str(workspace_id), uid))
+            conn.commit()
+
+    if banned_by:
+        from services.audit_service import log_audit_event
+        log_audit_event(
+            workspace_id=str(workspace_id),
+            actor_user_id=int(banned_by),
+            action="member_banned",
+            resource=f"user:{uid}",
+            details={"banned_user_id": uid}
+        )
+    return True
