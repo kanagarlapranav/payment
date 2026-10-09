@@ -568,11 +568,10 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                 self.wfile.write(auth_err.encode('utf-8'))
                 return
 
-            from database.queries import get_all_transactions_asc
+            from database.queries import iter_all_transactions_asc
             import csv
             import io
 
-            txs = get_all_transactions_asc(workspace_id=ws_id)
             output = io.StringIO()
             writer = csv.writer(output)
             writer.writerow(['ID', 'Date', 'Time', 'Type', 'Amount (INR)', 'Payee / Person', 'Category', 'Bank / App', 'Reference / UTR', 'Balance After'])
@@ -582,7 +581,7 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
                     return f"'{s}"
                 return s
 
-            for t in txs:
+            for t in iter_all_transactions_asc(workspace_id=ws_id):
                 writer.writerow([
                     t['id'],
                     t['transaction_date'],

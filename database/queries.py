@@ -1221,6 +1221,26 @@ def get_all_transactions_asc(workspace_id: str = None, user_id: int = None):
         )
         return [dict(row) for row in cursor.fetchall()]
 
+def iter_all_transactions_asc(workspace_id: str = None, user_id: int = None):
+    """Streams transactions in ascending order row-by-row using cursor fetchone iterator to prevent high memory usage."""
+    ws_filter, params = _resolve_query_workspace_filter(workspace_id, user_id)
+    conditions = [ws_filter, "deleted_at IS NULL"]
+    u_sql, u_params = _build_user_filter(user_id)
+    if u_sql:
+        conditions.append(u_sql)
+        params.extend(u_params)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT * FROM transactions WHERE {' AND '.join(conditions)} ORDER BY occurred_at ASC, created_at ASC, id ASC",
+            params
+        )
+        while True:
+            row = cursor.fetchone()
+            if row is None:
+                break
+            yield dict(row)
+
 def search_transactions(
     query_text: str = "",
     target_date = None,

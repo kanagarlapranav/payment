@@ -58,15 +58,18 @@ def export_database_to_json(output_path: Path = None) -> dict:
                         return {}
 
                     cursor.execute("SELECT * FROM transactions ORDER BY occurred_at ASC, created_at ASC, id ASC")
-                    tx_rows = [dict(row) for row in cursor.fetchall()]
-                    
-                    # Format dates/timestamps for JSON serialization
-                    for tx in tx_rows:
+                    tx_rows = []
+                    while True:
+                        row = cursor.fetchone()
+                        if row is None:
+                            break
+                        tx = dict(row)
                         for k, v in tx.items():
                             if isinstance(v, (datetime, )):
                                 tx[k] = v.isoformat()
                             elif v is not None and not isinstance(v, (int, float, str, bool)):
                                 tx[k] = str(v)
+                        tx_rows.append(tx)
                                 
                     # Fetch settings (do NOT increment revision on export)
                     cursor.execute("SELECT key, value FROM settings")
@@ -1484,7 +1487,12 @@ def export_workspace_to_json(workspace_id: str, output_path: Path = None, actor_
 
                     # Workspace transactions
                     cursor.execute("SELECT * FROM transactions WHERE workspace_id = ? ORDER BY occurred_at ASC, id ASC", (str(workspace_id),))
-                    transactions = [dict(r) for r in cursor.fetchall()]
+                    transactions = []
+                    while True:
+                        row = cursor.fetchone()
+                        if row is None:
+                            break
+                        transactions.append(dict(row))
 
                     # Custom menu items
                     cursor.execute("SELECT name, price, category, is_veg FROM custom_menu_items WHERE workspace_id = ?", (str(workspace_id),))
