@@ -27,6 +27,7 @@ from typing import Optional, Tuple, Dict, Any
 
 from config import logger
 from database.db import get_db_connection, LEDGER_LOCK
+from utils.dates import utc_now_iso
 
 # In-memory fast cache
 _AUTH_CODES: Dict[str, Dict[str, Any]] = {}
@@ -275,7 +276,7 @@ def exchange_code_for_session(code: str, client_ip: str = "", is_https: bool = F
                     INSERT INTO dashboard_sessions (
                         session_id_hash, workspace_id, user_id, role, csrf_token, expires_at, created_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (session_h, str(workspace_id or ""), int(user_id or 0), role, csrf_token, expires_at, now))
+                """, (session_h, str(workspace_id or ""), int(user_id or 0), role, csrf_token, expires_at, utc_now_iso()))
                 conn.commit()
     except Exception as e:
         logger.warning(f"Error persisting session to DB: {e}")
@@ -427,7 +428,7 @@ def revoke_session(session_id: Optional[str]) -> bool:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE dashboard_sessions SET revoked_at = ? WHERE session_id_hash = ?
-                """, (time.time(), session_h))
+                """, (utc_now_iso(), session_h))
                 conn.commit()
         return True
     except Exception as e:

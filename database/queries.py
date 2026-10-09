@@ -925,6 +925,9 @@ def insert_transaction_with_balance(t: Transaction) -> int:
         now_utc = utc_now_iso()
         created_at = getattr(t, 'created_at', None) or now_utc
         if isinstance(created_at, datetime):
+            if created_at.tzinfo is None:
+                from datetime import timezone
+                created_at = created_at.replace(tzinfo=timezone.utc)
             created_at = created_at.isoformat()
         updated_at = now_utc
 
