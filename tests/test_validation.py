@@ -66,6 +66,7 @@ class TestValidationMatrix(unittest.TestCase):
             ("500", Decimal("500.00")),
             (500, Decimal("500.00")),
             (500.25, Decimal("500.25")),
+            ("1.000,00", Decimal("1000.00")),
         ]
         for raw_str, expected in formatted_cases:
             with self.subTest(raw=raw_str):

@@ -37,10 +37,21 @@ def parse_decimal_amount(value: Any, *, allow_zero: bool = False, allow_negative
         clean_str = str(value).strip()
     elif isinstance(value, str):
         clean_str = value.strip()
-        # Strip common currency signs, symbols, commas, and whitespace
-        for symbol in ["₹", "rs.", "rs", "inr", ","]:
-            clean_str = re.sub(re.escape(symbol), "", clean_str, flags=re.IGNORECASE)
-        clean_str = clean_str.strip()
+        temp_no_sym = clean_str
+        for sym in ["₹", "rs.", "rs", "inr", "€", "$"]:
+            temp_no_sym = re.sub(re.escape(sym), "", temp_no_sym, flags=re.IGNORECASE)
+        temp_no_sym = temp_no_sym.strip()
+
+        # Handle European amount format (e.g. 1.000,00) via normalize_amount_string
+        if re.search(r'^\d{1,3}(?:\.\d{3})+,\d{2}$', temp_no_sym):
+            from utils.currency import normalize_amount_string
+            norm = normalize_amount_string(clean_str)
+            clean_str = f"{norm:.2f}"
+        else:
+            # Strip common currency signs, symbols, commas, and whitespace
+            for symbol in ["₹", "rs.", "rs", "inr", ","]:
+                clean_str = re.sub(re.escape(symbol), "", clean_str, flags=re.IGNORECASE)
+            clean_str = clean_str.strip()
     else:
         raise TypeError(f"Invalid amount type: {type(value).__name__}")
 
