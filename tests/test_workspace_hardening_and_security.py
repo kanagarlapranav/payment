@@ -359,3 +359,48 @@ def test_dashboard_action_authorization_and_csrf():
         csrf_token_header="valid_csrf_token_999", is_mutation=True
     )
     assert ok_valid is True
+
+
+def test_privileged_buttons_omitted_for_unauthorized_roles():
+    """Verify that keyboards omit action buttons the user role cannot execute (C-N14)."""
+    from bot.keyboards import (
+        get_model_selection_keyboard,
+        get_recurring_menu_keyboard,
+        get_recurring_detail_keyboard,
+        get_menu_view_keyboard,
+        get_transaction_detail_keyboard
+    )
+
+    # 1. Gemini model keyboard: viewers do not see model selection or refresh
+    kb_gemini_viewer = get_model_selection_keyboard(role="viewer")
+    cb_data_viewer = [btn.callback_data for row in kb_gemini_viewer.inline_keyboard for btn in row]
+    assert not any(c.startswith("set_model") for c in cb_data_viewer)
+    assert "refresh_gemini" not in cb_data_viewer
+
+    kb_gemini_admin = get_model_selection_keyboard(role="admin")
+    cb_data_admin = [btn.callback_data for row in kb_gemini_admin.inline_keyboard for btn in row]
+    assert any(c.startswith("set_model") for c in cb_data_admin)
+    assert "refresh_gemini" in cb_data_admin
+
+    # 2. Recurring menu keyboard: viewers do not see pay/skip or add buttons
+    upcoming_sample = [{"id": 1, "payee_name": "Rent", "amount": 1000}]
+    kb_rec_viewer = get_recurring_menu_keyboard(upcoming_items=upcoming_sample, role="viewer")
+    cb_rec_viewer = [btn.callback_data for row in kb_rec_viewer.inline_keyboard for btn in row]
+    assert not any(c.startswith("rec_paid") for c in cb_rec_viewer)
+    assert not any(c.startswith("rec_skip") for c in cb_rec_viewer)
+    assert "nav:rec_add" not in cb_rec_viewer
+
+    # 3. Cafeteria menu keyboard: viewers do not see add/delete or edit last
+    kb_menu_viewer = get_menu_view_keyboard(role="viewer")
+    cb_menu_viewer = [btn.callback_data for row in kb_menu_viewer.inline_keyboard for btn in row]
+    assert "cafe_menu_add_prompt" not in cb_menu_viewer
+    assert "cafe_menu_del_prompt" not in cb_menu_viewer
+    assert "cafe_edit_last" not in cb_menu_viewer
+
+    # 4. Transaction detail keyboard: viewers do not see edit, delete, or duplicate
+    kb_tx_viewer = get_transaction_detail_keyboard(101, role="viewer")
+    cb_tx_viewer = [btn.callback_data for row in kb_tx_viewer.inline_keyboard for btn in row]
+    assert not any(c.startswith("edit_tx") for c in cb_tx_viewer)
+    assert not any(c.startswith("delete_tx") for c in cb_tx_viewer)
+    assert not any(c.startswith("dup_tx") for c in cb_tx_viewer)
+    assert any(c.startswith("nav:history") for c in cb_tx_viewer)

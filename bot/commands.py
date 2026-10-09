@@ -117,7 +117,7 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
     lines.append("━━━━━━━━━━━━━━━━━━━━\n<i>💡 Tap a transaction # button below to view details, edit, or delete:</i>")
     return "\n".join(lines), get_history_paginated_keyboard(page, total_pages, filter_type, tx_rows=items, sort_by=sort_by)
 
-def render_transaction_detail(tx_id: int, workspace_id: str = None):
+def render_transaction_detail(tx_id: int, workspace_id: str = None, role: str = "member"):
     """Renders the detailed view of a single transaction."""
     from database.queries import get_transaction_by_id, get_default_workspace_id
     from bot.keyboards import get_transaction_detail_keyboard
@@ -165,7 +165,7 @@ def render_transaction_detail(tx_id: int, workspace_id: str = None):
         f"• <b>UID:</b> <code>{html.escape(uid_val[:16])}...</code>\n"
         "━━━━━━━━━━━━━━━━━━━━"
     )
-    return text, get_transaction_detail_keyboard(tx_id)
+    return text, get_transaction_detail_keyboard(tx_id, role=role)
 
 def render_backup_status_text() -> str:
     """Renders the cloud & local backup status overview."""
@@ -412,7 +412,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.keyboards import get_help_keyboard
     await update.message.reply_text(help_text, reply_markup=get_help_keyboard(), parse_mode='HTML')
 
-async def render_gemini_status_payload(force_refresh: bool = False) -> tuple:
+async def render_gemini_status_payload(force_refresh: bool = False, role: str = "admin") -> tuple:
     """Computes and formats the Gemini AI engine status, pool status, and selection keyboard."""
     from ocr.gemini_vision import check_gemini_api_status_async
     from bot.keyboards import get_model_selection_keyboard
@@ -511,7 +511,7 @@ async def render_gemini_status_payload(force_refresh: bool = False) -> tuple:
             "🔄 <b>Fallback Engine:</b> 🟢 <b>RapidOCR (Active)</b>"
         )
 
-    keyboard = get_model_selection_keyboard(pref_setting)
+    keyboard = get_model_selection_keyboard(pref_setting, role=role)
     return card, keyboard
 
 async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1572,7 +1572,8 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from services.cafeteria_service import format_full_menu
     from bot.keyboards import get_menu_view_keyboard
     menu_text = format_full_menu(workspace_id=ws_id)
-    await update.message.reply_text(menu_text, reply_markup=get_menu_view_keyboard(), parse_mode='HTML')
+    caller_role = ctx.role if ctx else 'viewer'
+    await update.message.reply_text(menu_text, reply_markup=get_menu_view_keyboard(role=caller_role), parse_mode='HTML')
 
 async def cafestats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays monthly spending insights and top ordered veg items at the cafeteria."""
@@ -2176,7 +2177,7 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     from bot.auth import is_owner
     markup = None
-    if ctx.role in ('owner', 'admin') or is_owner(update):
+    if ctx.role == 'owner' or is_owner(update):
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("⚙️ Manage / Remove Members", callback_data="perm_list")]
         ])

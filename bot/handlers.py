@@ -991,12 +991,17 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 from bot.keyboards import get_recurring_menu_keyboard
                 upcoming = await asyncio.to_thread(get_upcoming_recurring, 30, workspace_id=ws_id)
                 text = render_recurring_overview_text(workspace_id=ws_id)
-                await query.edit_message_text(text, reply_markup=get_recurring_menu_keyboard(upcoming_items=upcoming), parse_mode='HTML')
+                caller_role = ws_ctx.role if ws_ctx else 'viewer'
+                await query.edit_message_text(text, reply_markup=get_recurring_menu_keyboard(upcoming_items=upcoming, role=caller_role), parse_mode='HTML')
             elif nav_target == "rec_all":
                 from bot.commands import render_all_recurring_text
                 text = render_all_recurring_text(workspace_id=ws_id)
                 await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
             elif nav_target == "rec_add":
+                caller_role = ws_ctx.role if ws_ctx else 'viewer'
+                if caller_role not in ('admin', 'owner'):
+                    await query.answer("⛔ Access Restricted: Admin role required to add recurring payments.", show_alert=True)
+                    return
                 context.user_data['action'] = 'waiting_rec_add'
                 text = (
                     "➕ <b>Add Recurring Payment</b>\n"
@@ -1064,7 +1069,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.edit_message_text(text, reply_markup=get_cafestats_keyboard(), parse_mode='HTML')
             elif nav_target in ("gemini", "gemini_status"):
                 from bot.commands import render_gemini_status_payload
-                card, keyboard = await render_gemini_status_payload(force_refresh=False)
+                caller_role = ws_ctx.role if ws_ctx else 'viewer'
+                card, keyboard = await render_gemini_status_payload(force_refresh=False, role=caller_role)
                 await query.edit_message_text(card, reply_markup=keyboard, parse_mode='HTML')
         except Exception as nav_err:
             if "Message is not modified" not in str(nav_err):
@@ -1278,7 +1284,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     # --- 1. Transaction Detail, Duplicate & Backup Actions ---
     elif action == "tx_view":
         tx_id = int(parts[1])
-        text, markup = render_transaction_detail(tx_id, workspace_id=ws_id)
+        caller_role = ws_ctx.role if ws_ctx else 'viewer'
+        text, markup = render_transaction_detail(tx_id, workspace_id=ws_id, role=caller_role)
         await query.edit_message_text(text, reply_markup=markup, parse_mode='HTML')
         return
 
@@ -3581,13 +3588,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from bot.keyboards import get_recurring_menu_keyboard
         rec_id = add_recurring_payment(payee, amt, frequency=freq, workspace_id=ws_id)
         upcoming = get_upcoming_recurring(30, workspace_id=ws_id)
+        caller_role = ws_ctx.role if ws_ctx else 'viewer'
         await update.message.reply_text(
             f"✅ <b>Recurring Payment #{rec_id} Created!</b>\n"
             f"• <b>Payee:</b> {html.escape(payee)}\n"
             f"• <b>Amount:</b> {format_currency(amt)}\n"
             f"• <b>Frequency:</b> {freq.capitalize()}\n\n"
             f"{render_recurring_overview_text(workspace_id=ws_id)}",
-            reply_markup=get_recurring_menu_keyboard(upcoming_items=upcoming),
+            reply_markup=get_recurring_menu_keyboard(upcoming_items=upcoming, role=caller_role),
             parse_mode='HTML'
         )
         return

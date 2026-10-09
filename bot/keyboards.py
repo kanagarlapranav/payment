@@ -63,10 +63,11 @@ def get_more_menu_keyboard():
 # Backward-compatibility alias
 get_settings_menu_keyboard = get_more_menu_keyboard
 
-def get_recurring_menu_keyboard(upcoming_items: list = None):
+def get_recurring_menu_keyboard(upcoming_items: list = None, role: str = "admin"):
     """Returns recurring payments overview keyboard with quick pay/skip buttons."""
     keyboard = []
-    if upcoming_items:
+    is_admin = role in ("admin", "owner")
+    if is_admin and upcoming_items:
         for it in upcoming_items[:4]:
             rec_id = it['id']
             payee = (it.get('payee_name') or 'Due')[:12]
@@ -78,32 +79,37 @@ def get_recurring_menu_keyboard(upcoming_items: list = None):
                 InlineKeyboardButton(f"✅ Pay #{rec_id} {payee} (₹{amt})", callback_data=f"rec_paid:{rec_id}"),
                 InlineKeyboardButton(f"⏭️ Skip", callback_data=f"rec_skip:{rec_id}")
             ])
-    keyboard.append([
-        InlineKeyboardButton("➕ Add Recurring", callback_data="nav:rec_add"),
-        InlineKeyboardButton("📋 All Recurring", callback_data="nav:rec_all")
-    ])
+    if is_admin:
+        keyboard.append([
+            InlineKeyboardButton("➕ Add Recurring", callback_data="nav:rec_add"),
+            InlineKeyboardButton("📋 All Recurring", callback_data="nav:rec_all")
+        ])
+    else:
+        keyboard.append([
+            InlineKeyboardButton("📋 All Recurring", callback_data="nav:rec_all")
+        ])
     keyboard.append([
         InlineKeyboardButton("⬅️ Back", callback_data="nav:more")
     ])
     return InlineKeyboardMarkup(keyboard)
 
-def get_recurring_detail_keyboard(rec_id: int, status: str = "ACTIVE"):
+def get_recurring_detail_keyboard(rec_id: int, status: str = "ACTIVE", role: str = "admin"):
     """Returns action keyboard for a single recurring payment."""
-    toggle_text = "⏸️ Pause" if status == "ACTIVE" else "▶️ Resume"
-    toggle_cb = f"rec_pause:{rec_id}" if status == "ACTIVE" else f"rec_resume:{rec_id}"
-    keyboard = [
-        [
+    keyboard = []
+    if role in ("admin", "owner"):
+        toggle_text = "⏸️ Pause" if status == "ACTIVE" else "▶️ Resume"
+        toggle_cb = f"rec_pause:{rec_id}" if status == "ACTIVE" else f"rec_resume:{rec_id}"
+        keyboard.append([
             InlineKeyboardButton("✅ Mark Paid", callback_data=f"rec_paid:{rec_id}"),
             InlineKeyboardButton("⏭️ Skip Cycle", callback_data=f"rec_skip:{rec_id}")
-        ],
-        [
+        ])
+        keyboard.append([
             InlineKeyboardButton(toggle_text, callback_data=toggle_cb),
             InlineKeyboardButton("🗑️ Delete", callback_data=f"rec_del:{rec_id}")
-        ],
-        [
-            InlineKeyboardButton("⬅️ Back", callback_data="nav:recurring")
-        ]
-    ]
+        ])
+    keyboard.append([
+        InlineKeyboardButton("⬅️ Back", callback_data="nav:recurring")
+    ])
     return InlineKeyboardMarkup(keyboard)
 
 def get_monthly_closing_keyboard(year: int, month: int, is_closed: bool = False, role: str = "admin"):
@@ -146,18 +152,22 @@ def get_monthly_closing_keyboard(year: int, month: int, is_closed: bool = False,
     ])
     return InlineKeyboardMarkup(keyboard)
 
-def get_transaction_detail_keyboard(tx_id: int):
+def get_transaction_detail_keyboard(tx_id: int, role: str = "member"):
     """Returns the Transaction Detail keyboard with Edit, Delete, Duplicate, and Back."""
-    keyboard = [
-        [
+    keyboard = []
+    if role in ("member", "admin", "owner"):
+        keyboard.append([
             InlineKeyboardButton("✏️ Edit", callback_data=f"edit_tx:{tx_id}"),
             InlineKeyboardButton("🗑️ Delete", callback_data=f"delete_tx:{tx_id}")
-        ],
-        [
+        ])
+        keyboard.append([
             InlineKeyboardButton("📋 Duplicate", callback_data=f"dup_tx:{tx_id}"),
             InlineKeyboardButton("⬅️ Back", callback_data="nav:history:1:ALL")
-        ]
-    ]
+        ])
+    else:
+        keyboard.append([
+            InlineKeyboardButton("⬅️ Back", callback_data="nav:history:1:ALL")
+        ])
     return InlineKeyboardMarkup(keyboard)
 
 def get_backup_status_keyboard():
@@ -613,23 +623,26 @@ def get_cafeteria_tagged_keyboard(tx_id: int):
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_menu_view_keyboard():
+def get_menu_view_keyboard(role: str = "admin"):
     """Inline keyboard for /menu display."""
-    keyboard = [
-        [
+    keyboard = []
+    if role in ("admin", "owner", "member"):
+        keyboard.append([
             InlineKeyboardButton("➕ Add Menu Item", callback_data="cafe_menu_add_prompt"),
             InlineKeyboardButton("🗑️ Manage / Delete Item", callback_data="cafe_menu_del_prompt")
-        ],
-        [
-            InlineKeyboardButton("📊 Cafeteria Analytics", callback_data="cafe_stats"),
-            InlineKeyboardButton("✏️ Edit Last Order", callback_data="cafe_edit_last")
-        ]
-    ]
+        ])
+    row2 = [InlineKeyboardButton("📊 Cafeteria Analytics", callback_data="cafe_stats")]
+    if role in ("admin", "owner"):
+        row2.append(InlineKeyboardButton("✏️ Edit Last Order", callback_data="cafe_edit_last"))
+    keyboard.append(row2)
     return InlineKeyboardMarkup(keyboard)
 
 
-def get_model_selection_keyboard(current_model: str = "AUTO") -> InlineKeyboardMarkup:
+def get_model_selection_keyboard(current_model: str = "AUTO", role: str = "admin") -> InlineKeyboardMarkup:
     """Returns an inline keyboard allowing the user to select the preferred Gemini model or Auto-Failover."""
+    if role not in ("admin", "owner"):
+        return InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home Menu", callback_data="nav:home")]])
+
     curr = (current_model or "AUTO").strip()
 
     auto_label = "✅ ⚡ Auto-Failover (3.8 ➔ 3.7 ➔ 3.6 ➔ 3.5)" if curr == "AUTO" else "⚡ Auto-Failover (3.8 ➔ 3.7 ➔ 3.6 ➔ 3.5)"
