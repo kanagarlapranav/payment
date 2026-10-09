@@ -16,6 +16,9 @@ from utils.validation import validate_transaction_type
 
 class TestTransferFeature(unittest.TestCase):
 
+    def setUp(self):
+        recalculate_all_balances()
+
     def test_validate_transaction_type(self):
         self.assertEqual(validate_transaction_type("TRANSFER"), "TRANSFER")
         self.assertEqual(validate_transaction_type("transfer"), "TRANSFER")
