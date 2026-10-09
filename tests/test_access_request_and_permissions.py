@@ -23,6 +23,8 @@ def setup_test_db(tmp_path, monkeypatch):
     """Sets up a clean temporary database for tests."""
     db_file = tmp_path / "test_access.sqlite3"
     monkeypatch.setattr("config.DB_PATH", db_file)
+    monkeypatch.setattr("database.db.DB_PATH", db_file)
+    monkeypatch.setattr("services.backup_service.DB_PATH", db_file)
     monkeypatch.setattr("config.TELEGRAM_USER_ID", 8379948573)
     monkeypatch.setattr("config.TELEGRAM_GROUP_ID", -1009999999999)
     monkeypatch.setattr("config.ALLOW_PUBLIC_WORKSPACES", False)
