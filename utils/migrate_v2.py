@@ -20,20 +20,20 @@ DB_PATH = DATA_DIR / "database.sqlite3"
 RECOVERED_PATH = DATA_DIR / "recovered_16_transactions.json"
 ARCHIVE_DIR = DATA_DIR / "archive"
 
-def run_migration():
-    print(f"Opening database at {DB_PATH}...")
-    if DB_PATH.exists():
+def run_migration(db_path: Path = DB_PATH, recovered_path: Path = RECOVERED_PATH):
+    print(f"Opening database at {db_path}...")
+    if db_path.exists():
         try:
-            chk_conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
+            chk_conn = sqlite3.connect(str(db_path), timeout=30.0)
             chk_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             chk_conn.close()
         except Exception as e:
             print(f"Warning: WAL checkpoint before backup returned: {e}")
-        backup_file = DB_PATH.with_suffix(".sqlite3.backup-v2")
-        shutil.copy2(DB_PATH, backup_file)
+        backup_file = db_path.with_suffix(".sqlite3.backup-v2")
+        shutil.copy2(db_path, backup_file)
         print(f"Pre-migration backup created: {backup_file}")
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
@@ -67,13 +67,14 @@ def run_migration():
             WHERE reference_number IS NOT NULL AND reference_number != '' AND deleted_at IS NULL
         """)
 
-        # 4. Add revision setting
+        # 4. Add revision setting (guard against missing settings table)
+        cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
         cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('backup_revision', '1')")
 
         # 5. Restore categories from recovered_16_transactions.json
-        if RECOVERED_PATH.exists():
-            print(f"Found {RECOVERED_PATH}. Inspecting categories to restore...")
-            with open(RECOVERED_PATH, "r", encoding="utf-8") as f:
+        if recovered_path.exists():
+            print(f"Found {recovered_path}. Inspecting categories to restore...")
+            with open(recovered_path, "r", encoding="utf-8") as f:
                 rec_data = json.load(f)
             rec_txs = rec_data.get("transactions", [])
 
@@ -84,17 +85,20 @@ def run_migration():
             updated_categories = 0
             for l in live_txs:
                 for r in rec_txs:
-                    # Match on reference number if present, or amount + person_name
+                    # Match strictly on exact uid or exact non-empty reference number
+                    uid_match = (
+                        l.get("uid") and
+                        r.get("uid") and
+                        str(l["uid"]).strip() != "" and
+                        str(l["uid"]).strip() == str(r["uid"]).strip()
+                    )
                     ref_match = (
                         l.get("reference_number") and
                         r.get("reference_number") and
-                        l["reference_number"] == r["reference_number"]
+                        str(l["reference_number"]).strip() != "" and
+                        str(l["reference_number"]).strip() == str(r["reference_number"]).strip()
                     )
-                    person_match = (
-                        abs(float(l.get("amount", 0)) - float(r.get("amount", 0))) < 0.01 and
-                        (l.get("person_name") or "").strip().lower() == (r.get("person_name") or "").strip().lower()
-                    )
-                    if ref_match or person_match:
+                    if uid_match or ref_match:
                         rec_cat = r.get("category")
                         if rec_cat and rec_cat != "General" and l.get("category") == "General":
                             cursor.execute(
@@ -112,8 +116,14 @@ def run_migration():
         # Verify counts
         cursor.execute("SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL")
         live_count = cursor.fetchone()[0]
-        cursor.execute("SELECT value FROM settings WHERE key = 'current_balance'")
-        curr_bal = cursor.fetchone()[0]
+        curr_bal = "N/A"
+        try:
+            cursor.execute("SELECT value FROM settings WHERE key = 'current_balance'")
+            row = cursor.fetchone()
+            if row:
+                curr_bal = row[0]
+        except sqlite3.OperationalError:
+            pass
         print(f"Live transactions: {live_count}, Current balance setting: Rs {curr_bal}")
     except Exception:
         conn.rollback()
@@ -123,11 +133,11 @@ def run_migration():
         conn.close()
 
     # 6. Archive recovered_16_transactions.json
-    if RECOVERED_PATH.exists():
+    if recovered_path.exists() and recovered_path == RECOVERED_PATH:
         ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
         dest = ARCHIVE_DIR / "recovered_16_transactions.json"
-        shutil.move(str(RECOVERED_PATH), str(dest))
-        print(f"Archived {RECOVERED_PATH} -> {dest}")
+        shutil.move(str(recovered_path), str(dest))
+        print(f"Archived {recovered_path} -> {dest}")
 
     print("Migration v2 completed successfully.")
 
