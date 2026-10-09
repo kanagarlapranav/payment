@@ -11,6 +11,7 @@ Migration script for Payment Tracker v5 (Comprehensive Multi-Tenant Hardening):
 9. Upgrades schema_version to 5.
 """
 
+import os
 import sys
 import shutil
 import sqlite3
