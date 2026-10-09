@@ -164,20 +164,23 @@ def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea"
             return False, f"Database error: {e}"
 
 
-def delete_custom_menu_item(name: str, workspace_id: Optional[str] = None) -> Tuple[bool, str]:
-    """Deletes a custom item from the menu under LEDGER_LOCK."""
+def delete_custom_menu_item(name: str, workspace_id: str) -> Tuple[bool, str]:
+    """Deletes a custom item from the menu under LEDGER_LOCK strictly scoped to workspace."""
+    if not workspace_id or not str(workspace_id).strip():
+        return False, "Error: workspace_id is required."
     from database.db import LEDGER_LOCK, get_db_connection
+    from database.queries import get_default_workspace_id
+    default_ws = get_default_workspace_id()
+    ws_id = str(workspace_id).strip()
+    ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
     with LEDGER_LOCK:
         try:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
-                if workspace_id:
-                    cursor.execute(
-                        "DELETE FROM custom_menu_items WHERE lower(name) = lower(?) AND (workspace_id = ? OR workspace_id IS NULL)",
-                        (name.strip(), workspace_id)
-                    )
-                else:
-                    cursor.execute("DELETE FROM custom_menu_items WHERE lower(name) = lower(?)", (name.strip(),))
+                cursor.execute(
+                    f"DELETE FROM custom_menu_items WHERE lower(name) = lower(?) AND {ws_filter}",
+                    (name.strip(), ws_id)
+                )
                 if cursor.rowcount > 0:
                     from database.queries import increment_revision_and_mark_dirty
                     increment_revision_and_mark_dirty(conn)

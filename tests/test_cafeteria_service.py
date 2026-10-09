@@ -77,6 +77,9 @@ class TestCafeteriaService(unittest.TestCase):
         
     def test_custom_menu_item_flow(self):
         from services.cafeteria_service import add_custom_menu_item, delete_custom_menu_item, get_all_menu_items
+        from database.queries import get_default_workspace_id
+        default_ws = get_default_workspace_id()
+
         # Non-veg rejection
         succ, msg = add_custom_menu_item("Chicken Biryani", 100, "Rice")
         self.assertFalse(succ)
@@ -89,8 +92,12 @@ class TestCafeteriaService(unittest.TestCase):
         all_items = get_all_menu_items()
         self.assertTrue(any(i.name == "Special Paneer Roll" for i in all_items))
 
+        # Delete requires workspace_id
+        succ_empty, msg_empty = delete_custom_menu_item("Special Paneer Roll", "")
+        self.assertFalse(succ_empty)
+
         # Delete custom item
-        succ_del, msg_del = delete_custom_menu_item("Special Paneer Roll")
+        succ_del, msg_del = delete_custom_menu_item("Special Paneer Roll", workspace_id=default_ws)
         self.assertTrue(succ_del)
 
         all_items_after = get_all_menu_items()
