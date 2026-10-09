@@ -1005,8 +1005,36 @@ class TestUXAndNavigation(unittest.TestCase):
 
 
 
+    def test_callback_badrequest_logs_query_data_at_warning_level(self):
+        """Verify handle_callback_query catches BadRequest and logs query.data at WARNING level."""
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from telegram.error import BadRequest
+        from bot.handlers import handle_callback_query
+        import asyncio
+
+        context = MagicMock()
+        query = MagicMock()
+        query.data = "nav_home"
+        query.answer = AsyncMock()
+
+        update = MagicMock()
+        update.callback_query = query
+        update.effective_user.id = 123456
+        update.effective_chat.id = 123456
+
+        with patch('bot.handlers._dispatch_callback_query', AsyncMock(side_effect=BadRequest("Message is not modified"))), \
+             patch('bot.handlers.logger.warning') as mock_log_warn:
+            asyncio.run(handle_callback_query(update, context))
+            mock_log_warn.assert_called()
+            # Assert query.data is in the logged message
+            log_args = mock_log_warn.call_args[0]
+            log_formatted = log_args[0] % log_args[1:] if len(log_args) > 1 else log_args[0]
+            self.assertIn("nav_home", log_formatted)
+            self.assertIn("BadRequest", log_formatted)
+
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

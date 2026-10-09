@@ -1,4 +1,5 @@
 from telegram import Update
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 import os
 import uuid
@@ -665,8 +666,8 @@ CALLBACK_PARAM_SPECS = {
 }
 
 
-async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles button presses from inline keyboards with central authorization policy."""
+async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Internal dispatcher for button presses from inline keyboards with central authorization policy."""
     query = update.callback_query
     if not query or not query.data:
         return
@@ -2301,8 +2302,25 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
 
-
-
+async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles button presses from inline keyboards with central authorization policy and logs errors."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    try:
+        await _dispatch_callback_query(update, context)
+    except BadRequest as e:
+        logger.warning("BadRequest handling callback query data '%s': %s", query.data, e)
+        try:
+            await query.answer("❌ Request could not be processed.", show_alert=True)
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning("Error handling callback query data '%s': %s", query.data, e, exc_info=True)
+        try:
+            await query.answer("❌ An error occurred.", show_alert=True)
+        except Exception:
+            pass
 def format_success_message(t) -> str:
     """Formats transaction confirmation message in clean, robust HTML with category badge & budget alerts."""
     icon = "🔴 Payment Sent" if t.transaction_type == 'SENT' else "🟢 Payment Received"
