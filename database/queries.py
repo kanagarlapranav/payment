@@ -254,8 +254,8 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                     if top_tx and top_tx['workspace_id']:
                         new_grp_id = str(top_tx['workspace_id'])
                     else:
-                        from config import DEFAULT_FALLBACK_WORKSPACE_ID
-                        new_grp_id = DEFAULT_FALLBACK_WORKSPACE_ID or str(uuid.uuid4())
+                        import config
+                        new_grp_id = getattr(config, 'DEFAULT_FALLBACK_WORKSPACE_ID', '').strip() or str(uuid.uuid4())
 
                 c_title = (current_chat_title or "Payment").strip()
                 if not c_title.endswith("(Group)"):

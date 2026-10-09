@@ -80,6 +80,7 @@ MEMBERSHIP_MODE = os.getenv('MEMBERSHIP_MODE', 'admin_approval').strip().lower()
 DEFAULT_MEMBER_ROLE = os.getenv('DEFAULT_MEMBER_ROLE', 'member').strip().lower()
 INVITE_EXPIRY_MINUTES = int(os.getenv('INVITE_EXPIRY_MINUTES', '60'))
 ACCESS_REQUEST_EXPIRY_HOURS = int(os.getenv('ACCESS_REQUEST_EXPIRY_HOURS', '72'))
+DEFAULT_FALLBACK_WORKSPACE_ID = os.getenv('DEFAULT_FALLBACK_WORKSPACE_ID', '').strip()
 
 # Telegram Configuration
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
