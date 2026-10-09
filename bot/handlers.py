@@ -1392,10 +1392,30 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
     elif action == "set_pcat":
         pending_id = parts[1]
         new_cat = parts[2]
+        from services.category_service import CATEGORIES
+        allowed_cats = set(CATEGORIES.keys()) | {
+            "Transport", "Healthcare", "Salary", "General", "Income", "Investment", "Personal"
+        }
+        if new_cat not in allowed_cats:
+            await query.answer("❌ Invalid category.", show_alert=True)
+            return
+
         transaction = fetch_pending_transaction(pending_id, workspace_id=ws_id)
         if not transaction:
             msg_text = (query.message.text if query.message else "") or (query.message.caption if query.message else "")
             transaction = reconstruct_transaction_from_card(msg_text)
+
+        creator_uid = getattr(transaction, 'telegram_user_id', None) if transaction else None
+        clicker_uid = query.from_user.id if query.from_user else None
+        if creator_uid and clicker_uid and int(creator_uid) != int(clicker_uid):
+            from bot.auth import is_admin_or_owner
+            if not is_admin_or_owner(update, workspace_id=ws_id):
+                try:
+                    await query.answer("⛔ Only the creator of this receipt or an admin can edit it.", show_alert=True)
+                except Exception:
+                    pass
+                return
+
         if transaction:
             if ws_id:
                 transaction.workspace_id = ws_id
