@@ -830,6 +830,49 @@ class TestUXAndNavigation(unittest.TestCase):
         assert "stale_1" not in _pending_transactions_timestamps
         assert "fresh_1" in pending_transactions
 
+    def test_monthly_closing_keyboard_clamping_and_role_filtering(self):
+        """Verify get_monthly_closing_keyboard clamps y/m and hides privileged buttons from viewers."""
+        from bot.keyboards import get_monthly_closing_keyboard
+
+        # Viewer role: no close_month or export buttons
+        kb_viewer = get_monthly_closing_keyboard(year=1999, month=15, is_closed=False, role="viewer")
+        viewer_callbacks = [btn.callback_data for row in kb_viewer.inline_keyboard for btn in row]
+        self.assertFalse(any(cb.startswith("close_month:") for cb in viewer_callbacks))
+        self.assertFalse(any(cb.startswith("export_file:") for cb in viewer_callbacks))
+        # Navigation clamped to 2000 and 12
+        self.assertTrue(any("nav:month_close:2000:11" in cb for cb in viewer_callbacks))
+
+        # Admin role: has both review and export buttons
+        kb_admin = get_monthly_closing_keyboard(year=2026, month=9, is_closed=False, role="admin")
+        admin_callbacks = [btn.callback_data for row in kb_admin.inline_keyboard for btn in row]
+        self.assertTrue(any(cb.startswith("close_month:2026:9") for cb in admin_callbacks))
+        self.assertTrue(any(cb == "export_file:excel" for cb in admin_callbacks))
+
+        # Member role: has review button but NOT export button
+        kb_member = get_monthly_closing_keyboard(year=2026, month=9, is_closed=False, role="member")
+        member_callbacks = [btn.callback_data for row in kb_member.inline_keyboard for btn in row]
+        self.assertTrue(any(cb.startswith("close_month:2026:9") for cb in member_callbacks))
+        self.assertFalse(any(cb == "export_file:excel" for cb in member_callbacks))
+
+    def test_close_month_range_validation(self):
+        """Verify close_month callback rejects out-of-range year/month."""
+        from bot.handlers import handle_callback_query
+        from unittest.mock import MagicMock, AsyncMock, patch
+        import asyncio
+
+        update = MagicMock()
+        query = AsyncMock()
+        query.data = "close_month:1800:1"
+        query.answer = AsyncMock()
+        update.callback_query = query
+        context = MagicMock()
+
+        with patch("bot.handlers.is_owner", return_value=True), \
+             patch("bot.handlers.require_owner", AsyncMock(return_value=True)), \
+             patch("bot.handlers.require_admin", AsyncMock(return_value=True)):
+            asyncio.run(handle_callback_query(update, context))
+            query.answer.assert_called_with("❌ Invalid month or year range.", show_alert=True)
+
 if __name__ == "__main__":
     unittest.main()
 

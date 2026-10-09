@@ -1013,14 +1013,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
             elif nav_target == "month_close":
                 now_dt = get_current_time_in_tz()
-                y = int(parts[2]) if len(parts) > 2 else now_dt.year
-                m = int(parts[3]) if len(parts) > 3 else now_dt.month
+                y = max(2000, min(2100, int(parts[2]))) if len(parts) > 2 and parts[2].isdigit() else now_dt.year
+                m = max(1, min(12, int(parts[3]))) if len(parts) > 3 and parts[3].isdigit() else now_dt.month
                 from bot.commands import render_monthly_closing_summary_text
                 from bot.keyboards import get_monthly_closing_keyboard
                 from services.monthly_review_service import get_monthly_review
                 rev = await asyncio.to_thread(get_monthly_review, y, m, workspace_id=ws_id)
                 text = await asyncio.to_thread(render_monthly_closing_summary_text, y, m, workspace_id=ws_id)
-                await query.edit_message_text(text, reply_markup=get_monthly_closing_keyboard(y, m, is_closed=bool(rev)), parse_mode='HTML')
+                caller_role = ws_ctx.role if ws_ctx else 'viewer'
+                await query.edit_message_text(text, reply_markup=get_monthly_closing_keyboard(y, m, is_closed=bool(rev), role=caller_role), parse_mode='HTML')
             elif nav_target == "stats":
                 now_dt = get_current_time_in_tz()
                 stats = get_monthly_summary(now_dt.year, now_dt.month, workspace_id=ws_id)
@@ -1074,12 +1075,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif action == "close_month":
         y = int(parts[1])
         m = int(parts[2])
+        if not (2000 <= y <= 2100 and 1 <= m <= 12):
+            await query.answer("❌ Invalid month or year range.", show_alert=True)
+            return
         from services.monthly_review_service import close_and_record_monthly_review
         from bot.commands import render_monthly_closing_summary_text
         from bot.keyboards import get_monthly_closing_keyboard
         await asyncio.to_thread(close_and_record_monthly_review, y, m, workspace_id=ws_id)
         text = await asyncio.to_thread(render_monthly_closing_summary_text, y, m, workspace_id=ws_id)
-        await query.edit_message_text(text, reply_markup=get_monthly_closing_keyboard(y, m, is_closed=True), parse_mode='HTML')
+        caller_role = ws_ctx.role if ws_ctx else 'viewer'
+        await query.edit_message_text(text, reply_markup=get_monthly_closing_keyboard(y, m, is_closed=True, role=caller_role), parse_mode='HTML')
         return
 
     elif action == "rec_paid":

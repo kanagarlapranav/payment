@@ -106,25 +106,36 @@ def get_recurring_detail_keyboard(rec_id: int, status: str = "ACTIVE"):
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_monthly_closing_keyboard(year: int, month: int, is_closed: bool = False):
+def get_monthly_closing_keyboard(year: int, month: int, is_closed: bool = False, role: str = "admin"):
     """Returns the Monthly Closing Review keyboard with Mark Reviewed and Export actions."""
+    # Clamp year and month safely
+    year = max(2000, min(2100, int(year)))
+    month = max(1, min(12, int(month)))
+
     # Previous month
     if month == 1:
-        prev_y, prev_m = year - 1, 12
+        prev_y, prev_m = max(2000, year - 1), 12
     else:
         prev_y, prev_m = year, month - 1
     # Next month
     if month == 12:
-        next_y, next_m = year + 1, 1
+        next_y, next_m = min(2100, year + 1), 1
     else:
         next_y, next_m = year, month + 1
         
     review_label = "🔄 Re-Review Month" if is_closed else "✅ Mark Month Reviewed"
-    keyboard = [
-        [
-            InlineKeyboardButton(review_label, callback_data=f"close_month:{year}:{month}"),
-            InlineKeyboardButton("📥 Export Statement", callback_data="export_file:excel")
-        ],
+    top_row = []
+    # Admin and owner can review and export; member can review; viewer cannot see privileged actions
+    if role in ('owner', 'admin'):
+        top_row.append(InlineKeyboardButton(review_label, callback_data=f"close_month:{year}:{month}"))
+        top_row.append(InlineKeyboardButton("📥 Export Statement", callback_data="export_file:excel"))
+    elif role == 'member':
+        top_row.append(InlineKeyboardButton(review_label, callback_data=f"close_month:{year}:{month}"))
+
+    keyboard = []
+    if top_row:
+        keyboard.append(top_row)
+    keyboard.extend([
         [
             InlineKeyboardButton("◀ Prev", callback_data=f"nav:month_close:{prev_y}:{prev_m}"),
             InlineKeyboardButton("Next ▶", callback_data=f"nav:month_close:{next_y}:{next_m}")
@@ -132,7 +143,7 @@ def get_monthly_closing_keyboard(year: int, month: int, is_closed: bool = False)
         [
             InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:more")
         ]
-    ]
+    ])
     return InlineKeyboardMarkup(keyboard)
 
 def get_transaction_detail_keyboard(tx_id: int):
