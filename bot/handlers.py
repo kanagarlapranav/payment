@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, date
 from config import TELEGRAM_USER_ID, IMAGE_DIR, logger
 from bot.auth import (
     require_authorized, require_admin, require_owner, require_member, is_owner, is_authorized_user,
-    get_callback_policy, ADMIN_CALLBACK_ACTIONS, READ_ONLY_CALLBACK_ACTIONS,
+    get_callback_policy,
     get_workspace_context, resolve_workspace_context, WORKSPACE_CALLBACK_POLICY,
     get_effective_user_id
 )
@@ -742,10 +742,6 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             except Exception:
                 pass
             return
-
-    data = query.data
-    parts = data.split(":") if ":" in data else [data]
-    action = parts[0]
 
     if action not in ("set_model", "refresh_gemini") and not action.startswith("perm_"):
         try:
