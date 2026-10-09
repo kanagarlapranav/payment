@@ -121,7 +121,7 @@ def set_explicit_balance(new_balance: float, workspace_id: str = None) -> float:
         dec_new = parse_decimal_amount(new_balance, allow_zero=True, allow_negative=True)
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if target_ws == default_ws else "workspace_id = ?"
+            ws_filter = "(workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')" if target_ws == default_ws else "workspace_id = ?"
             cursor.execute(f'''
                 SELECT id, transaction_type, amount
                 FROM transactions
@@ -203,7 +203,7 @@ def get_today_summary(workspace_id: str = None, user_id: int = None) -> Transact
     ws_id = workspace_id or get_default_workspace_id()
 
     default_ws = get_default_workspace_id()
-    ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    ws_filter = "(workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')" if ws_id == default_ws else "workspace_id = ?"
 
     conditions = ["transaction_date = ?", ws_filter, "deleted_at IS NULL"]
     params = [str(today), ws_id]
@@ -316,7 +316,7 @@ def get_overall_summary(workspace_id: str = None, user_id: int = None) -> Transa
     ws_id = workspace_id or get_default_workspace_id()
 
     default_ws = get_default_workspace_id()
-    ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    ws_filter = "(workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')" if ws_id == default_ws else "workspace_id = ?"
 
     conditions = [ws_filter, "deleted_at IS NULL"]
     params = [ws_id]

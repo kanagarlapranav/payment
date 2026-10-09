@@ -48,5 +48,34 @@ class TestBalance(unittest.TestCase):
         success = import_database_from_json(data_dict=data)
         self.assertTrue(success)
 
+    def test_set_explicit_balance_includes_legacy_empty_workspace_id(self):
+        """set_explicit_balance correctly includes rows with legacy workspace_id = '' matching recalculate_in_connection."""
+        from database.db import get_db_connection, setup_database
+        from database.queries import get_default_workspace_id
+        from services.balance_service import set_explicit_balance, recalculate_all_balances
+        import uuid
+        setup_database()
+        default_ws = get_default_workspace_id()
+
+        # Insert legacy row with empty string workspace_id
+        with get_db_connection() as conn:
+            conn.execute('''
+                INSERT INTO transactions (
+                    transaction_type, amount, person_name, transaction_date, transaction_time,
+                    uid, occurred_at, deleted_at, created_at, updated_at, workspace_id, balance_before, balance_after
+                ) VALUES ('SENT', 200.0, 'Legacy Blank WS', '2026-10-01', '10:00 AM', ?, '2026-10-01 10:00:00', NULL, '2026-10-01T10:00:00Z', '2026-10-01T10:00:00Z', '', 0.0, 0.0)
+            ''', (uuid.uuid4().hex,))
+            conn.commit()
+
+        # Set explicit balance to 1000.0 on default workspace
+        final_bal = set_explicit_balance(1000.0, workspace_id=default_ws)
+        self.assertEqual(final_bal, 1000.0)
+
+        # Recalculate all balances must yield the exact same 1000.0 (no disagreement)
+        recalc_bal = recalculate_all_balances(workspace_id=default_ws)
+        self.assertEqual(recalc_bal, 1000.0)
+
+
 if __name__ == '__main__':
     unittest.main()
+
