@@ -306,17 +306,14 @@ class TestUXAndNavigation(unittest.TestCase):
         query.from_user.id = owner_id
         update.effective_user.id = owner_id
         update.effective_chat.id = owner_id
-        query.message.text = "Payment detected"
+        update.effective_chat.type = "private"
         query.edit_message_text = AsyncMock()
         update.callback_query = query
         context = MagicMock()
 
         import asyncio
         from unittest.mock import patch
-        with patch('bot.handlers.is_owner', return_value=True), \
-             patch('bot.handlers.is_authorized_user', return_value=True), \
-             patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
-             patch('bot.handlers.require_authorized', AsyncMock(return_value=True)):
+        with patch('config.TELEGRAM_USER_ID', owner_id):
             asyncio.run(handle_callback_query(update, context))
 
         query.edit_message_text.assert_called_once()
@@ -355,6 +352,7 @@ class TestUXAndNavigation(unittest.TestCase):
         query.from_user.id = owner_id
         update.effective_user.id = owner_id
         update.effective_chat.id = owner_id
+        update.effective_chat.type = "private"
         query.message.text = "Delete Transaction"
         query.edit_message_text = AsyncMock()
         query.answer = AsyncMock()
@@ -362,10 +360,7 @@ class TestUXAndNavigation(unittest.TestCase):
         context = MagicMock()
 
         import asyncio
-        with patch('bot.handlers.is_owner', return_value=True), \
-             patch('bot.handlers.is_authorized_user', return_value=True), \
-             patch('bot.handlers.is_admin_user', return_value=True), \
-             patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
+        with patch('config.TELEGRAM_USER_ID', owner_id), \
              patch('services.backup_service.backup_to_telegram', AsyncMock(return_value=True)) as mock_bkp, \
              patch('services.task_manager.schedule_debounced_backup') as mock_sched:
             asyncio.run(handle_callback_query(update, context))
@@ -419,6 +414,7 @@ class TestUXAndNavigation(unittest.TestCase):
         query.from_user.id = owner_id
         update.effective_user.id = owner_id
         update.effective_chat.id = owner_id
+        update.effective_chat.type = "private"
         query.message.text = "Delete Transaction"
         query.edit_message_text = AsyncMock()
         query.answer = AsyncMock()
@@ -426,11 +422,7 @@ class TestUXAndNavigation(unittest.TestCase):
         context = MagicMock()
 
         import asyncio
-        with patch('bot.handlers.is_owner', return_value=True), \
-             patch('bot.handlers.is_authorized_user', return_value=True), \
-             patch('bot.handlers.is_admin_user', return_value=True), \
-             patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
-             patch('bot.handlers.require_authorized', AsyncMock(return_value=True)):
+        with patch('config.TELEGRAM_USER_ID', owner_id):
             asyncio.run(handle_callback_query(update, context))
 
         query.answer.assert_called_with("✅ Delete Confirmed!", show_alert=False)
@@ -452,6 +444,7 @@ class TestUXAndNavigation(unittest.TestCase):
         query.from_user.id = owner_id
         update.effective_user.id = owner_id
         update.effective_chat.id = owner_id
+        update.effective_chat.type = "private"
         query.message.text = "Delete Transaction"
         query.edit_message_text = AsyncMock()
         query.answer = AsyncMock()
@@ -460,11 +453,7 @@ class TestUXAndNavigation(unittest.TestCase):
         context.user_data = {'action': 'waiting_delete_id'}
 
         import asyncio
-        with patch('bot.handlers.is_owner', return_value=True), \
-             patch('bot.handlers.is_authorized_user', return_value=True), \
-             patch('bot.handlers.is_admin_user', return_value=True), \
-             patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
-             patch('bot.handlers.require_authorized', AsyncMock(return_value=True)):
+        with patch('config.TELEGRAM_USER_ID', owner_id):
             asyncio.run(handle_callback_query(update, context))
 
         query.answer.assert_called_with("❌ Deletion cancelled.", show_alert=False)
@@ -576,8 +565,13 @@ class TestUXAndNavigation(unittest.TestCase):
         update.callback_query = query
         context = MagicMock()
 
-        with patch('bot.handlers.is_admin_user', return_value=True), \
-             patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
+        owner_id = 12345
+        update.effective_user.id = owner_id
+        update.effective_chat.id = owner_id
+        update.effective_chat.type = "private"
+        query.from_user.id = owner_id
+
+        with patch('config.TELEGRAM_USER_ID', owner_id), \
              patch('services.undo_service.perform_undo', return_value=(True, "Restored transaction #99")), \
              patch('database.queries.get_balance_setting', return_value=5000.0), \
              patch('services.backup_service.backup_to_telegram', AsyncMock(return_value=True)) as mock_bkp:
@@ -702,10 +696,8 @@ class TestUXAndNavigation(unittest.TestCase):
             update.callback_query = query
             context = MagicMock()
 
-            with patch('bot.handlers.is_owner', return_value=True), \
-                 patch('bot.handlers.is_authorized_user', return_value=True), \
-                 patch('bot.handlers.is_admin_user', return_value=True), \
-                 patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
+            update.effective_chat.type = "private"
+            with patch('config.TELEGRAM_USER_ID', owner_id), \
                  patch('services.task_manager.schedule_debounced_backup'):
                 asyncio.run(handle_callback_query(update, context))
 
@@ -872,6 +864,98 @@ class TestUXAndNavigation(unittest.TestCase):
              patch("bot.handlers.require_admin", AsyncMock(return_value=True)):
             asyncio.run(handle_callback_query(update, context))
             query.answer.assert_called_with("❌ Invalid month or year range.", show_alert=True)
+
+    def test_callback_auth_denial_paths_for_viewer_and_unauthorized_user(self):
+        """Verify that handle_callback_query enforces real auth and denies viewers and unauthorized users on mutating callbacks."""
+        from unittest.mock import MagicMock, AsyncMock
+        from database.queries import add_workspace_member, get_default_workspace_id
+        from bot.handlers import handle_callback_query, set_pending_transaction, fetch_pending_transaction
+        import asyncio
+
+        ws_id = get_default_workspace_id()
+        viewer_id = 7770001
+        stranger_id = 8880002
+
+        # Provision viewer_id as a strictly 'viewer' role in the workspace
+        add_workspace_member(ws_id, viewer_id, role="viewer")
+
+        # Create a transaction to attempt deleting
+        tx = Transaction(
+            amount=50.0,
+            transaction_type="SENT",
+            person_name="Denial Test Payee",
+            transaction_date="2026-09-25",
+            category="General"
+        )
+        tx_id = insert_transaction_with_balance(tx)
+
+        # 1. Viewer attempts delete_confirm -> denied, tx remains in DB
+        up_viewer = MagicMock()
+        q_viewer = MagicMock()
+        q_viewer.data = f"delete_confirm:{tx_id}"
+        q_viewer.from_user.id = viewer_id
+        up_viewer.effective_user.id = viewer_id
+        up_viewer.effective_chat.id = viewer_id
+        up_viewer.effective_chat.type = "private"
+        q_viewer.answer = AsyncMock()
+        q_viewer.edit_message_text = AsyncMock()
+        up_viewer.callback_query = q_viewer
+        context = MagicMock()
+
+        asyncio.run(handle_callback_query(up_viewer, context))
+        remaining_tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
+        self.assertIsNotNone(remaining_tx, "Viewer was incorrectly permitted to delete transaction!")
+
+        # 2. Unauthorized stranger attempts delete_confirm -> denied, tx remains in DB
+        up_stranger = MagicMock()
+        q_stranger = MagicMock()
+        q_stranger.data = f"delete_confirm:{tx_id}"
+        q_stranger.from_user.id = stranger_id
+        up_stranger.effective_user.id = stranger_id
+        up_stranger.effective_chat.id = stranger_id
+        up_stranger.effective_chat.type = "private"
+        q_stranger.answer = AsyncMock()
+        q_stranger.edit_message_text = AsyncMock()
+        up_stranger.callback_query = q_stranger
+
+        asyncio.run(handle_callback_query(up_stranger, context))
+        remaining_tx2 = get_transaction_by_id(tx_id, workspace_id=ws_id)
+        self.assertIsNotNone(remaining_tx2, "Stranger was incorrectly permitted to delete transaction!")
+
+        # 3. Viewer attempts save_p -> denied
+        pid_v = "pid_viewer_test"
+        set_pending_transaction(pid_v, tx, workspace_id=ws_id)
+        q_viewer.data = f"save_p:{pid_v}"
+        q_viewer.reset_mock()
+        asyncio.run(handle_callback_query(up_viewer, context))
+        # Pending transaction must still exist or not be committed by viewer
+        pending_after = fetch_pending_transaction(pid_v, workspace_id=ws_id)
+        self.assertIsNotNone(pending_after, "Viewer was incorrectly permitted to consume pending receipt!")
+
+        # 4. Stranger attempts save_p -> denied
+        pid_s = "pid_stranger_test"
+        set_pending_transaction(pid_s, tx, workspace_id=ws_id)
+        q_stranger.data = f"save_p:{pid_s}"
+        q_stranger.reset_mock()
+        asyncio.run(handle_callback_query(up_stranger, context))
+        pending_after_s = fetch_pending_transaction(pid_s, workspace_id=ws_id)
+        self.assertIsNotNone(pending_after_s, "Stranger was incorrectly permitted to consume pending receipt!")
+
+        # 5. Viewer attempts undo_confirm -> denied
+        q_viewer.data = "undo_confirm"
+        q_viewer.reset_mock()
+        asyncio.run(handle_callback_query(up_viewer, context))
+        if q_viewer.edit_message_text.called:
+            text = q_viewer.edit_message_text.call_args[0][0]
+            self.assertNotIn("Undo Confirmed & Applied!", text)
+
+        # 6. Stranger attempts undo_confirm -> denied
+        q_stranger.data = "undo_confirm"
+        q_stranger.reset_mock()
+        asyncio.run(handle_callback_query(up_stranger, context))
+        if q_stranger.edit_message_text.called:
+            text = q_stranger.edit_message_text.call_args[0][0]
+            self.assertNotIn("Undo Confirmed & Applied!", text)
 
 if __name__ == "__main__":
     unittest.main()
