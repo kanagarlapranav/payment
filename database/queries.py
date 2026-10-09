@@ -298,7 +298,7 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
 
             # Adopt all legacy, orphaned, or unassigned transactions into the canonical default group workspace:
             cursor.execute("""
-                UPDATE transactions 
+                UPDATE OR IGNORE transactions 
                 SET workspace_id = ? 
                 WHERE workspace_id IS NULL 
                    OR workspace_id = '' 

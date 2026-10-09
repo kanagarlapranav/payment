@@ -28,17 +28,16 @@ def init_db():
     from bot.auth import _USER_ACTIVE_WORKSPACES
     _USER_ACTIVE_WORKSPACES.clear()
     from database.db import get_db_connection
-    with get_db_connection() as conn:
-        conn.execute("DELETE FROM workspace_settings WHERE key LIKE 'user_active_ws:%'")
-        conn.execute("DELETE FROM settings WHERE key LIKE 'user_active_ws:%'")
-        conn.commit()
+    def _cleanup():
+        with get_db_connection() as conn:
+            conn.execute("DELETE FROM workspaces WHERE chat_id NOT IN (-1004310685141, 8343764796)")
+            conn.execute("DELETE FROM workspace_members WHERE workspace_id NOT IN (SELECT id FROM workspaces)")
+            conn.execute("DELETE FROM workspace_settings WHERE key LIKE 'user_active_ws:%'")
+            conn.execute("DELETE FROM settings WHERE key LIKE 'user_active_ws:%'")
+            conn.commit()
+    _cleanup()
     yield
-    with get_db_connection() as conn:
-        conn.execute("DELETE FROM workspaces WHERE id != (SELECT value FROM settings WHERE key = 'default_workspace_id')")
-        conn.execute("DELETE FROM workspace_members WHERE workspace_id != (SELECT value FROM settings WHERE key = 'default_workspace_id')")
-        conn.execute("DELETE FROM workspace_settings WHERE key LIKE 'user_active_ws:%'")
-        conn.execute("DELETE FROM settings WHERE key LIKE 'user_active_ws:%'")
-        conn.commit()
+    _cleanup()
     _USER_ACTIVE_WORKSPACES.clear()
 
 
