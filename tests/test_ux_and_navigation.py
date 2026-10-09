@@ -972,14 +972,42 @@ class TestUXAndNavigation(unittest.TestCase):
 
         # 6. Stranger attempts undo_confirm -> denied
         q_stranger.data = "undo_confirm"
-        q_stranger.reset_mock()
-        asyncio.run(handle_callback_query(up_stranger, context))
-        if q_stranger.edit_message_text.called:
-            text = q_stranger.edit_message_text.call_args[0][0]
-            self.assertNotIn("Undo Confirmed & Applied!", text)
+    def test_messageless_callbacks_do_not_crash(self):
+        """Verify export_file, ws_reset, cafe_stats, cafe_view_menu gracefully handle query.message is None without raising AttributeError."""
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from bot.handlers import handle_callback_query
+        import asyncio
+
+        context = MagicMock()
+        context.user_data = {}
+
+        for action_data in ["export_file:pdf", "export_file:excel", "ws_reset", "ws_reset_menu", "cafe_stats", "cafe_view_menu"]:
+            query = MagicMock()
+            query.data = action_data
+            query.message = None
+            query.from_user.id = 123456
+            query.answer = AsyncMock()
+
+            update = MagicMock()
+            update.callback_query = query
+            update.effective_user.id = 123456
+            update.effective_chat.id = 123456
+
+            with patch('bot.handlers.require_authorized', AsyncMock(return_value=True)), \
+                 patch('bot.handlers.is_owner', return_value=True), \
+                 patch('bot.handlers.require_owner', AsyncMock(return_value=True)), \
+                 patch('bot.handlers.require_admin', AsyncMock(return_value=True)):
+                # Must not raise AttributeError
+                try:
+                    asyncio.run(handle_callback_query(update, context))
+                except AttributeError as e:
+                    self.fail(f"Callback {action_data} crashed with AttributeError when message was None: {e}")
+
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

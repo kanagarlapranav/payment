@@ -1426,6 +1426,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     elif action in ("ws_reset", "ws_reset_menu"):
+        if not query.message:
+            try:
+                await query.answer("❌ Message no longer accessible.", show_alert=True)
+            except Exception:
+                pass
+            return
         from bot.auth import set_user_active_workspace
         user_id = get_effective_user_id(update)
         if user_id:
@@ -2133,6 +2139,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     # 4c. Export Format Selection (PDF / Excel)
     elif action == "export_file":
+        if not query.message or not getattr(query.message, 'chat', None):
+            try:
+                await query.answer("❌ Message no longer accessible.", show_alert=True)
+            except Exception:
+                pass
+            return
         fmt = parts[1]
         if fmt == "pdf":
             from bot.commands import send_pdf_report
