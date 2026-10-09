@@ -381,6 +381,24 @@ class TestDashboardSecurity(unittest.TestCase):
         self.assertIn("already used", session_or_err2.lower())
 
 
+    def test_rate_limiting_persists_across_restart(self):
+        """Verifies that rate limiting counters persist in DB even when in-memory cache is wiped (P2-c)."""
+        from services.dashboard_auth import record_failed_attempt, is_rate_limited, _FAILED_LOGINS
+        client_ip = "192.168.1.99"
+
+        # Record 5 failures
+        for _ in range(5):
+            record_failed_attempt(client_ip)
+
+        self.assertTrue(is_rate_limited(client_ip))
+
+        # Wipe in-memory cache to simulate server restart
+        _FAILED_LOGINS.clear()
+
+        # Database persistence must still enforce rate limiting
+        self.assertTrue(is_rate_limited(client_ip))
+
+
 if __name__ == '__main__':
     unittest.main()
 

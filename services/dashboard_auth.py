@@ -74,6 +74,14 @@ def cleanup_expired():
         if not _FAILED_LOGINS[ip]:
             _FAILED_LOGINS.pop(ip, None)
 
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM dashboard_login_attempts WHERE attempt_time < ?", (now - RATE_LIMIT_WINDOW_SECONDS,))
+            conn.commit()
+    except Exception:
+        pass
+
 
 def create_one_time_code(user_id: Optional[int] = None, workspace_id: Optional[str] = None, role: str = "member") -> str:
     """
@@ -128,22 +136,42 @@ def create_one_time_code(user_id: Optional[int] = None, workspace_id: Optional[s
 
 
 def is_rate_limited(client_ip: str) -> bool:
-    """Checks if a client IP has exceeded the allowed failed authentication attempts."""
+    """Checks if a client IP has exceeded the allowed failed authentication attempts (in-memory and DB persistent)."""
     cleanup_expired()
     if not client_ip:
         return False
     recent_failures = _FAILED_LOGINS.get(client_ip, [])
-    return len(recent_failures) >= MAX_FAILED_ATTEMPTS
+    if len(recent_failures) >= MAX_FAILED_ATTEMPTS:
+        return True
+    try:
+        now = time.time()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as cnt FROM dashboard_login_attempts WHERE ip = ? AND attempt_time >= ?", (client_ip, now - RATE_LIMIT_WINDOW_SECONDS))
+            r = cursor.fetchone()
+            if r and r['cnt'] >= MAX_FAILED_ATTEMPTS:
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def record_failed_attempt(client_ip: str):
-    """Records a failed authentication attempt for rate limiting."""
+    """Records a failed authentication attempt for rate limiting (in-memory and DB persistent)."""
     if not client_ip:
         return
     now = time.time()
     if client_ip not in _FAILED_LOGINS:
         _FAILED_LOGINS[client_ip] = []
     _FAILED_LOGINS[client_ip].append(now)
+    try:
+        with LEDGER_LOCK:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO dashboard_login_attempts (ip, attempt_time) VALUES (?, ?)", (client_ip, now))
+                conn.commit()
+    except Exception:
+        pass
     logger.warning(f"Failed dashboard login attempt recorded for IP: {client_ip} ({len(_FAILED_LOGINS[client_ip])}/{MAX_FAILED_ATTEMPTS})")
 
 
@@ -255,6 +283,15 @@ def exchange_code_for_session(code: str, client_ip: str = "", is_https: bool = F
     # Reset failed attempts for this IP on successful auth
     if client_ip in _FAILED_LOGINS:
         _FAILED_LOGINS.pop(client_ip, None)
+    if client_ip:
+        try:
+            with LEDGER_LOCK:
+                with get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM dashboard_login_attempts WHERE ip = ?", (client_ip,))
+                    conn.commit()
+        except Exception:
+            pass
 
     # Build HttpOnly session cookie
     secure_flag = "; Secure" if is_https or os.getenv("ENVIRONMENT") == "production" or os.getenv("RENDER") else ""

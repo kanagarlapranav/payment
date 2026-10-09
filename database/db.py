@@ -209,6 +209,13 @@ def setup_database():
                     )
                 ''')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_dash_sess_ws_user ON dashboard_sessions(workspace_id, user_id)')
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS dashboard_login_attempts (
+                        ip TEXT NOT NULL,
+                        attempt_time REAL NOT NULL
+                    )
+                ''')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_dash_attempts_ip ON dashboard_login_attempts(ip, attempt_time)')
 
                 # Settings table (global legacy fallback & system-level settings)
                 cursor.execute('''
