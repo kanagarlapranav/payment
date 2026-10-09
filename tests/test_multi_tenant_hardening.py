@@ -414,3 +414,61 @@ def test_monthly_close_tenant_isolation(test_workspaces):
     assert rev_b_after['workspace_id'] == ws_b_id
     assert rev_b_after['notes'] == "Closed Tenant B"
     assert rev_b_after['net_savings'] == 10000.0
+
+
+def test_recurring_payments_tenant_isolation(test_workspaces):
+    """Recurring payment rules, retrieval, modification, payment, and deletion are strictly isolated between tenants."""
+    from services.recurring_service import (
+        add_recurring_payment,
+        get_all_recurring,
+        get_recurring_by_id,
+        update_recurring_status,
+        delete_recurring_payment,
+        mark_recurring_paid,
+        skip_recurring_due,
+    )
+    ws_a_id, ws_b_id = test_workspaces
+
+    # 1. Add recurring rule in Workspace A and Workspace B
+    rec_a_id = add_recurring_payment("Electricity Board", 1500.0, category="Bills", workspace_id=ws_a_id)
+    rec_b_id = add_recurring_payment("Office Internet", 2500.0, category="Utilities", workspace_id=ws_b_id)
+
+    # 2. Assert get_all_recurring is strictly isolated
+    recs_a = get_all_recurring(workspace_id=ws_a_id)
+    assert len(recs_a) == 1
+    assert recs_a[0]['id'] == rec_a_id
+    assert recs_a[0]['payee_name'] == "Electricity Board"
+
+    recs_b = get_all_recurring(workspace_id=ws_b_id)
+    assert len(recs_b) == 1
+    assert recs_b[0]['id'] == rec_b_id
+    assert recs_b[0]['payee_name'] == "Office Internet"
+
+    # 3. Assert cross-tenant get_recurring_by_id returns None
+    assert get_recurring_by_id(rec_a_id, workspace_id=ws_b_id) is None
+    assert get_recurring_by_id(rec_b_id, workspace_id=ws_a_id) is None
+
+    # 4. Cross-tenant update_recurring_status is rejected
+    status_changed = update_recurring_status(rec_a_id, "PAUSED", workspace_id=ws_b_id)
+    assert status_changed is False
+    assert get_recurring_by_id(rec_a_id, workspace_id=ws_a_id)['status'] == 'ACTIVE'
+
+    # 5. Cross-tenant mark_recurring_paid is rejected
+    with pytest.raises(ValueError, match="not found"):
+        mark_recurring_paid(rec_a_id, "2026-10-01", workspace_id=ws_b_id)
+
+    # 6. Cross-tenant skip_recurring_due is rejected
+    with pytest.raises(ValueError, match="not found"):
+        skip_recurring_due(rec_a_id, workspace_id=ws_b_id)
+
+    # 7. Cross-tenant delete_recurring_payment is rejected
+    deleted_cross = delete_recurring_payment(rec_a_id, workspace_id=ws_b_id)
+    assert deleted_cross is False
+    assert get_recurring_by_id(rec_a_id, workspace_id=ws_a_id) is not None
+
+    # 8. Same-tenant delete succeeds and leaves the other tenant untouched
+    deleted_own = delete_recurring_payment(rec_a_id, workspace_id=ws_a_id)
+    assert deleted_own is True
+    assert get_recurring_by_id(rec_a_id, workspace_id=ws_a_id) is None
+    assert get_recurring_by_id(rec_b_id, workspace_id=ws_b_id) is not None
+    assert len(get_all_recurring(workspace_id=ws_b_id)) == 1
