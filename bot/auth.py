@@ -277,6 +277,8 @@ def is_editor(update: Update, workspace_id: Optional[str] = None) -> bool:
             return True
     return False
 
+is_member = is_editor
+
 
 def is_authorized_user(update: Update, workspace_id: Optional[str] = None) -> bool:
     """
