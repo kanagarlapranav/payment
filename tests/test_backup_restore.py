@@ -653,7 +653,41 @@ class TestBackupRestorePrompt6(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIn("missing mandatory UID", msg)
 
+    def test_import_database_from_json_sets_is_dirty_to_1(self):
+        """Verifies that successful JSON import marks is_dirty = '1' to trigger cloud sync."""
+        from services.backup_service import import_database_from_json, compute_canonical_checksum
+        with get_db_connection() as conn:
+            conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('is_dirty', '0', '2026-10-09T00:00:00Z')")
+            conn.commit()
+
+        uid = uuid.uuid4().hex
+        payload = {
+            "version": 2,
+            "revision": 2,
+            "settings": {},
+            "custom_menu_items": [],
+            "budgets": [],
+            "transactions": [{
+                "uid": uid,
+                "transaction_type": "SENT",
+                "amount": 25.0,
+                "person_name": "Dirty Test",
+                "transaction_date": "2026-10-09",
+            }]
+        }
+        payload["checksum"] = compute_canonical_checksum(payload)
+        res = import_database_from_json(data_dict=payload)
+        self.assertTrue(res.get("success"), res.get("error"))
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM settings WHERE key = 'is_dirty'")
+            row = cursor.fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row["value"], "1")
+
 
 if __name__ == '__main__':
     unittest.main()
+
 

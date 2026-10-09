@@ -1037,6 +1037,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                 now_utc = utc_now_iso()
                 cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('database_initialized', '1', ?)", (now_utc,))
                 cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('backup_blocked', '0', ?)", (now_utc,))
+                cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('is_dirty', '1', ?)", (now_utc,))
 
                 # Advance revision
                 cursor.execute("SELECT value FROM settings WHERE key = 'backup_revision'")
