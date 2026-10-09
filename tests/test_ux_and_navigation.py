@@ -736,15 +736,34 @@ class TestUXAndNavigation(unittest.TestCase):
             "auth_grant:not_int:member",
         ]
 
+        import config
+        from telegram import Update, User, Chat, CallbackQuery
+
+        owner_id = getattr(config, "TELEGRAM_USER_ID", 11111111)
+
         for data in malformed_samples:
-            update = MagicMock()
-            query = MagicMock()
+            update = MagicMock(spec=Update)
+            user = MagicMock(spec=User)
+            user.id = owner_id
+            update.effective_user = user
+            chat = MagicMock(spec=Chat)
+            chat.id = owner_id
+            chat.type = 'private'
+            update.effective_chat = chat
+
+            query = MagicMock(spec=CallbackQuery)
             query.data = data
+            query.from_user = user
             query.answer = AsyncMock()
             update.callback_query = query
             context = MagicMock()
 
-            asyncio.run(handle_callback_query(update, context))
+            with patch("bot.handlers.is_owner", return_value=True), \
+                 patch("bot.handlers.require_owner", AsyncMock(return_value=True)), \
+                 patch("bot.handlers.require_admin", AsyncMock(return_value=True)), \
+                 patch("bot.handlers.require_member", AsyncMock(return_value=True)), \
+                 patch("bot.handlers.require_authorized", AsyncMock(return_value=True)):
+                asyncio.run(handle_callback_query(update, context))
             query.answer.assert_called_with("❌ Invalid button data.", show_alert=True)
 
 if __name__ == "__main__":

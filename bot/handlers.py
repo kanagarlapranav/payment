@@ -646,6 +646,34 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     parts = data.split(":") if ":" in data else [data]
     action = parts[0]
 
+    # Check policy before any database access or data exposure
+    policy = WORKSPACE_CALLBACK_POLICY.get(action) or get_callback_policy(action)
+    if policy is None:
+        # Unknown or stale callback data gets a friendly refusal, not a crash
+        try:
+            await query.answer("ℹ️ This button or menu is no longer active.", show_alert=True)
+        except Exception:
+            pass
+        return
+
+    ws_ctx = get_workspace_context(update)
+    if policy == 'owner':
+        if not await require_owner(update):
+            return
+    elif policy == 'admin':
+        if not (is_owner(update) or await require_admin(update)):
+            return
+    elif policy == 'member':
+        if not (is_owner(update) or is_admin_user(update) or await require_member(update)):
+            return
+    elif policy in ('read_only', 'viewer'):
+        if not (is_owner(update) or is_admin_user(update) or await require_authorized(update)):
+            return
+    else:
+        ws_ctx = await resolve_workspace_context(update, required_policy=policy)
+        if not ws_ctx:
+            return
+
     # Validate argument specifications at dispatch (B4 / P1-11)
     if action in CALLBACK_PARAM_SPECS:
         specs = CALLBACK_PARAM_SPECS[action]
@@ -683,34 +711,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     await ans
             except Exception:
                 pass
-            return
-
-    # Check policy before any database access or data exposure
-    policy = WORKSPACE_CALLBACK_POLICY.get(action) or get_callback_policy(action)
-    if policy is None:
-        # Unknown or stale callback data gets a friendly refusal, not a crash
-        try:
-            await query.answer("ℹ️ This button or menu is no longer active.", show_alert=True)
-        except Exception:
-            pass
-        return
-
-    ws_ctx = get_workspace_context(update)
-    if policy == 'owner':
-        if not await require_owner(update):
-            return
-    elif policy == 'admin':
-        if not (is_owner(update) or await require_admin(update)):
-            return
-    elif policy == 'member':
-        if not (is_owner(update) or is_admin_user(update) or await require_member(update)):
-            return
-    elif policy in ('read_only', 'viewer'):
-        if not (is_owner(update) or is_admin_user(update) or await require_authorized(update)):
-            return
-    else:
-        ws_ctx = await resolve_workspace_context(update, required_policy=policy)
-        if not ws_ctx:
             return
 
     data = query.data
