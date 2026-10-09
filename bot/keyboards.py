@@ -247,10 +247,6 @@ def get_category_picker_keyboard(pending_id: str):
     keyboard.append([InlineKeyboardButton("🔙 Back to Receipt", callback_data=f"ep_back:{pending_id}")])
     return InlineKeyboardMarkup(keyboard)
 
-# Aliases
-get_receipt_confirm_keyboard = get_confirmation_card_keyboard
-get_receipt_edit_fields_keyboard = get_edit_pending_fields_keyboard
-
 def get_quick_undo_keyboard(tx_id: int):
     """Returns an inline Undo button for a newly saved transaction."""
     keyboard = [
@@ -346,18 +342,6 @@ def get_history_paginated_keyboard(page: int, total_pages: int, filter_type: str
     
     # 5. Back to Menu
     keyboard.append([InlineKeyboardButton("⬅️ Back to Menu", callback_data="nav:home")])
-    return InlineKeyboardMarkup(keyboard)
-
-def get_confirmation_keyboard(tx_id: str = ""):
-    """Returns inline keyboard for confirming uncertain transactions."""
-    confirm_cb = f"confirm_tx:{tx_id}" if tx_id else "confirm_tx"
-    cancel_cb = f"cancel_tx:{tx_id}" if tx_id else "cancel_tx"
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Confirm", callback_data=confirm_cb),
-            InlineKeyboardButton("❌ Cancel", callback_data=cancel_cb)
-        ]
-    ]
     return InlineKeyboardMarkup(keyboard)
 
 def get_edit_fields_keyboard(tx_id: int):

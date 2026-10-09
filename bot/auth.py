@@ -51,8 +51,7 @@ COMMAND_ROLE_POLICY = {
     "join": "viewer",
 
     # Member & above (Mutation: Logging Payments, Self-Edit/Delete, Self-Undo)
-    "log_receipt": "member", "log_text": "member", "cafe_tag": "member",
-    "quick_add": "member", "self_undo": "member",
+    "quick_add": "member",
     "edit": "member", "delete": "member", "undo": "member", "revert": "member",
     "dashboard": "member",
 
@@ -67,8 +66,7 @@ COMMAND_ROLE_POLICY = {
 
     # Owner only (Governance, Initial Balance, Permissions & Disaster Recovery)
     "setbalance": "owner", "restore": "owner", "importbackup": "owner",
-    "setrole": "owner", "permissions": "owner", "roles": "owner",
-    "workspace_settings": "owner", "transfer_ownership": "owner"
+    "setrole": "owner", "permissions": "owner", "roles": "owner"
 }
 
 # Fine-grained Callback Role Policy — SINGLE SOURCE OF TRUTH (B10 / P1-N3)

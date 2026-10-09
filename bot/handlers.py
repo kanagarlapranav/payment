@@ -19,7 +19,7 @@ from bot.commands import (
     render_contacts_ledger_text, render_transaction_detail, render_backup_status_text
 )
 from bot.keyboards import (
-    get_confirmation_keyboard, get_edit_fields_keyboard, get_delete_confirm_keyboard,
+    get_edit_fields_keyboard, get_delete_confirm_keyboard,
     get_filter_keyboard, get_sort_keyboard, get_home_menu_keyboard, get_back_to_menu_keyboard,
     get_confirmation_card_keyboard, get_edit_pending_fields_keyboard, get_category_picker_keyboard,
     get_quick_undo_keyboard, get_quick_add_keyboard, get_history_paginated_keyboard,

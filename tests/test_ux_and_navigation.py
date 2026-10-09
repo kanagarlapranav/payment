@@ -10,7 +10,7 @@ from bot.keyboards import (
     get_home_menu_keyboard, get_add_menu_keyboard, get_more_menu_keyboard,
     get_transaction_detail_keyboard, get_backup_status_keyboard,
     get_history_paginated_keyboard, get_quick_add_keyboard,
-    get_receipt_confirm_keyboard, get_receipt_edit_fields_keyboard,
+    get_confirmation_card_keyboard, get_edit_pending_fields_keyboard,
     get_help_keyboard, get_balance_keyboard, get_stats_keyboard,
     get_budget_keyboard, get_insights_keyboard, get_digest_keyboard,
     get_cafestats_keyboard, get_standard_nav_keyboard, get_delete_confirmed_keyboard
@@ -33,8 +33,8 @@ class TestUXAndNavigation(unittest.TestCase):
             get_backup_status_keyboard(),
             get_history_paginated_keyboard(page=2, total_pages=5, filter_type="SENT", tx_rows=[{"id": 101}, {"id": 102}]),
             get_quick_add_keyboard(top_payees=[{"person_name": "Swiggy"}, {"person_name": "Zomato"}]),
-            get_receipt_confirm_keyboard(pending_id="abc123def4", duplicate_warning=True),
-            get_receipt_edit_fields_keyboard(pending_id="abc123def4"),
+            get_confirmation_card_keyboard(pending_id="abc123def4", duplicate_warning=True),
+            get_edit_pending_fields_keyboard(pending_id="abc123def4"),
             get_help_keyboard(),
             get_balance_keyboard(),
             get_stats_keyboard(),
@@ -116,7 +116,7 @@ class TestUXAndNavigation(unittest.TestCase):
     def test_receipt_confirmation_card_and_edit_fields(self):
         """Test receipt confirmation card buttons and field editing buttons."""
         pending_id = "test_pid_01"
-        kb_confirm = get_receipt_confirm_keyboard(pending_id, duplicate_warning=True)
+        kb_confirm = get_confirmation_card_keyboard(pending_id, duplicate_warning=True)
         callbacks_confirm = [btn.callback_data for row in kb_confirm.inline_keyboard for btn in row]
         
         self.assertIn(f"save_p:{pending_id}", callbacks_confirm)
@@ -124,7 +124,7 @@ class TestUXAndNavigation(unittest.TestCase):
         self.assertIn(f"cat_p:{pending_id}", callbacks_confirm)
         self.assertIn(f"cancel_p:{pending_id}", callbacks_confirm)
 
-        kb_edit = get_receipt_edit_fields_keyboard(pending_id)
+        kb_edit = get_edit_pending_fields_keyboard(pending_id)
         callbacks_edit = [btn.callback_data for row in kb_edit.inline_keyboard for btn in row]
         self.assertIn(f"ep_field:{pending_id}:amount", callbacks_edit)
         self.assertIn(f"ep_field:{pending_id}:person", callbacks_edit)
