@@ -280,6 +280,16 @@ def is_editor(update: Update, workspace_id: Optional[str] = None) -> bool:
 is_member = is_editor
 
 
+def is_viewer(update: Update, workspace_id: Optional[str] = None) -> bool:
+    """Returns True if caller is emergency super admin, global bot owner, workspace owner, admin, member, or viewer."""
+    user_id = get_effective_user_id(update)
+    if user_id is None:
+        return False
+    if is_super_admin(user_id):
+        return True
+    return is_authorized_user(update, workspace_id=workspace_id)
+
+
 def is_authorized_user(update: Update, workspace_id: Optional[str] = None) -> bool:
     """
     Returns True if caller has active membership in the target/current workspace,
