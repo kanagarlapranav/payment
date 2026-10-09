@@ -766,6 +766,30 @@ class TestUXAndNavigation(unittest.TestCase):
                 asyncio.run(handle_callback_query(update, context))
             query.answer.assert_called_with("❌ Invalid button data.", show_alert=True)
 
+    def test_pending_transactions_ttl_pruning(self):
+        """Verify that pending_transactions prunes expired entries on set, fetch, and pop."""
+        import time
+        from bot.handlers import (
+            pending_transactions, _pending_transactions_timestamps,
+            set_pending_transaction, fetch_pending_transaction, pop_pending_transaction
+        )
+        from database.models import Transaction
+
+        t1 = Transaction(amount=100.0, person_name="Alice", transaction_type="SENT")
+        t2 = Transaction(amount=200.0, person_name="Bob", transaction_type="SENT")
+
+        set_pending_transaction("fresh_1", t1)
+        set_pending_transaction("stale_1", t2)
+
+        # Manually backdate stale_1 to 25 hours ago
+        _pending_transactions_timestamps["stale_1"] = time.time() - 90000
+
+        # fetch triggers pruning
+        fetch_pending_transaction("fresh_1")
+        assert "stale_1" not in pending_transactions
+        assert "stale_1" not in _pending_transactions_timestamps
+        assert "fresh_1" in pending_transactions
+
 if __name__ == "__main__":
     unittest.main()
 

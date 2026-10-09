@@ -80,6 +80,11 @@ def set_pending_transaction(pending_id: str, transaction, workspace_id: str = No
     """Stores pending transaction in memory and persists to SQLite database with workspace scoping."""
     _prune_pending_transactions()
     now = time.time()
+    if hasattr(transaction, '__dict__') and not hasattr(transaction, 'created_at'):
+        try:
+            transaction.created_at = now
+        except Exception:
+            pass
     pending_transactions[pending_id] = transaction
     _pending_transactions_timestamps[pending_id] = now
     ws_id = workspace_id or getattr(transaction, 'workspace_id', None)
@@ -93,6 +98,7 @@ def set_pending_transaction(pending_id: str, transaction, workspace_id: str = No
 
 def fetch_pending_transaction(pending_id: str, workspace_id: str = None):
     """Fetches pending transaction from memory or falls back to SQLite database with workspace scoping."""
+    _prune_pending_transactions()
     if workspace_id and (workspace_id, pending_id) in pending_transactions:
         return pending_transactions[(workspace_id, pending_id)]
     
@@ -109,10 +115,18 @@ def fetch_pending_transaction(pending_id: str, workspace_id: str = None):
             tx_ws = getattr(tx, 'workspace_id', None)
             if workspace_id and tx_ws and tx_ws != workspace_id:
                 return None
+            now = time.time()
+            if hasattr(tx, '__dict__') and not hasattr(tx, 'created_at'):
+                try:
+                    tx.created_at = now
+                except Exception:
+                    pass
             pending_transactions[pending_id] = tx
+            _pending_transactions_timestamps[pending_id] = now
             ws_id = workspace_id or tx_ws
             if ws_id:
                 pending_transactions[(ws_id, pending_id)] = tx
+                _pending_transactions_timestamps[(ws_id, pending_id)] = now
             return tx
     except Exception as e:
         logger.error(f"Error retrieving pending receipt {pending_id}: {e}")
@@ -120,15 +134,18 @@ def fetch_pending_transaction(pending_id: str, workspace_id: str = None):
 
 def pop_pending_transaction(pending_id: str, workspace_id: str = None):
     """Pops pending transaction from memory and deletes from SQLite database with workspace scoping."""
+    _prune_pending_transactions()
     tx = None
     if workspace_id:
         tx = pending_transactions.pop((workspace_id, pending_id), None)
+        _pending_transactions_timestamps.pop((workspace_id, pending_id), None)
     
     fallback_tx = pending_transactions.get(pending_id)
     if fallback_tx:
         tx_ws = getattr(fallback_tx, 'workspace_id', None)
         if not workspace_id or not tx_ws or tx_ws == workspace_id:
             pending_transactions.pop(pending_id, None)
+            _pending_transactions_timestamps.pop(pending_id, None)
             if not tx:
                 tx = fallback_tx
 
