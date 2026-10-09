@@ -224,11 +224,13 @@ def is_owner(update: Update, workspace_id: Optional[str] = None) -> bool:
 
 def is_admin_or_owner(update: Update, workspace_id: Optional[str] = None) -> bool:
     """Returns True if caller is emergency super admin, global bot owner, workspace owner, or workspace admin."""
-    if is_owner(update, workspace_id=workspace_id):
-        return True
     user_id = get_effective_user_id(update)
     if user_id is None:
         return False
+    if is_super_admin(user_id):
+        return True
+    if is_owner(update, workspace_id=workspace_id):
+        return True
     from database.queries import get_workspace_by_chat_id, get_workspace_member, get_default_workspace_id
     chat_id = get_effective_chat_id(update)
     chat = getattr(update, 'effective_chat', None)
