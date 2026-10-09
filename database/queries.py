@@ -903,6 +903,20 @@ def insert_transaction_with_balance(t: Transaction) -> int:
         occurred_at = build_occurred_at(t.transaction_date, t.transaction_time)
         t.occurred_at = occurred_at
 
+        # Check if transaction falls into a closed/frozen month
+        if t.transaction_date:
+            try:
+                date_str = str(t.transaction_date).strip()
+                if len(date_str) >= 7 and '-' in date_str:
+                    parts = date_str.split('-')
+                    tx_y, tx_m = int(parts[0]), int(parts[1])
+                    from services.monthly_review_service import is_month_closed
+                    if is_month_closed(tx_y, tx_m, workspace_id=ws_id):
+                        raise ValueError(f"Cannot add transaction to closed month {tx_y:04d}-{tx_m:02d}. Month is closed and frozen.")
+            except (ValueError, TypeError) as d_err:
+                if "Cannot add transaction to closed month" in str(d_err):
+                    raise
+
         now_utc = utc_now_iso()
         created_at = getattr(t, 'created_at', None) or now_utc
         if isinstance(created_at, datetime):
@@ -1434,6 +1448,22 @@ def update_transaction(tx_id: int, updates: dict, workspace_id: str) -> bool:
 
             ws_id = row_ws
 
+            # Check if current transaction or updated transaction falls into a closed/frozen month
+            from services.monthly_review_service import is_month_closed
+            old_date = cur_row['transaction_date']
+            if old_date and len(str(old_date).strip()) >= 7 and '-' in str(old_date):
+                parts = str(old_date).split('-')
+                oy, om = int(parts[0]), int(parts[1])
+                if is_month_closed(oy, om, workspace_id=ws_id):
+                    raise ValueError(f"Cannot edit transaction in closed month {oy:04d}-{om:02d}. Month is closed and frozen.")
+            if 'transaction_date' in validated_updates:
+                new_date = str(validated_updates['transaction_date']).strip()
+                if len(new_date) >= 7 and '-' in new_date:
+                    parts = new_date.split('-')
+                    ny, nm = int(parts[0]), int(parts[1])
+                    if is_month_closed(ny, nm, workspace_id=ws_id):
+                        raise ValueError(f"Cannot move transaction into closed month {ny:04d}-{nm:02d}. Month is closed and frozen.")
+
             # If transaction_date or transaction_time changed, recalculate occurred_at
             if 'transaction_date' in validated_updates or 'transaction_time' in validated_updates:
                 new_date = validated_updates.get('transaction_date', cur_row['transaction_date'])
@@ -1472,7 +1502,7 @@ def delete_transaction(tx_id: int, workspace_id: str) -> bool:
         now_utc = utc_now_iso()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT workspace_id FROM transactions WHERE id = ? AND deleted_at IS NULL", (tx_id,))
+            cursor.execute("SELECT workspace_id, transaction_date FROM transactions WHERE id = ? AND deleted_at IS NULL", (tx_id,))
             row = cursor.fetchone()
             if not row:
                 return False
@@ -1482,6 +1512,14 @@ def delete_transaction(tx_id: int, workspace_id: str) -> bool:
             if row_ws != ws_filter:
                 return False
             ws_id = row_ws
+
+            from services.monthly_review_service import is_month_closed
+            tx_date = row['transaction_date']
+            if tx_date and len(str(tx_date).strip()) >= 7 and '-' in str(tx_date):
+                parts = str(tx_date).split('-')
+                dy, dm = int(parts[0]), int(parts[1])
+                if is_month_closed(dy, dm, workspace_id=ws_id):
+                    raise ValueError(f"Cannot delete transaction in closed month {dy:04d}-{dm:02d}. Month is closed and frozen.")
 
             cursor.execute(
                 "UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
@@ -1509,7 +1547,7 @@ def delete_transaction_by_uid(uid: str, workspace_id: str) -> bool:
         valid_uid = validate_uid(uid)
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT workspace_id FROM transactions WHERE uid = ? AND deleted_at IS NULL", (valid_uid,))
+            cursor.execute("SELECT workspace_id, transaction_date FROM transactions WHERE uid = ? AND deleted_at IS NULL", (valid_uid,))
             row = cursor.fetchone()
             if not row:
                 return False
@@ -1520,11 +1558,20 @@ def delete_transaction_by_uid(uid: str, workspace_id: str) -> bool:
                 return False
             ws_id = row_ws
 
+            from services.monthly_review_service import is_month_closed
+            tx_date = row['transaction_date']
+            if tx_date and len(str(tx_date).strip()) >= 7 and '-' in str(tx_date):
+                parts = str(tx_date).split('-')
+                dy, dm = int(parts[0]), int(parts[1])
+                if is_month_closed(dy, dm, workspace_id=ws_id):
+                    raise ValueError(f"Cannot delete transaction in closed month {dy:04d}-{dm:02d}. Month is closed and frozen.")
+
             cursor.execute(
                 "UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE uid = ? AND deleted_at IS NULL",
                 (now_utc, now_utc, valid_uid)
             )
             deleted = (cursor.rowcount == 1)
+
 
             if deleted:
                 recalculate_in_connection(conn, workspace_id=ws_id)

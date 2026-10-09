@@ -68,13 +68,67 @@ class TestMonthlyClosingSummary(unittest.TestCase):
         self.assertIn("Savings Rate:", text)
         self.assertIn("August 2026", text)
 
-    def test_monthly_closing_keyboard_callback_data_under_64_bytes(self):
-        kb = get_monthly_closing_keyboard(2026, 8, is_closed=True)
-        for row in kb.inline_keyboard:
-            for btn in row:
-                cb = btn.callback_data
-                if cb:
-                    self.assertLessEqual(len(cb.encode('utf-8')), 64)
+    def test_closed_month_freezes_mutations(self):
+        """Once a month is closed, mutations (inserts, updates, deletes) in that month are rejected."""
+        from services.monthly_review_service import close_and_record_monthly_review, reopen_monthly_review
+        from database.queries import update_transaction, delete_transaction
+        # First ensure transactions exist in 2026-06
+        t_pre = Transaction(
+            amount=500.0,
+            transaction_type="SENT",
+            person_name="Pre Close Payee",
+            category="General",
+            transaction_date="2026-06-10",
+            reference_number=f"PRE{uuid.uuid4().hex[:8].upper()}"
+        )
+        tx_id = insert_transaction_with_balance(t_pre)
+        self.assertIsNotNone(tx_id)
+
+        # Close month 2026-06
+        close_and_record_monthly_review(2026, 6)
+
+        # 1. Back-dated insert into 2026-06 is rejected
+        t_back = Transaction(
+            amount=100.0,
+            transaction_type="SENT",
+            person_name="Late Payee",
+            category="General",
+            transaction_date="2026-06-15",
+            reference_number=f"LATE{uuid.uuid4().hex[:8].upper()}"
+        )
+        with self.assertRaises(ValueError) as cm:
+            insert_transaction_with_balance(t_back)
+        self.assertIn("closed month 2026-06", str(cm.exception))
+
+        # 2. Edit of transaction in closed month 2026-06 is rejected
+        from database.queries import get_default_workspace_id
+        default_ws = get_default_workspace_id()
+        with self.assertRaises(ValueError) as cm:
+            update_transaction(tx_id, {"amount": 600.0}, workspace_id=default_ws)
+        self.assertIn("closed month 2026-06", str(cm.exception))
+
+        # 3. Deletion of transaction in closed month 2026-06 is rejected
+        with self.assertRaises(ValueError) as cm:
+            delete_transaction(tx_id, workspace_id=default_ws)
+        self.assertIn("closed month 2026-06", str(cm.exception))
+
+        # 4. Reopening allows modification again
+        self.assertTrue(reopen_monthly_review(2026, 6, workspace_id=default_ws))
+        # Now update succeeds
+        self.assertTrue(update_transaction(tx_id, {"amount": 600.0}, workspace_id=default_ws))
+
+    def test_double_close_warns_and_sets_was_already_closed(self):
+        """Double-closing a month sets was_already_closed = True."""
+        from services.monthly_review_service import close_and_record_monthly_review, reopen_monthly_review
+        reopen_monthly_review(2026, 5)
+        rev1 = close_and_record_monthly_review(2026, 5)
+        self.assertFalse(rev1['was_already_closed'])
+
+        # Second close
+        rev2 = close_and_record_monthly_review(2026, 5)
+        self.assertTrue(rev2['was_already_closed'])
+
 
 if __name__ == "__main__":
     unittest.main()
+

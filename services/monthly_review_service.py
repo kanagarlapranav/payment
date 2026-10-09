@@ -126,11 +126,27 @@ def calculate_monthly_closing_metrics(year: int, month: int, workspace_id: Optio
             'reviewed_at': reviewed_at
         }
 
+def is_month_closed(year: int, month: int, workspace_id: Optional[str] = None) -> bool:
+    """Checks if a given month is closed and frozen for a workspace."""
+    from database.queries import get_default_workspace_id
+    default_ws = get_default_workspace_id()
+    ws_id = str(workspace_id) if workspace_id else default_ws
+    ws_filter = "(workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')" if ws_id == default_ws else "workspace_id = ?"
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT is_closed FROM monthly_reviews WHERE year = ? AND month = ? AND {ws_filter} AND is_closed = 1", (year, month, ws_id))
+        return cursor.fetchone() is not None
+
 def close_and_record_monthly_review(year: int, month: int, notes: str = '', workspace_id: Optional[str] = None) -> Dict:
     """
     Freezes and records the monthly retrospective review into monthly_reviews table.
-    Idempotent: updates existing review timestamp if already reviewed.
+    Warns if the month was already closed.
     """
+    was_already_closed = is_month_closed(year, month, workspace_id=workspace_id)
+    if was_already_closed:
+        from config import logger
+        logger.warning(f"⚠️ Month {year:04d}-{month:02d} is already closed in workspace {workspace_id}. Overwriting existing closed review.")
+
     metrics = calculate_monthly_closing_metrics(year, month, workspace_id=workspace_id)
     now_iso = utc_now_iso()
     ws_id = metrics.get('workspace_id') or workspace_id
@@ -160,7 +176,22 @@ def close_and_record_monthly_review(year: int, month: int, notes: str = '', work
             
     metrics['is_closed'] = True
     metrics['reviewed_at'] = now_iso
+    metrics['was_already_closed'] = was_already_closed
     return metrics
+
+def reopen_monthly_review(year: int, month: int, workspace_id: Optional[str] = None) -> bool:
+    """Unfreezes / re-opens a previously closed month review."""
+    from database.queries import get_default_workspace_id
+    default_ws = get_default_workspace_id()
+    ws_id = str(workspace_id) if workspace_id else default_ws
+    with LEDGER_LOCK:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM monthly_reviews WHERE year = ? AND month = ? AND workspace_id = ?", (year, month, ws_id))
+            reopened = cursor.rowcount > 0
+            increment_revision_and_mark_dirty(conn)
+            conn.commit()
+            return reopened
 
 def get_monthly_review(year: int, month: int, workspace_id: Optional[str] = None) -> Optional[Dict]:
     """Retrieves a previously frozen monthly review with workspace scoping."""
@@ -173,3 +204,4 @@ def get_monthly_review(year: int, month: int, workspace_id: Optional[str] = None
         cursor.execute(f"SELECT * FROM monthly_reviews WHERE year = ? AND month = ? AND {ws_filter}", (year, month, ws_id))
         row = cursor.fetchone()
         return dict(row) if row else None
+
