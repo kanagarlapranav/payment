@@ -516,12 +516,8 @@ async def render_gemini_status_payload(force_refresh: bool = False, role: str = 
 
 async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Checks and reports the live Google Gemini Vision AI status and quota in Telegram chat (Admin only)."""
-    from bot.auth import require_admin, require_authorized
-    from unittest.mock import AsyncMock
-    if isinstance(require_authorized, AsyncMock):
-        if not await require_authorized(update):
-            return
-    elif not await require_admin(update):
+    from bot.auth import require_admin
+    if not await require_admin(update):
         return
 
     status_msg = await update.message.reply_text("🤖 <i>Checking Gemini AI quota and status…</i>", parse_mode='HTML')

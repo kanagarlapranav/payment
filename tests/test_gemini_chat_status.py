@@ -122,7 +122,8 @@ class TestGeminiChatStatus(unittest.TestCase):
             "daily_limit": 20,
         }
 
-        with patch("bot.auth.require_authorized", AsyncMock(return_value=True)), \
+        with patch("bot.auth.require_admin", AsyncMock(return_value=True)), \
+             patch("bot.auth.require_authorized", AsyncMock(return_value=True)), \
              patch("ocr.gemini_vision.check_gemini_api_status_async", AsyncMock(return_value=mock_status)):
             asyncio.run(geministatus_command(update, context))
 
