@@ -2942,6 +2942,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         field = context.user_data.pop('pending_field', None)
         context.user_data.pop('action', None)
 
+        allowed_fields = {'amount', 'person', 'category', 'date', 'type'}
+        if not field or field not in allowed_fields:
+            await update.message.reply_text("❌ Invalid field being edited.", reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
+            return
+
         transaction = fetch_pending_transaction(pending_id, workspace_id=ws_id)
         if not transaction:
             await update.message.reply_text("❌ Receipt has expired.", reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
@@ -2983,6 +2988,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data['pending_field'] = field
                 context.user_data['action'] = 'waiting_edit_pending_value'
                 return
+        elif field == 'category':
+            from services.category_service import CATEGORIES
+            allowed_cats = set(CATEGORIES.keys()) | {
+                "Transport", "Healthcare", "Salary", "General", "Income", "Investment", "Personal"
+            }
+            clean_cat = text.strip()
+            matched = next((c for c in allowed_cats if c.lower() == clean_cat.lower()), None)
+            if not matched:
+                await update.message.reply_text("❌ Invalid category. Please enter a valid category (e.g. Food & Dining, Groceries, Shopping, General):")
+                context.user_data['pending_id'] = pending_id
+                context.user_data['pending_field'] = field
+                context.user_data['action'] = 'waiting_edit_pending_value'
+                return
+            transaction.category = matched
         elif field == 'date':
             d_val = parse_date(text)
             if d_val:
