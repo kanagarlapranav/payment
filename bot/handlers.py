@@ -3122,7 +3122,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if clean_num.isdigit() and len(clean_num) >= 2:
         val = float(clean_num)
         if 'action' not in context.user_data:
-            txs = search_transactions(exact_amount=val)
+            txs = search_transactions(exact_amount=val, workspace_id=ws_id)
             if txs:
                 context.args = [clean_num]
                 await amount_command(update, context)
