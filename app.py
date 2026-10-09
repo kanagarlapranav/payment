@@ -576,11 +576,8 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
             output = io.StringIO()
             writer = csv.writer(output)
             writer.writerow(['ID', 'Date', 'Time', 'Type', 'Amount (INR)', 'Payee / Person', 'Category', 'Bank / App', 'Reference / UTR', 'Balance After'])
-            def _esc(val):
-                s = str(val or '')
-                if s and s[0] in ('=', '+', '-', '@', '\t', '\r'):
-                    return f"'{s}"
-                return s
+            from services.export_service import sanitize_cell_value
+            _esc = sanitize_cell_value
 
             for t in iter_all_transactions_asc(workspace_id=ws_id):
                 writer.writerow([

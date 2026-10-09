@@ -5,9 +5,14 @@ import os
 
 def sanitize_cell_value(val: any) -> any:
     """Neutralizes spreadsheet formula injection by prepending a single quote to formula triggers."""
-    if isinstance(val, str) and len(val) > 0 and val[0] in ('=', '+', '-', '@', '\t', '\r'):
-        return f"'{val}"
-    return val
+    if val is None:
+        return ""
+    if isinstance(val, (int, float)):
+        return val
+    s = str(val)
+    if len(s) > 0 and s[0] in ('=', '+', '-', '@', '\t', '\r'):
+        return f"'{s}"
+    return s
 
 def generate_excel_report(output_path: str, workspace_id: str = None):
     """Generates an Excel report of all transactions for a workspace."""
@@ -296,3 +301,28 @@ def generate_pdf_statement(output_path: str, workspace_id: str = None):
     story.append(tx_table)
 
     doc.build(story, canvasmaker=StatementCanvas)
+    return output_path
+
+
+def generate_csv_report(output_path: str, workspace_id: str = None) -> str:
+    """Generates a CSV report of all transactions for a workspace, sanitized against formula injection."""
+    import csv
+    from database.queries import iter_all_transactions_asc
+
+    with open(output_path, mode='w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(['ID', 'Date', 'Time', 'Type', 'Amount (INR)', 'Payee / Person', 'Category', 'Bank / App', 'Reference / UTR', 'Balance After'])
+        for t in iter_all_transactions_asc(workspace_id=workspace_id):
+            writer.writerow([
+                t['id'],
+                t['transaction_date'],
+                t['transaction_time'] or '',
+                t['transaction_type'],
+                f"{t['amount']:.2f}",
+                sanitize_cell_value(t['person_name']),
+                sanitize_cell_value(t['category'] or 'General'),
+                sanitize_cell_value(t['bank_name'] or t['payment_app'] or ''),
+                sanitize_cell_value(t['reference_number'] or ''),
+                f"{t['balance_after']:.2f}"
+            ])
+    return output_path
