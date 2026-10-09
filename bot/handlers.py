@@ -16,7 +16,7 @@ from bot.auth import (
     get_effective_user_id
 )
 from bot.commands import (
-    is_authorized, is_admin_user, render_home_menu_text, render_history_page,
+    is_admin_user, render_home_menu_text, render_history_page,
     render_contacts_ledger_text, render_transaction_detail, render_backup_status_text
 )
 from bot.keyboards import (

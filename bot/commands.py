@@ -334,9 +334,7 @@ def is_admin_user(update: Update) -> bool:
     """Checks if the user is the primary bot owner (TELEGRAM_USER_ID)."""
     return is_owner(update)
 
-async def is_authorized(update: Update) -> bool:
-    """Checks if the user or group is authorized to use the bot."""
-    return await require_authorized(update)
+is_authorized = require_authorized
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sends the interactive Home Menu card and button grid."""
