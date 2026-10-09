@@ -331,7 +331,7 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
         from database.queries import get_default_workspace_id
         ws_id = (session_info.get("workspace_id") if session_info else None) or get_default_workspace_id()
 
-        # 3. Web dashboard frontend UI
+        # 3. Web dashboard frontend UI (P2-au: both /dashboard and / strictly enforce session authentication)
         if path in ('/dashboard', '/'):
             if not has_session:
                 self._send_security_headers(401, 'text/html; charset=utf-8')
