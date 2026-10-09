@@ -255,8 +255,19 @@ def reconstruct_transaction_from_card(text: str):
         return None
 
 # In-memory store for staged (not yet confirmed) JSON import payloads
-# Maps token -> {'path': Path, 'preview': dict}
+# Maps token -> {'path': Path, 'preview': dict, 'created_at': float, 'uploader_id': int, 'workspace_id': str}
 _pending_json_imports: dict = {}
+
+def _prune_pending_json_imports():
+    now_ts = time.time()
+    for tok, info in list(_pending_json_imports.items()):
+        if now_ts - info.get('created_at', 0) > 600:
+            expired = _pending_json_imports.pop(tok, None)
+            if expired and expired.get('path') and expired['path'].exists():
+                try:
+                    expired['path'].unlink()
+                except OSError:
+                    pass
 
 def format_receipt_card(transaction, dup_warning: str = None) -> str:
     """Formats the polished receipt confirmation card requested by user."""
@@ -1152,8 +1163,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif action == "json_import_confirm":
         # Confirm a staged JSON import (from handle_document preview flow).
+        _prune_pending_json_imports()
         token = parts[1] if len(parts) > 1 else ""
-        staged = _pending_json_imports.pop(token, None)
+        staged = _pending_json_imports.get(token)
         if not staged:
             await query.edit_message_text(
                 "❌ <b>Import session expired or not found.</b>\nPlease re-upload the backup file.",
@@ -1161,14 +1173,27 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
             return
 
+        caller_id = update.effective_user.id if update.effective_user else None
+        uploader_id = staged.get('uploader_id')
+        if uploader_id and caller_id != uploader_id and not is_owner(update):
+            try:
+                ans = query.answer("⛔ Only the uploader or bot owner can confirm this import.", show_alert=True)
+                if asyncio.iscoroutine(ans):
+                    await ans
+            except Exception:
+                pass
+            return
+
+        _pending_json_imports.pop(token, None)
         tmp_path = staged['path']
+        staged_ws_id = staged.get('workspace_id') or ws_id
         await query.edit_message_text("⏳ <b>Importing backup into ledger…</b>", parse_mode='HTML')
         try:
             from services.backup_service import import_database_from_json, export_database_to_json, backup_to_telegram
             from database.queries import get_all_transactions
 
-            # Step 1: Import (reads from temp file — never from BACKUP_JSON_PATH)
-            result = await asyncio.to_thread(import_database_from_json, input_path=tmp_path)
+            # Step 1: Import with workspace scoping
+            result = await asyncio.to_thread(import_database_from_json, input_path=tmp_path, target_workspace_id=staged_ws_id)
             if not result.get('success'):
                 await query.edit_message_text(
                     f"❌ <b>Import Failed:</b> {html.escape(str(result.get('error', 'Unknown error')))}",
@@ -1176,8 +1201,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 )
                 return
 
-            # Step 2: Recalculate balances (already done inside import_database_from_json, but be explicit)
-            await asyncio.to_thread(recalculate_all_balances)
+            # Step 2: Recalculate balances with workspace scoping
+            await asyncio.to_thread(recalculate_all_balances, workspace_id=staged_ws_id)
 
             # Step 3: Export a FRESH backup from the live DB → this becomes the new BACKUP_JSON_PATH
             from config import BACKUP_JSON_PATH
@@ -1186,9 +1211,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             # Step 4: Cloud-upload the fresh backup
             await backup_to_telegram(context.bot)
 
-            # Step 5: Report result
-            txs = await asyncio.to_thread(get_all_transactions)
-            cur_b = format_currency(get_balance_setting())
+            # Step 5: Report result scoped to workspace
+            txs = await asyncio.to_thread(get_all_transactions, workspace_id=staged_ws_id)
+            cur_b = format_currency(get_balance_setting(workspace_id=staged_ws_id))
             ins = result.get('inserted', 0)
             upd = result.get('updated', 0)
             skp = result.get('skipped', 0)
@@ -1219,13 +1244,26 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     elif action == "json_import_cancel":
+        _prune_pending_json_imports()
         token = parts[1] if len(parts) > 1 else ""
-        staged = _pending_json_imports.pop(token, None)
-        if staged and staged.get('path') and staged['path'].exists():
-            try:
-                staged['path'].unlink()
-            except OSError:
-                pass
+        staged = _pending_json_imports.get(token)
+        if staged:
+            caller_id = update.effective_user.id if update.effective_user else None
+            uploader_id = staged.get('uploader_id')
+            if uploader_id and caller_id != uploader_id and not is_owner(update):
+                try:
+                    ans = query.answer("⛔ Only the uploader or bot owner can cancel this import.", show_alert=True)
+                    if asyncio.iscoroutine(ans):
+                        await ans
+                except Exception:
+                    pass
+                return
+            _pending_json_imports.pop(token, None)
+            if staged.get('path') and staged['path'].exists():
+                try:
+                    staged['path'].unlink()
+                except OSError:
+                    pass
         await query.edit_message_text(
             "❌ <b>Import cancelled.</b> No changes were made.",
             reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML'
@@ -3690,18 +3728,21 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Prune expired staged imports (older than 10 minutes)
-        now_ts = time.time()
-        for tok, info in list(_pending_json_imports.items()):
-            if now_ts - info.get('created_at', 0) > 600:
-                expired = _pending_json_imports.pop(tok, None)
-                if expired and expired.get('path') and expired['path'].exists():
-                    try:
-                        expired['path'].unlink()
-                    except OSError:
-                        pass
+        _prune_pending_json_imports()
+
+        from bot.auth import get_workspace_context
+        ws_ctx = get_workspace_context(update)
+        ws_id = ws_ctx.workspace_id if ws_ctx else get_default_workspace_id()
+        uploader_id = update.effective_user.id if update.effective_user else None
 
         # -- Stash validated path for confirmation step --
-        _pending_json_imports[tmp_token] = {'path': tmp_path, 'preview': preview, 'created_at': now_ts}
+        _pending_json_imports[tmp_token] = {
+            'path': tmp_path,
+            'preview': preview,
+            'created_at': now_ts,
+            'uploader_id': uploader_id,
+            'workspace_id': ws_id,
+        }
 
         rev = preview.get('revision', '?')
         exported_at = preview.get('exported_at', '?')

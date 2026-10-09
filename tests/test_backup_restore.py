@@ -467,5 +467,56 @@ class TestBackupRestorePrompt6(unittest.TestCase):
             cnt = conn.execute("SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL").fetchone()[0]
             self.assertGreater(cnt, 0)
 
+    def test_json_import_staging_ttl_and_authorization(self):
+        """Verify that _pending_json_imports prunes stale entries and rejects non-uploader/non-owner callers."""
+        import time
+        from pathlib import Path
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from bot.handlers import (
+            _pending_json_imports, _prune_pending_json_imports, handle_callback_query
+        )
+        import asyncio
+
+        # 1. TTL test
+        fake_token = "tok_test_ttl_123"
+        fake_path = Path("tmp_fake_test_file.json")
+        _pending_json_imports[fake_token] = {
+            'path': fake_path,
+            'preview': {},
+            'created_at': time.time() - 700,  # > 600s ago
+            'uploader_id': 12345,
+            'workspace_id': 'default'
+        }
+        _prune_pending_json_imports()
+        self.assertNotIn(fake_token, _pending_json_imports)
+
+        # 2. Authorization test: stranger trying to confirm import uploaded by another user
+        valid_token = "tok_test_auth_456"
+        _pending_json_imports[valid_token] = {
+            'path': fake_path,
+            'preview': {},
+            'created_at': time.time(),
+            'uploader_id': 11111,
+            'workspace_id': 'default'
+        }
+
+        update = MagicMock()
+        query = MagicMock()
+        query.data = f"json_import_confirm:{valid_token}"
+        query.answer = AsyncMock()
+        update.callback_query = query
+        user = MagicMock()
+        user.id = 99999  # Stranger (neither uploader 11111 nor owner)
+        update.effective_user = user
+        context = MagicMock()
+
+        with patch("bot.handlers.is_owner", return_value=False), \
+             patch("bot.handlers.require_owner", AsyncMock(return_value=False)):
+            asyncio.run(handle_callback_query(update, context))
+
+        # Must still be in _pending_json_imports (not consumed by stranger)
+        self.assertIn(valid_token, _pending_json_imports)
+        _pending_json_imports.pop(valid_token, None)
+
 if __name__ == '__main__':
     unittest.main()
