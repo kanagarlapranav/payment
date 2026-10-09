@@ -346,3 +346,23 @@ def test_update_transaction_whitelist_and_live_rows():
     delete_transaction(tx_id, workspace_id=default_ws)
     ok_del = update_transaction(tx_id, {"amount": 200.0}, workspace_id=default_ws)
     assert ok_del is False
+
+
+def test_rapid_ocr_short_text_retained_as_fallback(tmp_path):
+    """RapidOCR text <= 10 characters is retained as fallback candidate rather than discarded."""
+    from ocr.engine import extract_text_from_image
+
+    img_file = tmp_path / "receipt_short.jpg"
+    img = Image.new("RGB", (200, 100), color="white")
+    img.save(img_file)
+
+    # Mock RapidOCR engine returning short text "₹500"
+    mock_engine = MagicMock()
+    # Format of rapid ocr result: [ [ [[x1,y1],...], "₹500", 0.99 ] ]
+    mock_engine.return_value = ([[[[0, 0], [10, 0], [10, 10], [0, 10]], "₹500", 0.99]], None)
+
+    with patch("ocr.engine.get_rapid_ocr_engine", return_value=mock_engine), \
+         patch("ocr.engine.TESSERACT_CMD", "/nonexistent"), \
+         patch("shutil.which", return_value=None):
+        text = extract_text_from_image(str(img_file))
+        assert text == "₹500"

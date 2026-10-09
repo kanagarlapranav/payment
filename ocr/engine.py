@@ -120,6 +120,7 @@ def extract_text_from_image(image_path: str) -> str:
 
     # 1. Try RapidOCR first (works cross-platform via ONNX without external binaries)
     engine = get_rapid_ocr_engine()
+    rapid_fallback_candidate = ""
     if engine is not None:
         scaled_temp = None
         try:
@@ -142,9 +143,11 @@ def extract_text_from_image(image_path: str) -> str:
             if result:
                 lines = _sort_rapid_ocr_boxes(result)
                 text = "\n".join(lines).strip()
-                if text and len(text) > 10:
-                    logger.info(f"RapidOCR extracted {len(text)} chars from {image_path}")
-                    return text
+                if text:
+                    if len(text) > 10:
+                        logger.info(f"RapidOCR extracted {len(text)} chars from {image_path}")
+                        return text
+                    rapid_fallback_candidate = text
 
             # If initial OCR produced too little text, try with preprocessing
             try:
@@ -157,8 +160,11 @@ def extract_text_from_image(image_path: str) -> str:
                             lines2 = _sort_rapid_ocr_boxes(res2)
                             text2 = "\n".join(lines2).strip()
                             if text2:
-                                logger.info(f"RapidOCR (preprocessed) extracted {len(text2)} chars")
-                                return text2
+                                if len(text2) > 10:
+                                    logger.info(f"RapidOCR (preprocessed) extracted {len(text2)} chars")
+                                    return text2
+                                if not rapid_fallback_candidate:
+                                    rapid_fallback_candidate = text2
                     finally:
                         try:
                             os.remove(proc_path)
@@ -191,14 +197,19 @@ def extract_text_from_image(image_path: str) -> str:
             try:
                 import pytesseract
                 pytesseract.pytesseract.tesseract_cmd = tesseract_bin
-                img = Image.open(image_path)
-                custom_config = r'--oem 3 --psm 6'
-                text = pytesseract.image_to_string(img, config=custom_config)
-                if text and text.strip():
-                    return text.strip()
+                with Image.open(image_path) as img:
+                    custom_config = r'--oem 3 --psm 6'
+                    text = pytesseract.image_to_string(img, config=custom_config)
+                    if text and text.strip():
+                        return text.strip()
             except ImportError:
                 logger.debug("pytesseract is not installed, skipping fallback.")
     except Exception as e:
         logger.error(f"Tesseract OCR Error on {image_path}: {e}")
+
+    # 3. Return short RapidOCR text candidate if no other engine succeeded
+    if rapid_fallback_candidate:
+        logger.info(f"Using short RapidOCR fallback text ({len(rapid_fallback_candidate)} chars): {rapid_fallback_candidate!r}")
+        return rapid_fallback_candidate
 
     return ""
