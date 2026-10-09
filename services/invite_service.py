@@ -59,10 +59,15 @@ def create_workspace_invite(
                 ))
                 conn.commit()
 
+        from database.queries import get_workspace_member
+        from config import SUPER_ADMIN_IDS
+        cm = get_workspace_member(workspace_id, creator_user_id)
+        c_role = cm.role if cm else ("owner" if int(creator_user_id) in SUPER_ADMIN_IDS else "admin")
         from services.audit_service import log_audit_event
         log_audit_event(
             workspace_id=workspace_id,
             actor_user_id=creator_user_id,
+            actor_role=c_role,
             action="invite_created",
             resource=f"invite:{invite_id}",
             details={"intended_role": intended_role, "max_uses": max_uses, "expires_at": expires_at}
@@ -91,10 +96,15 @@ def revoke_workspace_invite(workspace_id: str, invite_id: str, revoked_by: int) 
                 conn.commit()
 
         if updated:
+            from database.queries import get_workspace_member
+            from config import SUPER_ADMIN_IDS
+            rm = get_workspace_member(workspace_id, revoked_by)
+            r_role = rm.role if rm else ("owner" if int(revoked_by) in SUPER_ADMIN_IDS else "admin")
             from services.audit_service import log_audit_event
             log_audit_event(
                 workspace_id=workspace_id,
                 actor_user_id=revoked_by,
+                actor_role=r_role,
                 action="invite_revoked",
                 resource=f"invite:{invite_id}"
             )
@@ -211,6 +221,7 @@ def validate_and_redeem_invite(
     log_audit_event(
         workspace_id=ws_id,
         actor_user_id=user_id,
+        actor_role=role,
         action="invite_redeemed",
         resource=f"invite:{invite_id}",
         details={"granted_role": role, "new_member_id": user_id}
@@ -263,10 +274,15 @@ def ban_workspace_user(workspace_id: str, telegram_user_id: int | str, banned_by
             conn.commit()
 
     if banned_by:
+        from database.queries import get_workspace_member
+        from config import SUPER_ADMIN_IDS
+        bm = get_workspace_member(str(workspace_id), int(banned_by))
+        b_role = bm.role if bm else ("owner" if int(banned_by) in SUPER_ADMIN_IDS else "admin")
         from services.audit_service import log_audit_event
         log_audit_event(
             workspace_id=str(workspace_id),
             actor_user_id=int(banned_by),
+            actor_role=b_role,
             action="member_banned",
             resource=f"user:{uid}",
             details={"banned_user_id": uid}

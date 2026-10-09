@@ -106,6 +106,7 @@ SUPER_ADMIN_USER_IDS = [
     for uid in raw_super_admins.split(',')
     if uid.strip() and (uid.strip().isdigit() or (uid.strip().startswith('-') and uid.strip()[1:].isdigit()))
 ]
+SUPER_ADMIN_IDS = SUPER_ADMIN_USER_IDS
 
 
 # OCR Configuration: avoid Windows path default on Linux/Render

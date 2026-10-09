@@ -1508,10 +1508,15 @@ def export_workspace_to_json(workspace_id: str, output_path: Path = None, actor_
                     target_path.unlink()
                 temp_path.rename(target_path)
 
+                from database.queries import get_workspace_member
+                from config import SUPER_ADMIN_IDS
+                amem = get_workspace_member(str(workspace_id), int(actor_user_id)) if actor_user_id else None
+                a_role = amem.role if amem else ("owner" if int(actor_user_id or 0) in SUPER_ADMIN_IDS else "admin")
                 from services.audit_service import log_audit_event
                 log_audit_event(
                     workspace_id=str(workspace_id),
                     actor_user_id=actor_user_id,
+                    actor_role=a_role,
                     action="backup_exported",
                     resource=f"workspace:{workspace_id}",
                     details={"path": str(target_path), "transactions_count": len(transactions)}
@@ -1691,10 +1696,15 @@ def restore_workspace_from_json(workspace_id: str, data_dict: dict, actor_user_i
             except Exception:
                 pass
 
+            from database.queries import get_workspace_member
+            from config import SUPER_ADMIN_IDS
+            rmem = get_workspace_member(str(workspace_id), int(actor_user_id)) if actor_user_id else None
+            r_role = rmem.role if rmem else ("owner" if int(actor_user_id or 0) in SUPER_ADMIN_IDS else "admin")
             from services.audit_service import log_audit_event
             log_audit_event(
                 workspace_id=str(workspace_id),
                 actor_user_id=actor_user_id,
+                actor_role=r_role,
                 action="backup_restored",
                 resource=f"workspace:{workspace_id}",
                 details={"restored_transactions": len(txs)}

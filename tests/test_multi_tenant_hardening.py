@@ -176,7 +176,20 @@ def test_workspace_audit_logging(test_workspaces):
     recent = events[0]
     assert recent['action'] == "test_security_event"
     assert recent['actor_user_id'] == 5001
+    assert recent['actor_role'] == "owner"
     assert recent['details']['action_code'] == 42
+
+    # Auto-resolved role test for member 5001 (who is owner)
+    log_audit_event(
+        workspace_id=ws_a_id,
+        actor_user_id=5001,
+        action="test_auto_role",
+        resource="config:auto"
+    )
+    events2 = get_workspace_audit_logs(ws_a_id, limit=5)
+    auto_event = events2[0]
+    assert auto_event['action'] == "test_auto_role"
+    assert auto_event['actor_role'] == "owner"
 
 
 def test_persistent_dashboard_auth(test_workspaces):

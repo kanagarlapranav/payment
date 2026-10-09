@@ -321,10 +321,15 @@ def perform_undo(
                 )
                 conn.commit()
 
+            from database.queries import get_workspace_member
+            from config import SUPER_ADMIN_IDS
+            umem = get_workspace_member(str(rec_ws_id), int(u_id)) if u_id else None
+            u_role = umem.role if umem else ("owner" if int(u_id or 0) in SUPER_ADMIN_IDS else "member")
             from services.audit_service import log_audit_event
             log_audit_event(
                 workspace_id=rec_ws_id,
                 actor_user_id=u_id,
+                actor_role=u_role,
                 action="transaction_restored_undo",
                 resource=f"tx:{uid}"
             )

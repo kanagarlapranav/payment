@@ -15,7 +15,7 @@ def log_audit_event(
     actor_user_id: int,
     action: str,
     resource: str,
-    actor_role: str = "member",
+    actor_role: Optional[str] = None,
     request_id: str = "",
     result: str = "success",
     details: Optional[Dict[str, Any]] = None
@@ -25,6 +25,21 @@ def log_audit_event(
     """
     if not workspace_id:
         return False
+
+    if not actor_role and actor_user_id and workspace_id:
+        try:
+            from database.queries import get_workspace_member
+            mem = get_workspace_member(str(workspace_id), int(actor_user_id))
+            if mem and getattr(mem, "role", None):
+                actor_role = mem.role
+            else:
+                from config import SUPER_ADMIN_IDS
+                if int(actor_user_id) in SUPER_ADMIN_IDS:
+                    actor_role = "owner"
+        except Exception:
+            pass
+
+    resolved_role = str(actor_role or "member")
 
     now_utc = datetime.now(timezone.utc).isoformat()
     details_str = json.dumps(details or {})
@@ -42,7 +57,7 @@ def log_audit_event(
                 """, (
                     str(workspace_id),
                     int(actor_user_id or 0),
-                    str(actor_role or "member"),
+                    str(resolved_role),
                     str(action),
                     str(resource),
                     str(request_id or ""),

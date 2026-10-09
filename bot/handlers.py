@@ -1815,9 +1815,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         set_user_permission_and_role(target_uid, role, is_active=True, workspace_id=target_ws_id)
 
         # Audit log event
+        approver_role = "owner" if is_owner(update) else "admin"
         log_audit_event(
             workspace_id=target_ws_id,
             actor_user_id=approver_id,
+            actor_role=approver_role,
             action="access_request_approved",
             resource=f"user:{target_uid}",
             details={"role": role, "username": username}
@@ -1858,7 +1860,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 )
             except Exception as e:
                 logger.warning(f"Could not notify approved user {target_uid}: {e}")
-        return
+            return
 
     elif action == "auth_deny":
         if not is_owner(update):
@@ -1880,6 +1882,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         log_audit_event(
             workspace_id=req_ws_id,
             actor_user_id=approver_id,
+            actor_role="owner",
             action="access_request_denied",
             resource=f"user:{target_uid}"
         )
