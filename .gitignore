@@ -13,7 +13,6 @@ credentials.json
 data/*.db
 data/*.sqlite3
 data/*.json
-!data/seed_backup.json
 data/*.xlsx
 data/*.pdf
 data/*.pre-remediation

@@ -17,14 +17,18 @@ class TestNoSecrets(unittest.TestCase):
 
     # Allowed dummy/test placeholders that should not fail scans
     ALLOWED_TEST_TOKENS = {
-        "123456789:AAFakePlaceholderBotTokenForTesting35",
-        "AIzaSyFakePlaceholderGeminiApiKeyForTesting35",
+        "123456789:AAFakePlaceholderBotTokenForTest35",
+        "AIzaSyFakePlaceholderGeminiApiKeyForTest35",
         "123456789:AA" + "0" * 33,
         "AIza" + "0" * 35,
     }
 
     def test_no_secrets_in_tracked_files(self):
-        """Scans all tracked git files to ensure no live credentials remain in source code."""
+        """
+        Scans all tracked git files to ensure no live credentials remain in source code.
+        Note: Only tracked files are verified in repository history; untracked local .env and
+        local databases remain safely excluded by .gitignore.
+        """
         try:
             tracked_files = subprocess.check_output(['git', 'ls-files'], text=True).splitlines()
         except Exception:
@@ -75,7 +79,11 @@ class TestNoSecrets(unittest.TestCase):
         )
 
     def test_no_production_data_or_unprotected_backups_tracked(self):
-        """P0-1/P0-N10: Verifies no raw SQLite databases or sensitive backup files are tracked in git."""
+        """
+        P0-1/P0-N10: Verifies no raw SQLite databases or sensitive backup files are tracked in git.
+        Fails on any tracked data/*.sqlite3*, data/*.json, *.before-migration (excluding .gitkeep).
+        Note: Only tracked git files are checked; untracked local .env/DB files are guarded by .gitignore.
+        """
         try:
             tracked_files = subprocess.check_output(['git', 'ls-files'], text=True).splitlines()
         except Exception:
@@ -84,7 +92,9 @@ class TestNoSecrets(unittest.TestCase):
         forbidden_data_files = []
         for path in tracked_files:
             norm = path.replace("\\", "/")
-            if norm.startswith("data/") and norm not in ("data/images/.gitkeep", "data/seed_backup.json"):
+            if norm.endswith(".gitkeep"):
+                continue
+            if norm.startswith("data/") or ".sqlite3" in norm or ".db" in norm or "before-migration" in norm:
                 forbidden_data_files.append(norm)
 
         self.assertEqual(
