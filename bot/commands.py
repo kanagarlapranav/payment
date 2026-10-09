@@ -338,7 +338,7 @@ async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Returns the chat ID for group configuration."""
     if not await require_authorized(update): return
     chat_id = update.message.chat_id
-    await update.message.reply_text(f"This chat's ID is: `{chat_id}`", parse_mode='Markdown')
+    await update.message.reply_text(f"This chat's ID is: <code>{html.escape(str(chat_id))}</code>", parse_mode='HTML')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the role-tailored guide of commands and bot capabilities."""
@@ -611,20 +611,20 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balance = overall.current_balance
 
     text = (
-        f"💰 *Current Balance*\n"
-        f"👉 *{format_currency(balance)}*\n\n"
+        f"💰 <b>Current Balance</b>\n"
+        f"👉 <b>{html.escape(format_currency(balance))}</b>\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 *Overall Summary:*\n"
-        f"• 🟢 Received: {format_currency(overall.total_received)}\n"
-        f"• 🔴 Sent: {format_currency(overall.total_sent)}\n"
-        f"• 📈 Net: {format_currency(overall.net_change)} ({overall.transaction_count} transactions)\n\n"
-        f"📅 *Today's Summary:*\n"
-        f"• 🟢 Received: {format_currency(today.total_received)}\n"
-        f"• 🔴 Sent: {format_currency(today.total_sent)}\n"
-        f"• 📈 Net: {format_currency(today.net_change)} ({today.transaction_count} transactions)"
+        f"📊 <b>Overall Summary:</b>\n"
+        f"• 🟢 Received: {html.escape(format_currency(overall.total_received))}\n"
+        f"• 🔴 Sent: {html.escape(format_currency(overall.total_sent))}\n"
+        f"• 📈 Net: {html.escape(format_currency(overall.net_change))} ({overall.transaction_count} transactions)\n\n"
+        f"📅 <b>Today's Summary:</b>\n"
+        f"• 🟢 Received: {html.escape(format_currency(today.total_received))}\n"
+        f"• 🔴 Sent: {html.escape(format_currency(today.total_sent))}\n"
+        f"• 📈 Net: {html.escape(format_currency(today.net_change))} ({today.transaction_count} transactions)"
     )
     from bot.keyboards import get_balance_keyboard
-    await update.message.reply_text(text, reply_markup=get_balance_keyboard(), parse_mode='Markdown')
+    await update.message.reply_text(text, reply_markup=get_balance_keyboard(), parse_mode='HTML')
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
@@ -1046,16 +1046,19 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for idx, t in enumerate(transactions, 1):
             date_s = format_display_date(t['transaction_date'])
             badge = "🟢" if t['transaction_type'] == 'RECEIVED' else "🔴"
-            tx_list_lines.append(f"*{t['id']}.* {badge} {t['person_name'] or 'Unknown'} — *{format_currency(t['amount'])}* ({date_s})")
+            p_name = html.escape(str(t['person_name'] or 'Unknown'))
+            amt_s = html.escape(format_currency(t['amount']))
+            date_esc = html.escape(str(date_s))
+            tx_list_lines.append(f"<b>{t['id']}.</b> {badge} {p_name} — <b>{amt_s}</b> ({date_esc})")
 
         list_text = "\n".join(tx_list_lines)
-        header_text = "✏️ *Edit Transaction*" if role in ('owner', 'admin') else "✏️ *Edit Your Transaction*"
+        header_text = "✏️ <b>Edit Transaction</b>" if role in ('owner', 'admin') else "✏️ <b>Edit Your Transaction</b>"
         await update.message.reply_text(
             f"{header_text}\n\n"
-            f"Tap a button below, or reply with the transaction ID (e.g. `1`):\n\n"
+            f"Tap a button below, or reply with the transaction ID (e.g. <code>1</code>):\n\n"
             f"{list_text}",
             reply_markup=get_transaction_selection_keyboard(transactions, 'select_edit'),
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         return
 
@@ -1309,8 +1312,8 @@ async def send_pdf_report(chat, bot, workspace_id: str = None):
                 chat_id=chat.id,
                 document=f,
                 filename="Payment_Tracker_Statement.pdf",
-                caption="📄 *Here is your official PDF Account Statement.*",
-                parse_mode='Markdown'
+                caption="📄 <b>Here is your official PDF Account Statement.</b>",
+                parse_mode='HTML'
             )
     except Exception as e:
         logger.error(f"PDF Export error: {e}", exc_info=True)
@@ -1334,8 +1337,8 @@ async def send_excel_report(chat, bot, workspace_id: str = None):
                 chat_id=chat.id,
                 document=f,
                 filename="transactions_export.xlsx",
-                caption="📊 *Here is your transactions Excel spreadsheet.*",
-                parse_mode='Markdown'
+                caption="📊 <b>Here is your transactions Excel spreadsheet.</b>",
+                parse_mode='HTML'
             )
     except Exception as e:
         logger.error(f"Excel Export error: {e}", exc_info=True)
@@ -1372,9 +1375,9 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ])
     await update.message.reply_text(
-        "📊 *Export Transactions & Reports*\n\nChoose your preferred format below:",
+        "📊 <b>Export Transactions & Reports</b>\n\nChoose your preferred format below:",
         reply_markup=keyboard,
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
 
 async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
