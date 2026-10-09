@@ -1339,6 +1339,23 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
     elif action == "ep_field":
         pending_id = parts[1]
         field = parts[2]
+        allowed_fields = {'amount', 'person', 'category', 'date', 'type'}
+        if field not in allowed_fields:
+            await query.answer("❌ Invalid edit field.", show_alert=True)
+            return
+
+        transaction = fetch_pending_transaction(pending_id, workspace_id=ws_id)
+        creator_uid = getattr(transaction, 'telegram_user_id', None) if transaction else None
+        clicker_uid = query.from_user.id if query.from_user else None
+        if creator_uid and clicker_uid and int(creator_uid) != int(clicker_uid):
+            from bot.auth import is_admin_or_owner
+            if not is_admin_or_owner(update, workspace_id=ws_id):
+                try:
+                    await query.answer("⛔ Only the creator of this receipt or an admin can edit it.", show_alert=True)
+                except Exception:
+                    pass
+                return
+
         context.user_data['action'] = 'waiting_edit_pending_value'
         context.user_data['pending_id'] = pending_id
         context.user_data['pending_field'] = field
@@ -1348,7 +1365,8 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             'amount': "Enter the new amount (e.g. <code>150</code>):",
             'person': "Enter the payee / person name:",
             'date': "Enter the date (e.g. <code>yesterday</code> or <code>19/09/2026</code>):",
-            'type': "Enter type (<code>SENT</code> or <code>RECEIVED</code>):"
+            'type': "Enter type (<code>SENT</code> or <code>RECEIVED</code>):",
+            'category': "Enter category (or choose from category picker):"
         }
         await safe_edit_callback_message(query, f"✏️ {prompts.get(field, 'Enter new value:')}", reply_markup=cancel_markup, parse_mode='HTML')
         return
