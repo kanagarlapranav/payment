@@ -261,6 +261,11 @@ def test_sanitize_error_message_redacts_keys_and_paths():
     assert "[REDACTED_API_KEY]" in sanitized
     assert "[LOCAL_PATH]" in sanitized
 
+    render_error = Exception("Render failed at /opt/render/project/src/data/db.sqlite")
+    sanitized_render = gv._sanitize_error_message(render_error)
+    assert "/opt/render/project/src/data/db.sqlite" not in sanitized_render
+    assert "[LOCAL_PATH]" in sanitized_render
+
 
 # --- 3. Prompt Hygiene & Image Crop ---
 

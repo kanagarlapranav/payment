@@ -331,6 +331,7 @@ def _sanitize_error_message(err: Exception, api_key: str = "") -> str:
         msg = msg.replace(api_key, "[REDACTED_API_KEY]")
     msg = re.sub(r"[A-Za-z]:\\[^\s'\"]+", "[LOCAL_PATH]", msg)
     msg = re.sub(r"/(?:Users|home|root)/[^\s'\"]+", "[LOCAL_PATH]", msg)
+    msg = re.sub(r"/opt/[^\s'\"]+", "[LOCAL_PATH]", msg)
     return msg
 
 
