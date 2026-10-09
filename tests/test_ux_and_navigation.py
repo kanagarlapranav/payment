@@ -718,6 +718,35 @@ class TestUXAndNavigation(unittest.TestCase):
         # The retry call should have stripped HTML tags
         self.assertEqual(query_text.edit_message_text.call_args_list[1][0][0], "Broken Tag")
 
+    def test_callback_validation_spec_guard(self):
+        """Verify that callbacks with missing or invalid arguments are rejected with 'Invalid button data.'"""
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from bot.handlers import handle_callback_query
+        import asyncio
+
+        malformed_samples = [
+            "undo_tx:not_an_int",
+            "undo_tx",
+            "delete_confirm:abc",
+            "close_month:2026",
+            "close_month:abc:def",
+            "rec_paid:not_int",
+            "export_file",
+            "quick_add:SENT:not_a_float:Person",
+            "auth_grant:not_int:member",
+        ]
+
+        for data in malformed_samples:
+            update = MagicMock()
+            query = MagicMock()
+            query.data = data
+            query.answer = AsyncMock()
+            update.callback_query = query
+            context = MagicMock()
+
+            asyncio.run(handle_callback_query(update, context))
+            query.answer.assert_called_with("❌ Invalid button data.", show_alert=True)
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -586,6 +586,56 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.warning(f"Could not delete temp image {image_path}: {cleanup_err}")
 
 
+CALLBACK_PARAM_SPECS = {
+    "undo_tx": [int],
+    "select_edit": [int],
+    "select_delete": [int],
+    "edit_field": [int, str],
+    "delete_confirm": [int],
+    "correct_amount": [int],
+    "cafe_edit": [int],
+    "cafe_del_item": [int],
+    "cafe_pick": [str],
+    "cafe_mode": [str],
+    "cafe_cart_add": [str],
+    "cafe_cat": [str],
+    "cafe_addon": [str],
+    "rec_paid": [int],
+    "rec_skip": [int],
+    "rec_pause": [int],
+    "rec_resume": [int],
+    "rec_del": [int],
+    "rec_cancel": [int],
+    "rec_delete": [int],
+    "auth_grant": [int, str],
+    "auth_deny": [int],
+    "perm_view": [int],
+    "perm_set": [int, str],
+    "perm_remove": [int],
+    "perm_remove_confirm": [int],
+    "close_month": [int, int],
+    "tx_view": [int],
+    "dup_tx": [int],
+    "edit_tx": [int],
+    "delete_tx": [int],
+    "qa_payee": [str],
+    "save_p": [str],
+    "force_save_p": [str],
+    "edit_p": [str],
+    "ep_field": [str, str],
+    "ep_back": [str],
+    "cat_p": [str],
+    "set_pcat": [str, str],
+    "ws_switch": [str],
+    "quick_add": [str, float, str],
+    "confirm_tx": [str],
+    "cancel_tx": [str],
+    "export_file": [str],
+    "filter": [str],
+    "sort": [str],
+}
+
+
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles button presses from inline keyboards with central authorization policy."""
     query = update.callback_query
@@ -595,7 +645,46 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     data = query.data
     parts = data.split(":") if ":" in data else [data]
     action = parts[0]
-    
+
+    # Validate argument specifications at dispatch (B4 / P1-11)
+    if action in CALLBACK_PARAM_SPECS:
+        specs = CALLBACK_PARAM_SPECS[action]
+        if len(parts) - 1 < len(specs):
+            try:
+                ans = query.answer("❌ Invalid button data.", show_alert=True)
+                if asyncio.iscoroutine(ans):
+                    await ans
+            except Exception:
+                pass
+            return
+        is_valid = True
+        for idx, expected_type in enumerate(specs, start=1):
+            val = parts[idx]
+            if expected_type is int:
+                try:
+                    int(val)
+                except (ValueError, TypeError):
+                    is_valid = False
+                    break
+            elif expected_type is float:
+                try:
+                    float(val)
+                except (ValueError, TypeError):
+                    is_valid = False
+                    break
+            elif expected_type is str:
+                if not val or not str(val).strip():
+                    is_valid = False
+                    break
+        if not is_valid:
+            try:
+                ans = query.answer("❌ Invalid button data.", show_alert=True)
+                if asyncio.iscoroutine(ans):
+                    await ans
+            except Exception:
+                pass
+            return
+
     # Check policy before any database access or data exposure
     policy = WORKSPACE_CALLBACK_POLICY.get(action) or get_callback_policy(action)
     if policy is None:
