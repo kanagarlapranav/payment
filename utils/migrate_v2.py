@@ -23,6 +23,12 @@ ARCHIVE_DIR = DATA_DIR / "archive"
 def run_migration():
     print(f"Opening database at {DB_PATH}...")
     if DB_PATH.exists():
+        try:
+            chk_conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
+            chk_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            chk_conn.close()
+        except Exception as e:
+            print(f"Warning: WAL checkpoint before backup returned: {e}")
         backup_file = DB_PATH.with_suffix(".sqlite3.backup-v2")
         shutil.copy2(DB_PATH, backup_file)
         print(f"Pre-migration backup created: {backup_file}")
