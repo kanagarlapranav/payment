@@ -1682,10 +1682,11 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         update_access_request_status(target_uid, 'rejected', reviewed_by=approver_id)
         set_user_permission_and_role(target_uid, 'viewer', is_active=False)
 
+        approver_role = "owner" if is_owner(update) else "admin"
         log_audit_event(
             workspace_id=req_ws_id,
             actor_user_id=approver_id,
-            actor_role="owner",
+            actor_role=approver_role,
             action="access_request_denied",
             resource=f"user:{target_uid}"
         )
