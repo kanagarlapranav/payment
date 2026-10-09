@@ -386,6 +386,8 @@ def setup_database():
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_date ON transactions(transaction_date)')
                 # Drop legacy redundant idx_transactions_occurred if present (P2-ar)
                 cursor.execute('DROP INDEX IF EXISTS idx_transactions_occurred')
+                # Drop legacy redundant idx_transactions_created if present (P2-as)
+                cursor.execute('DROP INDEX IF EXISTS idx_transactions_created')
                 # Non-composite index on occurred_at is retained for cross-workspace exports/maintenance ordering where workspace_id is omitted; composite idx_tx_ws_occurred covers tenant-scoped queries
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_occurred_at ON transactions(occurred_at)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_type ON transactions(transaction_type)')
