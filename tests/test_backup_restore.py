@@ -553,5 +553,107 @@ class TestBackupRestorePrompt6(unittest.TestCase):
         self.assertIn(valid_token, _pending_json_imports)
         _pending_json_imports.pop(valid_token, None)
 
+    def test_checksum_covers_workspaces_and_metadata(self):
+        """Verifies that tampering with workspaces, balance, or metadata invalidates checksum."""
+        from services.backup_service import compute_canonical_checksum, verify_backup_payload
+        uid = uuid.uuid4().hex
+        payload = {
+            "version": 2,
+            "revision": 3,
+            "exported_at": "2026-10-09T12:00:00+00:00",
+            "balance": 1500.0,
+            "empty_ledger": False,
+            "workspaces": [{"id": "ws-1", "title": "Test Workspace"}],
+            "workspace_members": [{"workspace_id": "ws-1", "telegram_user_id": 12345}],
+            "workspace_settings": [{"workspace_id": "ws-1", "key": "k", "value": "v"}],
+            "settings": {},
+            "custom_menu_items": [],
+            "budgets": [],
+            "transactions": [{
+                "uid": uid,
+                "transaction_type": "SENT",
+                "amount": 100.0,
+                "person_name": "Test Person",
+                "transaction_date": "2026-10-09",
+                "transaction_time": "12:00 PM",
+                "occurred_at": "2026-10-09 12:00:00",
+                "created_at": "2026-10-09T12:00:00+00:00",
+                "updated_at": "2026-10-09T12:00:00+00:00",
+            }]
+        }
+        payload["checksum"] = compute_canonical_checksum(payload)
+        valid, msg = verify_backup_payload(payload)
+        self.assertTrue(valid, msg)
+
+        # Tampering with balance must fail verification
+        tampered_balance = dict(payload)
+        tampered_balance["balance"] = 9999.0
+        valid, msg = verify_backup_payload(tampered_balance)
+        self.assertFalse(valid)
+        self.assertIn("Checksum mismatch", msg)
+
+        # Tampering with workspaces must fail verification
+        tampered_ws = dict(payload)
+        tampered_ws["workspaces"] = [{"id": "ws-2", "title": "Tampered"}]
+        valid, msg = verify_backup_payload(tampered_ws)
+        self.assertFalse(valid)
+        self.assertIn("Checksum mismatch", msg)
+
+    def test_validate_json_backup_rejects_duplicate_or_invalid_uids(self):
+        """Pre-validation catches duplicate UIDs or malformed UIDs before DB insertion."""
+        from services.backup_service import validate_json_backup, compute_canonical_checksum
+        dup_uid = uuid.uuid4().hex
+        payload = {
+            "version": 2,
+            "revision": 1,
+            "settings": {},
+            "custom_menu_items": [],
+            "budgets": [],
+            "transactions": [
+                {
+                    "uid": dup_uid,
+                    "transaction_type": "SENT",
+                    "amount": 50.0,
+                    "person_name": "First Entry",
+                    "transaction_date": "2026-10-09",
+                },
+                {
+                    "uid": dup_uid,
+                    "transaction_type": "RECEIVED",
+                    "amount": 75.0,
+                    "person_name": "Duplicate Entry",
+                    "transaction_date": "2026-10-09",
+                }
+            ]
+        }
+        payload["checksum"] = compute_canonical_checksum(payload)
+        valid, msg = validate_json_backup(payload)
+        self.assertFalse(valid)
+        self.assertIn("Duplicate UID", msg)
+
+        # Missing UID in v2 must be rejected
+        payload_missing_uid = {
+            "version": 2,
+            "revision": 1,
+            "settings": {},
+            "custom_menu_items": [],
+            "budgets": [],
+            "transactions": [
+                {
+                    "uid": "",
+                    "transaction_type": "SENT",
+                    "amount": 50.0,
+                    "person_name": "No UID Entry",
+                    "transaction_date": "2026-10-09",
+                }
+            ]
+        }
+        payload_missing_uid["checksum"] = compute_canonical_checksum(payload_missing_uid)
+        valid, msg = validate_json_backup(payload_missing_uid)
+        self.assertFalse(valid)
+        self.assertIn("missing mandatory UID", msg)
+
+
 if __name__ == '__main__':
     unittest.main()
+

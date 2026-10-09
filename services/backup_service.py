@@ -135,23 +135,6 @@ def export_database_to_json(output_path: Path = None) -> dict:
                     settings['last_local_backup_at'] = now_utc
                     conn.commit()
 
-                # Build payload for canonical checksum
-                payload_for_hash = {
-                    "version": 2,
-                    "revision": rev,
-                    "settings": settings,
-                    "custom_menu_items": menu_items,
-                    "budgets": budgets,
-                    "transactions": tx_rows,
-                }
-                canonical_str = json.dumps(
-                    payload_for_hash,
-                    sort_keys=True,
-                    ensure_ascii=False,
-                    separators=(',', ':')
-                )
-                checksum = hashlib.sha256(canonical_str.encode('utf-8')).hexdigest()
-
                 backup_data = {
                     "version": 2,
                     "database_id": db_id,
@@ -170,8 +153,8 @@ def export_database_to_json(output_path: Path = None) -> dict:
                     "recurring_payments": recurring_payments,
                     "monthly_reviews": monthly_reviews,
                     "transactions": tx_rows,
-                    "checksum": checksum,
                 }
+                backup_data["checksum"] = compute_canonical_checksum(backup_data)
                 
                 # Atomic file write: write to .tmp file, flush, fsync, then replace
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -337,6 +320,18 @@ def compute_canonical_checksum(data_dict: dict) -> str:
         "budgets": data_dict.get("budgets", []),
         "transactions": data_dict.get("transactions", []),
     }
+    if "workspaces" in data_dict:
+        payload_for_hash["workspaces"] = data_dict["workspaces"]
+    if "workspace_members" in data_dict:
+        payload_for_hash["workspace_members"] = data_dict["workspace_members"]
+    if "workspace_settings" in data_dict:
+        payload_for_hash["workspace_settings"] = data_dict["workspace_settings"]
+    if "exported_at" in data_dict:
+        payload_for_hash["exported_at"] = data_dict["exported_at"]
+    if "balance" in data_dict:
+        payload_for_hash["balance"] = data_dict["balance"]
+    if "empty_ledger" in data_dict:
+        payload_for_hash["empty_ledger"] = data_dict["empty_ledger"]
     if "workspace_id" in data_dict:
         payload_for_hash["workspace_id"] = data_dict["workspace_id"]
     if "workspace" in data_dict:
@@ -371,25 +366,49 @@ def verify_backup_payload(data_dict: dict) -> tuple[bool, str]:
             return False, "Missing or empty checksum in Format v2 backup"
         expected_checksum = compute_canonical_checksum(data_dict)
         if checksum != expected_checksum:
-            # Check legacy v2 format (prior to budgets or compact separators)
-            legacy_payload = {
+            # Check legacy v2 format (prior to extended metadata keys)
+            legacy_v2_payload = {
                 "version": data_dict.get("version", 2),
                 "revision": data_dict.get("revision", 1),
                 "settings": data_dict.get("settings", {}),
                 "custom_menu_items": data_dict.get("custom_menu_items", []),
+                "budgets": data_dict.get("budgets", []),
                 "transactions": data_dict.get("transactions", []),
             }
-            legacy_str = json.dumps(
-                legacy_payload,
+            if "workspace_id" in data_dict:
+                legacy_v2_payload["workspace_id"] = data_dict["workspace_id"]
+            if "workspace" in data_dict:
+                legacy_v2_payload["workspace"] = data_dict["workspace"]
+            if "members" in data_dict:
+                legacy_v2_payload["members"] = data_dict["members"]
+            legacy_v2_str = json.dumps(
+                legacy_v2_payload,
                 sort_keys=True,
                 ensure_ascii=False,
-                separators=(', ', ': ')
+                separators=(',', ':')
             )
-            legacy_checksum = hashlib.sha256(legacy_str.encode('utf-8')).hexdigest()
-            if checksum != legacy_checksum:
-                return False, f"Checksum mismatch: expected {expected_checksum} but got {checksum}"
+            legacy_v2_checksum = hashlib.sha256(legacy_v2_str.encode('utf-8')).hexdigest()
+            if checksum != legacy_v2_checksum:
+                # Check legacy v2 format (prior to budgets or compact separators)
+                legacy_payload = {
+                    "version": data_dict.get("version", 2),
+                    "revision": data_dict.get("revision", 1),
+                    "settings": data_dict.get("settings", {}),
+                    "custom_menu_items": data_dict.get("custom_menu_items", []),
+                    "transactions": data_dict.get("transactions", []),
+                }
+                legacy_str = json.dumps(
+                    legacy_payload,
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    separators=(', ', ': ')
+                )
+                legacy_checksum = hashlib.sha256(legacy_str.encode('utf-8')).hexdigest()
+                if checksum != legacy_checksum:
+                    return False, f"Checksum mismatch: expected {expected_checksum} but got {checksum}"
 
     # Validate every transaction entity with utils/validation
+    seen_uids = set()
     for idx, tx in enumerate(transactions, 1):
         if not isinstance(tx, dict):
             return False, f"Transaction #{idx} is not a valid object"
@@ -406,20 +425,26 @@ def verify_backup_payload(data_dict: dict) -> tuple[bool, str]:
         except Exception as e:
             return False, f"Transaction #{idx} invalid transaction_type: {e}"
 
-        # UID validation (mandatory in v2, 32 hex chars)
+        # UID validation (mandatory in v2, 32 hex chars, unique without duplicates)
         raw_uid = tx.get('uid')
         if version >= 2:
             if not raw_uid:
                 return False, f"Transaction #{idx} missing mandatory UID in v2 backup"
             try:
-                validate_uid(raw_uid)
+                norm_uid = validate_uid(raw_uid)
             except Exception as e:
                 return False, f"Transaction #{idx} invalid UID: {e}"
+            if norm_uid in seen_uids:
+                return False, f"Duplicate UID '{norm_uid}' detected in backup transactions at #{idx}"
+            seen_uids.add(norm_uid)
         elif raw_uid:
             try:
-                validate_uid(raw_uid)
+                norm_uid = validate_uid(raw_uid)
             except Exception as e:
                 return False, f"Transaction #{idx} invalid UID: {e}"
+            if norm_uid in seen_uids:
+                return False, f"Duplicate UID '{norm_uid}' detected in backup transactions at #{idx}"
+            seen_uids.add(norm_uid)
 
         # String bounds validation
         try:
@@ -445,6 +470,9 @@ def verify_backup_payload(data_dict: dict) -> tuple[bool, str]:
             return False, f"Menu item #{idx} validation error: {e}"
 
     return True, "OK"
+
+validate_json_backup = verify_backup_payload
+
 
 def preview_database_import(input_path: Path = None, data_dict: dict = None) -> dict:
     """
