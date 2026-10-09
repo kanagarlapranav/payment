@@ -39,7 +39,7 @@ from database.queries import (
     get_payee_category, remember_payee_category, find_potential_duplicate, get_top_payees,
     get_daily_spend_series, get_month_comparison_stats, get_transactions_paginated, get_contact_ledger,
     get_category_summary, save_pending_receipt, get_pending_receipt, delete_pending_receipt,
-    get_default_workspace_id
+    get_default_workspace_id, can_user_modify_transaction
 )
 from utils.currency import parse_amount, format_currency, normalize_amount_string
 from utils.dates import parse_date, get_current_time_in_tz, format_display_date
@@ -1302,6 +1302,22 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif action == "edit_tx":
         tx_id = int(parts[1])
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
+        if not tx:
+            await query.edit_message_text(
+                f"❌ <b>Transaction Not Found</b>\nTransaction #{tx_id} could not be found.",
+                reply_markup=get_back_to_menu_keyboard(),
+                parse_mode='HTML'
+            )
+            return
+
+        caller_id = update.effective_user.id if update.effective_user else 0
+        caller_role = ws_ctx.role if ws_ctx else 'viewer'
+        from database.queries import can_user_modify_transaction
+        if not can_user_modify_transaction(tx_id, user_id=caller_id, user_role=caller_role, workspace_id=ws_id):
+            await query.answer("⛔ You do not have permission to edit this transaction.", show_alert=True)
+            return
+
         await query.edit_message_text(
             f"✏️ <b>Edit Transaction #{tx_id}:</b>\nChoose which field you want to modify:",
             reply_markup=get_edit_fields_keyboard(tx_id),

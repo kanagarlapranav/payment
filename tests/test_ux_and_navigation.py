@@ -526,6 +526,42 @@ class TestUXAndNavigation(unittest.TestCase):
         self.assertIn("undo_confirm", callbacks)
         self.assertIn("undo_cancel", callbacks)
 
+    def test_edit_tx_permission_gate(self):
+        """Verify edit_tx checks can_user_modify_transaction before rendering edit UI."""
+        from bot.handlers import handle_callback_query
+        from unittest.mock import MagicMock, AsyncMock, patch
+        import asyncio
+
+        update = MagicMock()
+        query = AsyncMock()
+        query.data = "edit_tx:42"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update.callback_query = query
+        update.effective_user.id = 99999
+        context = MagicMock()
+
+        dummy_tx = {'id': 42, 'person_name': 'Test', 'amount': 100.0, 'telegram_user_id': 11111}
+
+        # Case 1: Unauthorized user -> denied with alert
+        with patch('bot.handlers.get_transaction_by_id', return_value=dummy_tx), \
+             patch('database.queries.can_user_modify_transaction', return_value=False), \
+             patch('bot.handlers.is_owner', return_value=False), \
+             patch('bot.handlers.is_admin_user', return_value=False), \
+             patch('bot.handlers.require_member', AsyncMock(return_value=True)):
+            asyncio.run(handle_callback_query(update, context))
+            query.answer.assert_any_call("⛔ You do not have permission to edit this transaction.", show_alert=True)
+            query.edit_message_text.assert_not_called()
+
+        # Case 2: Authorized user -> renders edit UI
+        query.reset_mock()
+        with patch('bot.handlers.get_transaction_by_id', return_value=dummy_tx), \
+             patch('database.queries.can_user_modify_transaction', return_value=True), \
+             patch('bot.handlers.is_owner', return_value=True):
+            asyncio.run(handle_callback_query(update, context))
+            query.edit_message_text.assert_called_once()
+            self.assertIn("Edit Transaction #42", query.edit_message_text.call_args[0][0])
+
     def test_undo_confirm_callback(self):
         """Verify tapping Confirm Undo executes perform_undo and updates card."""
         from unittest.mock import MagicMock, AsyncMock, patch
