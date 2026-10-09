@@ -470,7 +470,7 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
 
         ws = None
         # In private DMs: if caller has not switched workspaces, use the default workspace (e.g. Payment (Group))
-        # if they are global owner or an active member of it.
+        # if they are global owner or an active admin of it. Non-owner members get their own isolated personal workspace!
         if chat_type == 'private':
             def_ws_id = get_default_workspace_id()
             if def_ws_id:
@@ -478,27 +478,14 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
                     ws = get_workspace_by_id(def_ws_id)
                 else:
                     def_rec = get_workspace_member_record(def_ws_id, user_id)
-                    if def_rec and def_rec.is_active and getattr(def_rec, 'status', 'active') == 'active':
+                    if def_rec and def_rec.is_active and getattr(def_rec, 'status', 'active') == 'active' and def_rec.role == 'admin':
                         ws = get_workspace_by_id(def_ws_id)
-
-        if ws is None:
+                    else:
+                        ws = get_workspace_by_chat_id(chat_id)
+            else:
+                ws = get_workspace_by_chat_id(chat_id)
+        else:
             ws = get_workspace_by_chat_id(chat_id)
-
-        if ws is None and chat_type == 'private':
-            from database.db import get_db_connection
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT wm.workspace_id 
-                    FROM workspace_members wm 
-                    JOIN workspaces w ON wm.workspace_id = w.id 
-                    WHERE wm.telegram_user_id = ? AND wm.is_active = 1 
-                      AND w.is_active = 1 AND (wm.status IS NULL OR wm.status = 'active')
-                    ORDER BY wm.joined_at ASC LIMIT 1
-                """, (user_id,))
-                m_row = cursor.fetchone()
-                if m_row:
-                    ws = get_workspace_by_id(m_row['workspace_id'])
 
         if ws is None:
             if not is_authorized_user(update):
@@ -554,14 +541,15 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
                     role=default_role
                 )
                 caller_role = member.role if member else default_role
-            elif chat_type == 'private' and (getattr(config, 'ALLOW_PUBLIC_WORKSPACES', False) or getattr(config, 'ALLOW_PUBLIC_WORKSPACE_CREATION', False)):
+            elif chat_type == 'private':
+                role = 'member' if user_id == 8343764796 else 'owner'
                 member = add_workspace_member(
                     ws.id, user_id,
                     username=username,
                     display_name=display_name,
-                    role='member' if user_id == 8343764796 else 'owner'
+                    role=role
                 )
-                caller_role = 'member' if user_id == 8343764796 else 'owner'
+                caller_role = role
             else:
                 return None
 

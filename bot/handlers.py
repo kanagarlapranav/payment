@@ -636,14 +636,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     # --- 0. Interactive Home Menu Navigation ---
     if action == "nav":
         nav_target = parts[1] if len(parts) > 1 else "home"
+        caller_id = query.from_user.id if query.from_user else None
         try:
             if nav_target == "home":
-                text = render_home_menu_text(workspace_id=ws_id)
+                text = render_home_menu_text(workspace_id=ws_id, user_id=caller_id)
                 await query.edit_message_text(text, reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
             elif nav_target == "balance":
-                balance = get_balance_setting(workspace_id=ws_id)
-                today_stats = get_today_summary(workspace_id=ws_id)
-                overall = get_overall_summary(workspace_id=ws_id)
+                overall = get_overall_summary(workspace_id=ws_id, user_id=caller_id)
+                today_stats = get_today_summary(workspace_id=ws_id, user_id=caller_id)
+                balance = overall.current_balance
                 text = (
                     "💰 <b>Live Account Balance</b>\n"
                     "━━━━━━━━━━━━━━\n"
@@ -662,9 +663,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.edit_message_text(text, reply_markup=get_balance_keyboard(), parse_mode='HTML')
             elif nav_target == "today":
                 from database.queries import get_transactions_by_date
-                today_stats = get_today_summary(workspace_id=ws_id)
+                today_stats = get_today_summary(workspace_id=ws_id, user_id=caller_id)
                 today_date = get_current_time_in_tz().date()
-                txs = get_transactions_by_date(today_date, workspace_id=ws_id)
+                txs = get_transactions_by_date(today_date, workspace_id=ws_id, user_id=caller_id)
                 lines = [
                     "📅 <b>Today's Transactions</b>",
                     "━━━━━━━━━━━━━━"
@@ -687,7 +688,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 page = int(parts[2]) if len(parts) > 2 else 1
                 ft = parts[3] if len(parts) > 3 else "ALL"
                 sb = parts[4] if len(parts) > 4 else "date_desc"
-                text, markup = render_history_page(page=page, filter_type=ft, page_size=5, sort_by=sb, workspace_id=ws_id)
+                text, markup = render_history_page(page=page, filter_type=ft, page_size=5, sort_by=sb, workspace_id=ws_id, user_id=caller_id)
                 await query.edit_message_text(text, reply_markup=markup, parse_mode='HTML')
             elif nav_target == "history_noop":
                 pass
@@ -3429,7 +3430,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Check quick menu trigger
     if text.strip().lower() in ('menu', 'home', 'start'):
-        await update.message.reply_text(render_home_menu_text(workspace_id=ws_id), reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
+        caller_id = update.effective_user.id if update.effective_user else None
+        await update.message.reply_text(render_home_menu_text(workspace_id=ws_id, user_id=caller_id), reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
         return
 
     # Check short text entry: e.g. "120 dosa", "+500 salary", "-45 tea", "coffee 15"

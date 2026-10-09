@@ -20,12 +20,13 @@ from bot.keyboards import (
     get_quick_add_keyboard, get_settings_menu_keyboard
 )
 
-def render_home_menu_text(workspace_id: str = None) -> str:
-    """Generates the main Home Menu dashboard card."""
+def render_home_menu_text(workspace_id: str = None, user_id: int = None) -> str:
+    """Generates the main Home Menu dashboard card with optional per-user scoping."""
     now = datetime.now()
-    balance = get_balance_setting(workspace_id=workspace_id)
-    today_stats = get_today_summary(workspace_id=workspace_id)
-    monthly = get_monthly_summary(now.year, now.month, workspace_id=workspace_id)
+    overall = get_overall_summary(workspace_id=workspace_id, user_id=user_id)
+    balance = overall.current_balance
+    today_stats = get_today_summary(workspace_id=workspace_id, user_id=user_id)
+    monthly = get_monthly_summary(now.year, now.month, workspace_id=workspace_id, user_id=user_id)
     
     from services.budget_service import get_budget_info
     b_info = get_budget_info(now.year, now.month, workspace_id=workspace_id)
@@ -51,12 +52,12 @@ def render_home_menu_text(workspace_id: str = None) -> str:
         f"<i>Select an option or send a receipt screenshot:</i>"
     )
 
-def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int = 5, sort_by: str = "date_desc", workspace_id: str = None):
+def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int = 5, sort_by: str = "date_desc", workspace_id: str = None, user_id: int = None):
     """Renders a formatted page of transactions with navigation keyboard and sort order control."""
     from database.queries import get_transactions_paginated
     sort_by = sort_by or "date_desc"
     tx_filter = filter_type if filter_type in ('SENT', 'RECEIVED', 'TRANSFER') else None
-    data = get_transactions_paginated(page=page, page_size=page_size, tx_type=tx_filter, sort_by=sort_by, workspace_id=workspace_id)
+    data = get_transactions_paginated(page=page, page_size=page_size, tx_type=tx_filter, sort_by=sort_by, workspace_id=workspace_id, user_id=user_id)
     
     items = data['transactions']
     total_pages = data['total_pages']
@@ -328,7 +329,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
-    menu_text = render_home_menu_text(workspace_id=ws_id)
+    caller_id = update.effective_user.id if update.effective_user else None
+    menu_text = render_home_menu_text(workspace_id=ws_id, user_id=caller_id)
     await update.message.reply_text(menu_text, reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
 
 async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -600,11 +602,12 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
+    caller_id = update.effective_user.id if update.effective_user else None
 
     recalculate_all_balances(workspace_id=ws_id)
-    balance = get_balance_setting(workspace_id=ws_id)
-    overall = get_overall_summary(workspace_id=ws_id)
-    today = get_today_summary(workspace_id=ws_id)
+    overall = get_overall_summary(workspace_id=ws_id, user_id=caller_id)
+    today = get_today_summary(workspace_id=ws_id, user_id=caller_id)
+    balance = overall.current_balance
 
     text = (
         f"💰 *Current Balance*\n"
@@ -632,6 +635,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
+    caller_id = update.effective_user.id if update.effective_user else None
 
     recalculate_all_balances(workspace_id=ws_id)
 
@@ -651,11 +655,11 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sort_by = "date_desc"
 
     if not context.args or context.args[0].lower() not in ('full', 'all'):
-        text, markup = render_history_page(page=1, filter_type="ALL", page_size=5, sort_by=sort_by, workspace_id=ws_id)
+        text, markup = render_history_page(page=1, filter_type="ALL", page_size=5, sort_by=sort_by, workspace_id=ws_id, user_id=caller_id)
         await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
         return
 
-    transactions = get_all_transactions_asc(workspace_id=ws_id)
+    transactions = get_all_transactions_asc(workspace_id=ws_id, user_id=caller_id)
     if not transactions:
 
         await update.message.reply_text("ℹ️ No transactions recorded yet.")
@@ -664,7 +668,8 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Calculate summary
     total_sent = sum(t['amount'] for t in transactions if t['transaction_type'] == 'SENT')
     total_received = sum(t['amount'] for t in transactions if t['transaction_type'] == 'RECEIVED')
-    curr_balance = get_balance_setting(workspace_id=ws_id)
+    overall = get_overall_summary(workspace_id=ws_id, user_id=caller_id)
+    curr_balance = overall.current_balance
 
     lines_list = ["📜 <b>Payment History</b>\n"]
     for idx, t in enumerate(transactions, 1):
@@ -790,7 +795,8 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Could not parse date. Example: <code>/date 05/09/2026</code> or <code>/date yesterday</code>", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
         return
         
-    txs = search_transactions(target_date=target_d, sort_by="date_desc", workspace_id=ws_id)
+    caller_id = update.effective_user.id if update.effective_user else None
+    txs = search_transactions(target_date=target_d, sort_by="date_desc", workspace_id=ws_id, user_id=caller_id)
     if not txs:
         await update.message.reply_text(f"No transactions found on <b>{html.escape(target_d.strftime('%d %b %Y'))}</b>.", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
         return
@@ -822,6 +828,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
+    caller_id = update.effective_user.id if update.effective_user else None
     from bot.keyboards import get_standard_nav_keyboard
     
     if not context.args:
@@ -838,7 +845,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     query_text = " ".join(context.args).strip()
-    txs = search_transactions(query_text=query_text, limit=15, workspace_id=ws_id)
+    txs = search_transactions(query_text=query_text, limit=15, workspace_id=ws_id, user_id=caller_id)
     
     if not txs:
         await update.message.reply_text(f"🔍 No transactions found matching <b>'{html.escape(query_text)}'</b>.", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
@@ -889,7 +896,8 @@ async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid amount. Example: <code>/amount 500</code> or <code>/amount 5000</code>", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
         return
         
-    txs = search_transactions(exact_amount=amt, sort_by="date_desc", workspace_id=ws_id)
+    caller_id = update.effective_user.id if update.effective_user else None
+    txs = search_transactions(exact_amount=amt, sort_by="date_desc", workspace_id=ws_id, user_id=caller_id)
     if not txs:
         await update.message.reply_text(f"💵 No transactions found with amount <b>{html.escape(format_currency(amt))}</b>.", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
         return
@@ -917,6 +925,7 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
+    caller_id = update.effective_user.id if update.effective_user else None
     
     now = get_current_time_in_tz()
     year = now.year
@@ -930,7 +939,7 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(context.args) > 1 and context.args[1].isdigit():
             year = max(2000, min(2100, int(context.args[1])))
             
-    stats = get_monthly_summary(year, month, workspace_id=ws_id)
+    stats = get_monthly_summary(year, month, workspace_id=ws_id, user_id=caller_id)
     from datetime import date
     month_name = date(year, month, 1).strftime("%B %Y")
     

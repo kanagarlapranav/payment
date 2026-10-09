@@ -113,6 +113,13 @@ def get_or_create_workspace(
             cursor.execute("SELECT * FROM workspaces WHERE chat_id = ? AND is_active = 1", (int(chat_id),))
             row = cursor.fetchone()
             if row:
+                clean_title = (title or "").strip()[:200]
+                if clean_title and row['title'] != clean_title:
+                    cursor.execute("UPDATE workspaces SET title = ?, updated_at = ? WHERE id = ?", (clean_title, now_utc, row['id']))
+                    conn.commit()
+                    d = dict(row)
+                    d['title'] = clean_title
+                    return RowDict(d)
                 return RowDict(dict(row))
             
             ws_id = str(uuid.uuid4())
@@ -414,11 +421,12 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                         """, (ws_id, owner_id, now_utc, now_utc))
                 else:
                     curr_title = ws_row['title'] or ""
-                    if curr_title in ("Workspace", "Primary Workspace", "") or curr_title == str(uid):
+                    if curr_title in ("Workspace", "Primary Workspace", "") or curr_title == str(uid) or curr_title.startswith("Chat_") or (uid == 8343764796 and curr_title != ws_title):
                         cursor.execute(
                             "UPDATE workspaces SET title = ?, updated_at = ? WHERE id = ?",
                             (ws_title, now_utc, ws_row['id'])
                         )
+                        conn.commit()
                     if owner_id and owner_id != uid:
                         cursor.execute("SELECT id FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (ws_row['id'], owner_id))
                         if not cursor.fetchone():
@@ -1072,55 +1080,94 @@ def get_transaction_by_reference(reference_number: str, workspace_id: str = None
         row = cursor.fetchone()
         return dict(row) if row else None
 
-def get_recent_transactions(limit: int = 10, workspace_id: str = None):
-    """Fetches recent transactions ordered by occurred_at, created_at, and id with workspace isolation."""
+def _build_user_filter(user_id: int = None):
+    """Builds SQL condition and parameter tuple for isolating queries to a specific telegram_user_id."""
+    if user_id is None:
+        return "", []
+    try:
+        uid_val = int(user_id)
+        from config import TELEGRAM_USER_ID
+        owner_id = int(TELEGRAM_USER_ID) if TELEGRAM_USER_ID else None
+        if owner_id and uid_val == owner_id:
+            return "(telegram_user_id = ? OR telegram_user_id IS NULL)", [uid_val]
+        else:
+            return "telegram_user_id = ?", [uid_val]
+    except (ValueError, TypeError):
+        return "", []
+
+def get_recent_transactions(limit: int = 10, workspace_id: str = None, user_id: int = None):
+    """Fetches recent transactions ordered by occurred_at, created_at, and id with workspace isolation and optional user filtering."""
     default_ws = get_default_workspace_id()
     ws_id = workspace_id or default_ws
     ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    conditions = [ws_filter, "deleted_at IS NULL"]
+    params = [ws_id]
+    u_sql, u_params = _build_user_filter(user_id)
+    if u_sql:
+        conditions.append(u_sql)
+        params.extend(u_params)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            f"SELECT * FROM transactions WHERE {ws_filter} AND deleted_at IS NULL ORDER BY occurred_at DESC, created_at DESC, id DESC LIMIT ?",
-            (ws_id, limit)
+            f"SELECT * FROM transactions WHERE {' AND '.join(conditions)} ORDER BY occurred_at DESC, created_at DESC, id DESC LIMIT ?",
+            params + [limit]
         )
         return [dict(row) for row in cursor.fetchall()]
 
-def get_transactions_by_date(target_date, workspace_id: str = None):
-    """Fetches transactions for a specific date with workspace isolation."""
+def get_transactions_by_date(target_date, workspace_id: str = None, user_id: int = None):
+    """Fetches transactions for a specific date with workspace isolation and optional user filtering."""
     default_ws = get_default_workspace_id()
     ws_id = workspace_id or default_ws
     ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    conditions = [ws_filter, "transaction_date = ?", "deleted_at IS NULL"]
+    params = [ws_id, str(target_date)]
+    u_sql, u_params = _build_user_filter(user_id)
+    if u_sql:
+        conditions.append(u_sql)
+        params.extend(u_params)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            f"SELECT * FROM transactions WHERE {ws_filter} AND transaction_date = ? AND deleted_at IS NULL ORDER BY occurred_at ASC, created_at ASC, id ASC",
-            (ws_id, str(target_date))
+            f"SELECT * FROM transactions WHERE {' AND '.join(conditions)} ORDER BY occurred_at ASC, created_at ASC, id ASC",
+            params
         )
         return [dict(row) for row in cursor.fetchall()]
 
-def get_all_transactions(workspace_id: str = None):
-    """Fetches all transactions for export (newest first) with workspace isolation."""
+def get_all_transactions(workspace_id: str = None, user_id: int = None):
+    """Fetches all transactions for export (newest first) with workspace isolation and optional user filtering."""
     default_ws = get_default_workspace_id()
     ws_id = workspace_id or default_ws
     ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    conditions = [ws_filter, "deleted_at IS NULL"]
+    params = [ws_id]
+    u_sql, u_params = _build_user_filter(user_id)
+    if u_sql:
+        conditions.append(u_sql)
+        params.extend(u_params)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            f"SELECT * FROM transactions WHERE {ws_filter} AND deleted_at IS NULL ORDER BY occurred_at DESC, created_at DESC, id DESC",
-            (ws_id,)
+            f"SELECT * FROM transactions WHERE {' AND '.join(conditions)} ORDER BY occurred_at DESC, created_at DESC, id DESC",
+            params
         )
         return [dict(row) for row in cursor.fetchall()]
 
-def get_all_transactions_asc(workspace_id: str = None):
-    """Fetches all transactions in ascending order (oldest first, ID #1 first) with workspace isolation."""
+def get_all_transactions_asc(workspace_id: str = None, user_id: int = None):
+    """Fetches all transactions in ascending order (oldest first, ID #1 first) with workspace isolation and optional user filtering."""
     default_ws = get_default_workspace_id()
     ws_id = workspace_id or default_ws
     ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    conditions = [ws_filter, "deleted_at IS NULL"]
+    params = [ws_id]
+    u_sql, u_params = _build_user_filter(user_id)
+    if u_sql:
+        conditions.append(u_sql)
+        params.extend(u_params)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            f"SELECT * FROM transactions WHERE {ws_filter} AND deleted_at IS NULL ORDER BY occurred_at ASC, created_at ASC, id ASC",
-            (ws_id,)
+            f"SELECT * FROM transactions WHERE {' AND '.join(conditions)} ORDER BY occurred_at ASC, created_at ASC, id ASC",
+            params
         )
         return [dict(row) for row in cursor.fetchall()]
 
@@ -1134,13 +1181,19 @@ def search_transactions(
     exact_amount: float = None,
     sort_by: str = "date_desc",
     limit: int = 50,
-    workspace_id: str = None
+    workspace_id: str = None,
+    user_id: int = None
 ):
     default_ws = get_default_workspace_id()
     ws_id = workspace_id or default_ws
     ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
     conditions = [ws_filter, "deleted_at IS NULL"]
     params = [ws_id]
+    
+    u_sql, u_params = _build_user_filter(user_id)
+    if u_sql:
+        conditions.append(u_sql)
+        params.extend(u_params)
     
     if exact_amount is not None and float(exact_amount) > 0:
         conditions.append("amount = ?")
@@ -1192,12 +1245,15 @@ def search_transactions(
         cursor.execute(sql, params)
         return [dict(row) for row in cursor.fetchall()]
 
-def get_monthly_summary(year: int, month: int, workspace_id: str = None):
-    """Calculates summary statistics for a given month with Decimal precision and workspace isolation."""
+def get_monthly_summary(year: int, month: int, workspace_id: str = None, user_id: int = None):
+    """Calculates summary statistics for a given month with Decimal precision, workspace isolation, and optional user filtering."""
     month_str = f"{year:04d}-{month:02d}"
     default_ws = get_default_workspace_id()
     ws_id = workspace_id or default_ws
     ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    u_sql, u_params = _build_user_filter(user_id)
+    u_clause = f"AND {u_sql}" if u_sql else ""
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
@@ -1209,8 +1265,9 @@ def get_monthly_summary(year: int, month: int, workspace_id: str = None):
             WHERE strftime('%Y-%m', transaction_date) = ? 
               AND {ws_filter}
               AND deleted_at IS NULL
+              {u_clause}
             GROUP BY transaction_type
-        """, (month_str, ws_id))
+        """, [month_str, ws_id] + u_params)
         rows = cursor.fetchall()
         
         dec_sent = Decimal('0.00')
@@ -1232,9 +1289,10 @@ def get_monthly_summary(year: int, month: int, workspace_id: str = None):
             WHERE strftime('%Y-%m', transaction_date) = ? 
               AND {ws_filter}
               AND transaction_type = 'SENT' AND person_name != '' AND deleted_at IS NULL
+              {u_clause}
             GROUP BY person_name
             ORDER BY total DESC LIMIT 1
-        """, (month_str, ws_id))
+        """, [month_str, ws_id] + u_params)
         top_sent_row = cursor.fetchone()
         top_recipient = dict(top_sent_row) if top_sent_row else None
         
@@ -1870,9 +1928,10 @@ def get_transactions_paginated(
     year: int = None,
     month: int = None,
     sort_by: str = "date_desc",
-    workspace_id: str = None
+    workspace_id: str = None,
+    user_id: int = None
 ):
-    """Fetches paginated transactions with optional filters, customizable sorting, safe bounds, and workspace isolation."""
+    """Fetches paginated transactions with optional filters, customizable sorting, safe bounds, workspace isolation, and user filtering."""
     try:
         page = max(1, int(page or 1))
     except (ValueError, TypeError):
@@ -1888,6 +1947,11 @@ def get_transactions_paginated(
     ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
     conditions = [ws_filter, "deleted_at IS NULL"]
     params = [ws_id]
+    
+    u_sql, u_params = _build_user_filter(user_id)
+    if u_sql:
+        conditions.append(u_sql)
+        params.extend(u_params)
     
     if search and search.strip():
         clean_search = search.strip()[:100]
