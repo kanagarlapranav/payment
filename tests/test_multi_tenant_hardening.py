@@ -180,7 +180,7 @@ def test_tenant_safe_backup_and_restore(test_workspaces):
     ws_a_id, ws_b_id = test_workspaces
     tx_uid = uuid.uuid4().hex
     
-    # Insert transaction in Workspace A
+    # Insert transaction and recurring payment in Workspace A
     with LEDGER_LOCK, get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -190,6 +190,12 @@ def test_tenant_safe_backup_and_restore(test_workspaces):
                 transaction_date, transaction_time, occurred_at, created_at, updated_at
             ) VALUES (?, 'SENT', 250.0, 'Tiffin Center', 'Food', 1000.0, 750.0, ?, '2026-10-07', '12:00:00', '2026-10-07T12:00:00', '2026-10-07T12:00:00', '2026-10-07T12:00:00')
         """, (ws_a_id, tx_uid))
+        cursor.execute("""
+            INSERT INTO recurring_payments (
+                workspace_id, payee_name, amount, category, transaction_type,
+                frequency, interval_value, start_date, next_due_date, status, created_at, updated_at
+            ) VALUES (?, 'Netflix', 499.0, 'Entertainment', 'SENT', 'MONTHLY', 1, '2026-10-01', '2026-11-01', 'ACTIVE', '2026-10-01T00:00:00', '2026-10-01T00:00:00')
+        """, (ws_a_id,))
         conn.commit()
     
     # Export Workspace A
@@ -200,6 +206,8 @@ def test_tenant_safe_backup_and_restore(test_workspaces):
     assert payload['workspace_id'] == ws_a_id
     assert "checksum" in payload
     assert len(payload['transactions']) == 1
+    assert len(payload.get('recurring_payments', [])) == 1
+    assert payload['recurring_payments'][0]['payee_name'] == 'Netflix'
 
     # Cross-tenant restore rejection: try to restore Workspace A payload into Workspace B
     cross_res = restore_workspace_from_json(workspace_id=ws_b_id, data_dict=payload)
@@ -210,6 +218,17 @@ def test_tenant_safe_backup_and_restore(test_workspaces):
     restore_res = restore_workspace_from_json(workspace_id=ws_a_id, data_dict=payload)
     assert restore_res['success'] is True
     assert restore_res['restored_transactions'] == 1
+    assert restore_res.get('restored_recurring', 0) == 1
+
+    # Verify recurring row survived round-trip without corruption or deletion
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT payee_name, amount, status FROM recurring_payments WHERE workspace_id = ?", (ws_a_id,))
+        recs = cursor.fetchall()
+        assert len(recs) == 1
+        assert recs[0]['payee_name'] == 'Netflix'
+        assert recs[0]['amount'] == 499.0
+        assert recs[0]['status'] == 'ACTIVE'
 
 
 def test_scheduler_job_deduplication(test_workspaces):
