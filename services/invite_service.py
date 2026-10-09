@@ -169,13 +169,13 @@ def validate_and_redeem_invite(
             if uses_count >= max_uses:
                 return False, "❌ This invite has reached its maximum usage limit.", None, None
 
-            # Check if user is banned
+            # Check if user is banned or previously removed
             cursor.execute("""
                 SELECT value FROM workspace_settings
-                WHERE workspace_id = ? AND key = ?
-            """, (ws_id, f"banned_user:{int(user_id)}"))
+                WHERE workspace_id = ? AND (key = ? OR key = ?)
+            """, (ws_id, f"banned_user:{int(user_id)}", f"removed_user:{int(user_id)}"))
             if cursor.fetchone():
-                return False, "⛔ You are banned from this workspace and cannot rejoin.", None, None
+                return False, "⛔ You are banned or removed from this workspace and cannot rejoin via invite link.", None, None
 
             # Check if user is already an active member before consuming
             cursor.execute("""
@@ -230,6 +230,10 @@ def validate_and_redeem_invite(
     return True, f"🎉 Successfully joined <b>{ws_title}</b> as <b>{role.title()}</b>!", ws_id, role
 
 
+# Alias for convenience
+redeem_workspace_invite = validate_and_redeem_invite
+
+
 def is_user_banned_from_workspace(workspace_id: str, telegram_user_id: int | str) -> bool:
     """Checks if a user is banned or suspended/removed from a workspace."""
     if not workspace_id or not telegram_user_id:
@@ -239,8 +243,8 @@ def is_user_banned_from_workspace(workspace_id: str, telegram_user_id: int | str
         cursor = conn.cursor()
         cursor.execute("""
             SELECT value FROM workspace_settings
-            WHERE workspace_id = ? AND key = ?
-        """, (str(workspace_id), f"banned_user:{uid}"))
+            WHERE workspace_id = ? AND (key = ? OR key = ?)
+        """, (str(workspace_id), f"banned_user:{uid}", f"removed_user:{uid}"))
         if cursor.fetchone():
             return True
         cursor.execute("""
@@ -286,5 +290,36 @@ def ban_workspace_user(workspace_id: str, telegram_user_id: int | str, banned_by
             action="member_banned",
             resource=f"user:{uid}",
             details={"banned_user_id": uid}
+        )
+    return True
+
+
+def unban_workspace_user(workspace_id: str, telegram_user_id: int | str, unbanned_by: int | str | None = None) -> bool:
+    """Unbans a user from a workspace, removing ban and removed markers from workspace_settings."""
+    if not workspace_id or not telegram_user_id:
+        return False
+    uid = int(telegram_user_id)
+    with LEDGER_LOCK:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM workspace_settings
+                WHERE workspace_id = ? AND (key = ? OR key = ?)
+            """, (str(workspace_id), f"banned_user:{uid}", f"removed_user:{uid}"))
+            conn.commit()
+
+    if unbanned_by:
+        from database.queries import get_workspace_member
+        from config import SUPER_ADMIN_IDS
+        bm = get_workspace_member(str(workspace_id), int(unbanned_by))
+        b_role = bm.role if bm else ("owner" if int(unbanned_by) in SUPER_ADMIN_IDS else "admin")
+        from services.audit_service import log_audit_event
+        log_audit_event(
+            workspace_id=str(workspace_id),
+            actor_user_id=int(unbanned_by),
+            actor_role=b_role,
+            action="member_unbanned",
+            resource=f"user:{uid}",
+            details={"unbanned_user_id": uid}
         )
     return True

@@ -586,11 +586,16 @@ def remove_workspace_member(workspace_id: str, telegram_user_id: int | str) -> b
     if not workspace_id or not telegram_user_id:
         return False
     uid = int(telegram_user_id)
+    now_utc = utc_now_iso()
     with LEDGER_LOCK:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM workspace_settings WHERE key = ?", (f"user_active_ws:{uid}",))
             cursor.execute("DELETE FROM settings WHERE key = ?", (f"user_active_ws:{uid}",))
+            cursor.execute("""
+                INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at)
+                VALUES (?, ?, '1', ?)
+            """, (str(workspace_id), f"removed_user:{uid}", now_utc))
             cursor.execute(
                 "DELETE FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?",
                 (str(workspace_id), uid)

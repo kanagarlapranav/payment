@@ -654,3 +654,54 @@ def test_insert_transaction_surfaces_value_error_on_integrity_conflict(test_work
     with pytest.raises(ValueError) as excinfo:
         insert_transaction_with_balance(t2)
     assert "Duplicate live reference number" in str(excinfo.value) or "conflict" in str(excinfo.value).lower()
+
+
+def test_invite_ban_and_removed_member_rejoin_prevention(test_workspaces):
+    """P2-h: Verify that removed or banned users cannot rejoin via multi-use invites."""
+    from database.queries import add_workspace_member, remove_workspace_member, get_workspace_member
+    from services.invite_service import (
+        create_workspace_invite, redeem_workspace_invite,
+        ban_workspace_user, unban_workspace_user, is_user_banned_from_workspace
+    )
+
+    ws_a_id, _ = test_workspaces
+    user_id = 998877
+
+    # 1. Create a multi-use invite
+    token, invite_id = create_workspace_invite(
+        workspace_id=ws_a_id,
+        creator_user_id=111111,
+        intended_role="member",
+        max_uses=5,
+        expiry_hours=24
+    )
+    assert token is not None
+
+    # 2. Add member, then remove them
+    add_workspace_member(ws_a_id, user_id, username="troublemaker", display_name="Troublemaker")
+    assert get_workspace_member(ws_a_id, user_id) is not None
+
+    remove_workspace_member(ws_a_id, user_id)
+    assert get_workspace_member(ws_a_id, user_id) is None
+    assert is_user_banned_from_workspace(ws_a_id, user_id) is True
+
+    # 3. Attempt to redeem invite as removed user -> DENIED
+    success, msg, _, _ = redeem_workspace_invite(token, user_id, "troublemaker", "Troublemaker")
+    assert success is False
+    assert "cannot rejoin" in msg
+
+    # 4. Unban user -> can now redeem invite
+    unban_workspace_user(ws_a_id, user_id)
+    assert is_user_banned_from_workspace(ws_a_id, user_id) is False
+
+    success, msg, joined_ws, role = redeem_workspace_invite(token, user_id, "troublemaker", "Troublemaker")
+    assert success is True
+    assert joined_ws == ws_a_id
+
+    # 5. Ban the user again -> verify is_user_banned_from_workspace and cannot rejoin
+    ban_workspace_user(ws_a_id, user_id)
+    assert is_user_banned_from_workspace(ws_a_id, user_id) is True
+    success2, msg2, _, _ = redeem_workspace_invite(token, user_id, "troublemaker", "Troublemaker")
+    assert success2 is False
+    assert "cannot rejoin" in msg2
+
