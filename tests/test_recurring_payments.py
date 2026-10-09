@@ -1,7 +1,7 @@
 import unittest
 from datetime import date, timedelta
 from database.db import get_db_connection, setup_database
-from database.queries import get_transaction_by_id
+from database.queries import get_transaction_by_id, get_default_workspace_id
 from services.recurring_service import (
     calculate_next_due_date, add_recurring_payment, get_all_recurring,
     get_recurring_by_id, get_upcoming_recurring, mark_recurring_paid,
@@ -66,7 +66,7 @@ class TestRecurringPayments(unittest.TestCase):
         
         # Verify transaction created
         self.assertIsNotNone(tx_id)
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=get_default_workspace_id())
         self.assertEqual(tx['amount'], 1500.0)
         self.assertEqual(tx['person_name'], "Gym Membership")
         self.assertEqual(tx['category'], "Fitness")

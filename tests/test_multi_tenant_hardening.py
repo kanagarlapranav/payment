@@ -251,3 +251,60 @@ def test_scoped_undo_log(test_workspaces):
     last_a = get_last_action(user_id=5001, workspace_id=ws_a_id)
     assert last_a is not None
     assert last_a['uid'] == tx_uid
+
+
+def test_core_queries_required_workspace_id_default_deny(test_workspaces):
+    """P0-10: Verifies workspace_id is strictly required (no None default) and enforces default-deny."""
+    from database.models import Transaction
+    from database.queries import (
+        get_transaction_by_id,
+        get_transaction_by_uid,
+        update_transaction,
+        delete_transaction,
+        insert_transaction,
+    )
+    ws_a_id, ws_b_id = test_workspaces
+
+    t = Transaction(
+        amount=150.0,
+        transaction_type="SENT",
+        person_name="Tenant Store",
+        workspace_id=ws_a_id,
+    )
+    tx_id = insert_transaction(t)
+    tx_row = get_transaction_by_id(tx_id, workspace_id=ws_a_id)
+    assert tx_row is not None
+    uid = tx_row['uid']
+
+    # 1. Calling without workspace_id raises TypeError
+    with pytest.raises(TypeError):
+        get_transaction_by_id(tx_id)  # type: ignore
+
+    with pytest.raises(TypeError):
+        get_transaction_by_uid(uid)  # type: ignore
+
+    with pytest.raises(TypeError):
+        update_transaction(tx_id, {"amount": 200.0})  # type: ignore
+
+    with pytest.raises(TypeError):
+        delete_transaction(tx_id)  # type: ignore
+
+    # 2. Passing None or empty string results in default-deny (None or False)
+    assert get_transaction_by_id(tx_id, workspace_id=None) is None  # type: ignore
+    assert get_transaction_by_id(tx_id, workspace_id="") is None
+    assert get_transaction_by_uid(uid, workspace_id=None) is None  # type: ignore
+    assert get_transaction_by_uid(uid, workspace_id="") is None
+    assert update_transaction(tx_id, {"amount": 200.0}, workspace_id=None) is False  # type: ignore
+    assert update_transaction(tx_id, {"amount": 200.0}, workspace_id="") is False
+    assert delete_transaction(tx_id, workspace_id=None) is False  # type: ignore
+    assert delete_transaction(tx_id, workspace_id="") is False
+
+    # 3. Cross-tenant access is denied
+    assert get_transaction_by_id(tx_id, workspace_id=ws_b_id) is None
+    assert get_transaction_by_uid(uid, workspace_id=ws_b_id) is None
+    assert update_transaction(tx_id, {"amount": 200.0}, workspace_id=ws_b_id) is False
+    assert delete_transaction(tx_id, workspace_id=ws_b_id) is False
+
+    # 4. Correct workspace succeeds
+    assert update_transaction(tx_id, {"amount": 200.0}, workspace_id=ws_a_id) is True
+    assert delete_transaction(tx_id, workspace_id=ws_a_id) is True

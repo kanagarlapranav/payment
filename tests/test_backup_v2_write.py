@@ -13,6 +13,7 @@ from database.models import Transaction
 from database.queries import (
     delete_transaction,
     insert_transaction_with_balance,
+    get_default_workspace_id,
 )
 from services.backup_service import (
     BACKUP_JSON_PATH,
@@ -108,7 +109,7 @@ class TestBackupV2WriteSide(unittest.TestCase):
                 tx_id = insert_transaction_with_balance(t)
 
                 # Soft delete leaves 1 tombstone row, live_count == 0
-                delete_transaction(tx_id)
+                delete_transaction(tx_id, workspace_id=get_default_workspace_id())
 
                 # Now export should succeed with empty_ledger=True and live_count=0
                 res2 = export_database_to_json(output_path=test_path)
@@ -289,7 +290,7 @@ class TestBackupV2WriteSide(unittest.TestCase):
         self.assertEqual(rev_after_mutation, rev_before + 1)
 
         # Clean up inserted transaction
-        delete_transaction(tx_id)
+        delete_transaction(tx_id, workspace_id=get_default_workspace_id())
 
     def test_telegram_backup_message_rotation_keeps_last_7(self):
         """Verify confirmed Telegram uploads rotate and retain only the last 7 backup message IDs."""

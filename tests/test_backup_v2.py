@@ -6,7 +6,8 @@ from pathlib import Path
 from database.db import setup_database, get_db_connection
 from database.queries import (
     insert_transaction, delete_transaction, get_all_transactions,
-    get_transaction_by_id, get_transaction_by_uid, get_balance_setting
+    get_transaction_by_id, get_transaction_by_uid, get_balance_setting,
+    get_default_workspace_id
 )
 from database.models import Transaction
 from services.backup_service import export_database_to_json, import_database_from_json, BACKUP_JSON_PATH
@@ -68,14 +69,14 @@ class TestBackupV2AndSoftDelete(unittest.TestCase):
             insert_transaction(t2)
 
         # Now soft-delete t1
-        delete_transaction(tx1_id)
+        delete_transaction(tx1_id, workspace_id=get_default_workspace_id())
 
         # After soft-deleting t1, inserting same reference should now SUCCEED
         tx3_id = insert_transaction(t2)
         self.assertIsNotNone(tx3_id)
 
         # Clean up tx3
-        delete_transaction(tx3_id)
+        delete_transaction(tx3_id, workspace_id=get_default_workspace_id())
 
     def test_idempotent_upsert_restore(self):
         # Fetch current live transactions

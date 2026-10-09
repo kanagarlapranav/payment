@@ -1,7 +1,7 @@
 import unittest
 from services.undo_service import record_delete_action, record_edit_action, perform_undo, _UNDO_STACK
 from database.db import setup_database, get_db_connection
-from database.queries import insert_transaction, get_transaction_by_id, delete_transaction
+from database.queries import insert_transaction, get_transaction_by_id, delete_transaction, get_default_workspace_id
 from database.models import Transaction
 
 import os
@@ -22,15 +22,16 @@ class TestUndoService(unittest.TestCase):
         t.balance_before = 1000.0
         t.balance_after = 550.0
         tx_id = insert_transaction(t)
+        ws_id = get_default_workspace_id()
         
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         self.assertIsNotNone(tx)
         
         record_delete_action(tx)
-        delete_transaction(tx_id)
+        delete_transaction(tx_id, workspace_id=ws_id)
         
         # Verify it's deleted
-        self.assertIsNone(get_transaction_by_id(tx_id))
+        self.assertIsNone(get_transaction_by_id(tx_id, workspace_id=ws_id))
         
         # Perform undo
         success, msg = perform_undo()
@@ -38,7 +39,7 @@ class TestUndoService(unittest.TestCase):
         self.assertIn("Undo Successful", msg)
         
         # Verify transaction is restored with the same ID and permanent UID
-        restored_tx = get_transaction_by_id(tx_id)
+        restored_tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
         self.assertIsNotNone(restored_tx)
         self.assertEqual(restored_tx['uid'], tx['uid'])
         self.assertIsNone(restored_tx['deleted_at'])
@@ -63,7 +64,7 @@ class TestUndoService(unittest.TestCase):
             conn.cursor().execute("UPDATE transactions SET workspace_id = NULL WHERE id = ?", (tx_id,))
             conn.commit()
 
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=get_default_workspace_id())
         self.assertIsNotNone(tx)
         uid = tx['uid']
 

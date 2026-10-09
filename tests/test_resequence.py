@@ -4,7 +4,8 @@ import sqlite3
 from database.db import get_db_connection, setup_database
 from database.queries import (
     insert_transaction, delete_transaction, update_transaction,
-    get_all_transactions_asc, get_transaction_by_id, get_balance_setting
+    get_all_transactions_asc, get_transaction_by_id, get_balance_setting,
+    get_default_workspace_id
 )
 from database.models import Transaction
 from services.balance_service import resequence_transaction_ids, recalculate_all_balances
@@ -58,7 +59,7 @@ class TestResequenceAndBalance(unittest.TestCase):
         self.assertEqual(ids, [1, 2, 3, 4, 5])
         
         # Delete transaction #2
-        deleted = delete_transaction(2)
+        deleted = delete_transaction(2, workspace_id=get_default_workspace_id())
         self.assertTrue(deleted)
         
         # After deletion, live count is 4 and ID #2 is missing with gap preserved: [1, 3, 4, 5]
@@ -93,10 +94,10 @@ class TestResequenceAndBalance(unittest.TestCase):
         new_amt = old_amt + 1000.0
         
         # Update amount
-        update_transaction(first_tx['id'], {'amount': new_amt})
+        update_transaction(first_tx['id'], {'amount': new_amt}, workspace_id=get_default_workspace_id())
         new_bal = recalculate_all_balances()
         
-        updated_first = get_transaction_by_id(first_tx['id'])
+        updated_first = get_transaction_by_id(first_tx['id'], workspace_id=get_default_workspace_id())
         self.assertEqual(updated_first['amount'], new_amt)
         self.assertEqual(updated_first['balance_after'], updated_first['balance_before'] + new_amt if updated_first['transaction_type'] == 'RECEIVED' else updated_first['balance_before'] - new_amt)
 

@@ -287,7 +287,7 @@ def test_soft_delete_and_restore_in_workspace():
     assert get_balance_setting(workspace_id=ws_id) == 700.0
 
     # Soft delete
-    deleted = delete_transaction(tx_id)
+    deleted = delete_transaction(tx_id, workspace_id=ws_id)
     assert deleted is True
     # Balance should restore back to 1000.0
     assert get_balance_setting(workspace_id=ws_id) == 1000.0

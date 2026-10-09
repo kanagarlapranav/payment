@@ -28,6 +28,7 @@ from database.queries import (
     insert_transaction_with_balance,
     restore_soft_deleted_transaction,
     search_transactions,
+    get_default_workspace_id,
 )
 from services.backup_service import record_confirmed_backup
 from services.balance_service import set_explicit_balance
@@ -74,26 +75,27 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
             category="Food & Dining",
         )
         tx_id = insert_transaction_with_balance(t)
-        return get_transaction_by_id(tx_id)
+        return get_transaction_by_id(tx_id, workspace_id=get_default_workspace_id())
 
     def test_deleted_rows_are_absent_from_every_live_query(self):
         tx = self._create_sample_tx(amount=150.0, ref="REF_LIVE_QUERY_TEST")
         tx_id = tx['id']
         tx_uid = tx['uid']
+        ws_id = get_default_workspace_id()
 
         # Verify present before deletion
-        self.assertIsNotNone(get_transaction_by_id(tx_id))
-        self.assertIsNotNone(get_live_transaction_by_uid(tx_uid))
+        self.assertIsNotNone(get_transaction_by_id(tx_id, workspace_id=ws_id))
+        self.assertIsNotNone(get_live_transaction_by_uid(tx_uid, workspace_id=ws_id))
 
         # Perform soft delete
-        deleted = delete_transaction(tx_id)
+        deleted = delete_transaction(tx_id, workspace_id=ws_id)
         self.assertTrue(deleted)
 
         # 1. get_transaction_by_id
-        self.assertIsNone(get_transaction_by_id(tx_id))
+        self.assertIsNone(get_transaction_by_id(tx_id, workspace_id=ws_id))
 
         # 2. get_live_transaction_by_uid
-        self.assertIsNone(get_live_transaction_by_uid(tx_uid))
+        self.assertIsNone(get_live_transaction_by_uid(tx_uid, workspace_id=ws_id))
 
         # 3. get_all_transactions
         all_txs = get_all_transactions()
@@ -157,8 +159,9 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
         tx = self._create_sample_tx(amount=300.0, ref="REF_TOMBSTONE_1")
         tx_id = tx['id']
         tx_uid = tx['uid']
+        ws_id = get_default_workspace_id()
 
-        delete_transaction(tx_id)
+        delete_transaction(tx_id, workspace_id=ws_id)
 
         # Row must still exist physically in SQLite table
         with get_db_connection() as conn:
@@ -172,7 +175,7 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
             self.assertIsNotNone(row['updated_at'])
 
         # get_transaction_by_uid without live_only finds the tombstone
-        tombstone = get_transaction_by_uid(tx_uid, live_only=False)
+        tombstone = get_transaction_by_uid(tx_uid, workspace_id=ws_id, live_only=False)
         self.assertIsNotNone(tombstone)
         self.assertIsNotNone(tombstone['deleted_at'])
 
@@ -180,9 +183,10 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
         tx = self._create_sample_tx(amount=100.0, ref="REF_ONCE_1")
         chat_id = 9991
         user_id = 8881
+        ws_id = get_default_workspace_id()
 
-        record_delete_action(tx, chat_id=chat_id, user_id=user_id)
-        delete_transaction(tx['id'])
+        record_delete_action(tx, chat_id=chat_id, user_id=user_id, workspace_id=ws_id)
+        delete_transaction(tx['id'], workspace_id=ws_id)
 
         # First undo succeeds
         success1, msg1 = perform_undo(chat_id=chat_id, user_id=user_id)
@@ -190,7 +194,7 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
         self.assertIn("Undo Successful", msg1)
 
         # Transaction is live again
-        self.assertIsNotNone(get_transaction_by_id(tx['id']))
+        self.assertIsNotNone(get_transaction_by_id(tx['id'], workspace_id=ws_id))
 
         # Second undo on same scope fails because record was already consumed
         success2, msg2 = perform_undo(chat_id=chat_id, user_id=user_id)
@@ -227,9 +231,10 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
         chat_id = 555
         owner_id = 111
         other_user_id = 222
+        ws_id = get_default_workspace_id()
 
-        record_delete_action(tx, chat_id=chat_id, user_id=owner_id)
-        delete_transaction(tx['id'])
+        record_delete_action(tx, chat_id=chat_id, user_id=owner_id, workspace_id=ws_id)
+        delete_transaction(tx['id'], workspace_id=ws_id)
 
         # Other user tries to undo -> refused
         success_other, msg_other = perform_undo(chat_id=chat_id, user_id=other_user_id)
@@ -237,44 +242,46 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
         self.assertIn("No recent action found to undo", msg_other)
 
         # Transaction remains deleted
-        self.assertIsNone(get_transaction_by_id(tx['id']))
+        self.assertIsNone(get_transaction_by_id(tx['id'], workspace_id=ws_id))
 
         # Legitimate owner undoes -> succeeds
         success_owner, msg_owner = perform_undo(chat_id=chat_id, user_id=owner_id)
         self.assertTrue(success_owner)
         self.assertIn("Undo Successful", msg_owner)
-        self.assertIsNotNone(get_transaction_by_id(tx['id']))
+        self.assertIsNotNone(get_transaction_by_id(tx['id'], workspace_id=ws_id))
 
     def test_expired_undo_is_refused(self):
         tx = self._create_sample_tx(amount=80.0, ref="REF_EXPIRE")
         chat_id = 777
         user_id = 888
+        ws_id = get_default_workspace_id()
 
         # Simulate undo recorded 15 minutes ago
         past_time = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
         with get_db_connection() as conn:
             conn.execute(
-                "INSERT INTO undo_log (chat_id, user_id, action, uid, created_at) VALUES (?, ?, 'delete', ?, ?)",
-                (chat_id, user_id, tx['uid'], past_time),
+                "INSERT INTO undo_log (workspace_id, chat_id, user_id, action, uid, created_at) VALUES (?, ?, ?, 'delete', ?, ?)",
+                (ws_id, chat_id, user_id, tx['uid'], past_time),
             )
             conn.commit()
 
-        delete_transaction(tx['id'])
+        delete_transaction(tx['id'], workspace_id=ws_id)
 
         success, msg = perform_undo(chat_id=chat_id, user_id=user_id)
         self.assertFalse(success)
         self.assertIn("expired", msg.lower())
 
         # Row remains deleted
-        self.assertIsNone(get_transaction_by_id(tx['id']))
+        self.assertIsNone(get_transaction_by_id(tx['id'], workspace_id=ws_id))
 
     def test_restart_keeps_undo_working(self):
         tx = self._create_sample_tx(amount=50.0, ref="REF_PERSIST")
         chat_id = 1234
         user_id = 5678
+        ws_id = get_default_workspace_id()
 
-        record_delete_action(tx, chat_id=chat_id, user_id=user_id)
-        delete_transaction(tx['id'])
+        record_delete_action(tx, chat_id=chat_id, user_id=user_id, workspace_id=ws_id)
+        delete_transaction(tx['id'], workspace_id=ws_id)
 
         # Simulate container or bot process restart: verify entry is in SQLite table
         with get_db_connection() as conn:
@@ -289,7 +296,7 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
         # Re-invoke undo as fresh caller: still succeeds
         success, _ = perform_undo(chat_id=chat_id, user_id=user_id)
         self.assertTrue(success)
-        self.assertIsNotNone(get_transaction_by_id(tx['id']))
+        self.assertIsNotNone(get_transaction_by_id(tx['id'], workspace_id=ws_id))
 
     def test_balance_is_right_after_delete_and_undo(self):
         set_explicit_balance(1000.00)
@@ -300,8 +307,9 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
         self.assertEqual(get_balance_setting(), 750.00)
 
         # Delete transaction -> balance recalculates to 1000.00
-        record_delete_action(tx, chat_id=1, user_id=1)
-        delete_transaction(tx['id'])
+        ws_id = get_default_workspace_id()
+        record_delete_action(tx, chat_id=1, user_id=1, workspace_id=ws_id)
+        delete_transaction(tx['id'], workspace_id=ws_id)
         self.assertEqual(get_balance_setting(), 1000.00)
 
         # Undo delete -> balance recalculates back to 750.00

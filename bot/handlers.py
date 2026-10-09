@@ -38,7 +38,8 @@ from database.queries import (
     search_transactions, get_monthly_summary, get_recent_transactions, get_balance_setting,
     get_payee_category, remember_payee_category, find_potential_duplicate, get_top_payees,
     get_daily_spend_series, get_month_comparison_stats, get_transactions_paginated, get_contact_ledger,
-    get_category_summary, save_pending_receipt, get_pending_receipt, delete_pending_receipt
+    get_category_summary, save_pending_receipt, get_pending_receipt, delete_pending_receipt,
+    get_default_workspace_id
 )
 from utils.currency import parse_amount, format_currency, normalize_amount_string
 from utils.dates import parse_date, get_current_time_in_tz, format_display_date
@@ -633,7 +634,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception:
             pass
     
-    ws_id = ws_ctx.workspace_id if ws_ctx else None
+    ws_id = ws_ctx.workspace_id if ws_ctx else get_default_workspace_id()
 
     # --- 0. Interactive Home Menu Navigation ---
     if action == "nav":
@@ -999,7 +1000,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif action == "restore_confirm":
         from services.backup_service import import_database_from_json, backup_to_telegram
-        from database.queries import get_all_transactions, get_balance_setting
+        from database.queries import get_all_transactions
         await query.edit_message_text("⏳ <b>Restoring ledger from backup...</b>", parse_mode='HTML')
         result = await asyncio.to_thread(import_database_from_json)
         if not result.get('success'):
@@ -1037,7 +1038,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text("⏳ <b>Importing backup into ledger…</b>", parse_mode='HTML')
         try:
             from services.backup_service import import_database_from_json, export_database_to_json, backup_to_telegram
-            from database.queries import get_all_transactions, get_balance_setting
+            from database.queries import get_all_transactions
 
             # Step 1: Import (reads from temp file — never from BACKUP_JSON_PATH)
             result = await asyncio.to_thread(import_database_from_json, input_path=tmp_path)
@@ -1510,7 +1511,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.answer("⛔ You are not an active member of that workspace.", show_alert=True)
                 return
             chat_id = getattr(update.effective_chat, 'id', None)
-            from database.queries import get_default_workspace_id
             default_ws_id = get_default_workspace_id()
             if (chat_id is not None and target_ws.chat_id == chat_id) or target_ws.id == default_ws_id:
                 set_user_active_workspace(user_id, None)
@@ -1576,7 +1576,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         from database.queries import (
             get_access_request, update_access_request_status, set_user_permission_and_role,
             get_workspace_by_chat_id, get_or_create_workspace, add_workspace_member,
-            get_workspace_by_id, get_default_workspace_id
+            get_workspace_by_id
         )
         from services.audit_service import log_audit_event
 
@@ -1672,7 +1672,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.answer("⛔ Only the bot owner can deny access.", show_alert=True)
             return
         target_uid = int(parts[1])
-        from database.queries import get_access_request, update_access_request_status, set_user_permission_and_role, get_default_workspace_id
+        from database.queries import get_access_request, update_access_request_status, set_user_permission_and_role
         from services.audit_service import log_audit_event
 
         req = get_access_request(target_uid)
@@ -1811,7 +1811,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.answer("⛔ Only the owner can remove members.", show_alert=True)
             return
         target_uid = int(parts[1])
-        from database.queries import remove_workspace_member, get_default_workspace_id
+        from database.queries import remove_workspace_member
         target_ws_id = ws_id or get_default_workspace_id()
         success = remove_workspace_member(target_ws_id, target_uid)
         if success:
@@ -1974,7 +1974,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 cursor.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,))
                 raw_row = cursor.fetchone()
             if raw_row and raw_row['deleted_at']:
-                from database.queries import get_balance_setting
                 cur_bal = get_balance_setting(workspace_id=ws_id)
                 await query.edit_message_text(
                     f"✅ <b>Delete Confirmed!</b>\n"
@@ -2062,7 +2061,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 cursor.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,))
                 raw_row = cursor.fetchone()
             if raw_row and raw_row['deleted_at']:
-                from database.queries import get_balance_setting
                 cur_bal = get_balance_setting(workspace_id=ws_id)
                 await query.edit_message_text(
                     f"✅ <b>Delete Confirmed!</b>\n"
@@ -2172,7 +2170,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         user_id = update.effective_user.id if update.effective_user else None
         success, msg = await asyncio.to_thread(perform_undo, chat_id=chat_id, user_id=user_id)
         if success:
-            from database.queries import get_balance_setting
             bal = get_balance_setting(workspace_id=ws_id)
             try:
                 from services.backup_service import export_database_to_json

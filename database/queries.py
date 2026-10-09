@@ -1323,59 +1323,54 @@ def get_monthly_summary(year: int, month: int, workspace_id: str = None, user_id
             'top_recipient': top_recipient
         }
 
-def get_transaction_by_id(tx_id: int, workspace_id: str = None):
+def get_transaction_by_id(tx_id: int, workspace_id: str):
     """Fetches a transaction by its ID (live only), strictly scoped to workspace."""
+    if not workspace_id or not str(workspace_id).strip():
+        return None
+    ws_id = str(workspace_id).strip()
     default_ws = get_default_workspace_id()
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        if workspace_id:
-            if workspace_id == default_ws:
-                cursor.execute(
-                    "SELECT * FROM transactions WHERE id = ? AND deleted_at IS NULL AND (workspace_id = ? OR workspace_id IS NULL)",
-                    (tx_id, workspace_id)
-                )
-            else:
-                cursor.execute(
-                    "SELECT * FROM transactions WHERE id = ? AND deleted_at IS NULL AND workspace_id = ?",
-                    (tx_id, workspace_id)
-                )
-        else:
+        if ws_id == default_ws:
             cursor.execute(
                 "SELECT * FROM transactions WHERE id = ? AND deleted_at IS NULL AND (workspace_id = ? OR workspace_id IS NULL)",
-                (tx_id, default_ws)
+                (tx_id, ws_id)
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM transactions WHERE id = ? AND deleted_at IS NULL AND workspace_id = ?",
+                (tx_id, ws_id)
             )
         row = cursor.fetchone()
         return dict(row) if row else None
 
-def get_transaction_by_uid(uid: str, live_only: bool = False, workspace_id: str = None):
+def get_transaction_by_uid(uid: str, workspace_id: str, live_only: bool = False):
     """Fetches a transaction by its permanent UID (live or deleted, or live only if requested), strictly scoped to workspace."""
-    if not uid:
+    if not uid or not workspace_id or not str(workspace_id).strip():
         return None
+    ws_id = str(workspace_id).strip()
+    valid_uid = validate_uid(uid)
     default_ws = get_default_workspace_id()
     with get_db_connection() as conn:
         cursor = conn.cursor()
         conditions = ["uid = ?"]
-        params = [uid]
+        params = [valid_uid]
         if live_only:
             conditions.append("deleted_at IS NULL")
-        if workspace_id:
-            if workspace_id == default_ws:
-                conditions.append("(workspace_id = ? OR workspace_id IS NULL)")
-                params.append(workspace_id)
-            else:
-                conditions.append("workspace_id = ?")
-                params.append(workspace_id)
-        else:
+        if ws_id == default_ws:
             conditions.append("(workspace_id = ? OR workspace_id IS NULL)")
-            params.append(default_ws)
+            params.append(ws_id)
+        else:
+            conditions.append("workspace_id = ?")
+            params.append(ws_id)
         where_clause = " AND ".join(conditions)
         cursor.execute(f"SELECT * FROM transactions WHERE {where_clause}", params)
         row = cursor.fetchone()
         return dict(row) if row else None
 
-def get_live_transaction_by_uid(uid: str, workspace_id: str = None):
-    """Fetches an active, non-deleted transaction by permanent UID, optionally scoped to workspace."""
-    return get_transaction_by_uid(uid, live_only=True, workspace_id=workspace_id)
+def get_live_transaction_by_uid(uid: str, workspace_id: str):
+    """Fetches an active, non-deleted transaction by permanent UID, strictly scoped to workspace."""
+    return get_transaction_by_uid(uid, workspace_id=workspace_id, live_only=True)
 
 ALLOWED_UPDATE_COLUMNS = {
     'amount', 'transaction_type', 'person_name', 'sender_name', 'recipient_name',
@@ -1384,9 +1379,9 @@ ALLOWED_UPDATE_COLUMNS = {
     'occurred_at', 'ocr_text'
 }
 
-def update_transaction(tx_id: int, updates: dict, workspace_id: str = None) -> bool:
+def update_transaction(tx_id: int, updates: dict, workspace_id: str) -> bool:
     """Updates specific fields of an active transaction with validation, occurred_at recalculation, and thread locking."""
-    if not updates:
+    if not updates or not workspace_id or not str(workspace_id).strip():
         return False
 
     # Enforce whitelist of allowed columns (UID is strictly immutable)
@@ -1424,7 +1419,8 @@ def update_transaction(tx_id: int, updates: dict, workspace_id: str = None) -> b
 
             default_ws = get_default_workspace_id()
             row_ws = cur_row['workspace_id'] or default_ws
-            if workspace_id is not None and row_ws != workspace_id:
+            ws_filter = str(workspace_id).strip()
+            if row_ws != ws_filter:
                 return False
 
             ws_id = row_ws
@@ -1454,12 +1450,14 @@ def update_transaction(tx_id: int, updates: dict, workspace_id: str = None) -> b
             conn.commit()
             return success
 
-def delete_transaction(tx_id: int, workspace_id: str = None) -> bool:
+def delete_transaction(tx_id: int, workspace_id: str) -> bool:
     """
     Soft-deletes a transaction by setting deleted_at and updated_at using utc_now_iso().
     Preserves permanent uid and recalculates balance chain over remaining live rows
     all in one database transaction under LEDGER_LOCK.
     """
+    if not workspace_id or not str(workspace_id).strip():
+        return False
     with LEDGER_LOCK:
         from services.balance_service import recalculate_in_connection
         now_utc = utc_now_iso()
@@ -1471,8 +1469,8 @@ def delete_transaction(tx_id: int, workspace_id: str = None) -> bool:
                 return False
             default_ws = get_default_workspace_id()
             row_ws = row['workspace_id'] or default_ws
-            ws_filter = str(workspace_id).strip() if (workspace_id and str(workspace_id).strip()) else None
-            if ws_filter is not None and row_ws != ws_filter:
+            ws_filter = str(workspace_id).strip()
+            if row_ws != ws_filter:
                 return False
             ws_id = row_ws
 
@@ -1489,12 +1487,12 @@ def delete_transaction(tx_id: int, workspace_id: str = None) -> bool:
             conn.commit()
             return deleted
 
-def delete_transaction_by_uid(uid: str, workspace_id: str = None) -> bool:
+def delete_transaction_by_uid(uid: str, workspace_id: str) -> bool:
     """
     Soft-deletes a transaction by permanent uid under LEDGER_LOCK in one database transaction.
     Recalculates balance chain over live rows. Does not purge tombstones.
     """
-    if not uid:
+    if not uid or not workspace_id or not str(workspace_id).strip():
         return False
     with LEDGER_LOCK:
         from services.balance_service import recalculate_in_connection
@@ -1508,8 +1506,8 @@ def delete_transaction_by_uid(uid: str, workspace_id: str = None) -> bool:
                 return False
             default_ws = get_default_workspace_id()
             row_ws = row['workspace_id'] or default_ws
-            ws_filter = str(workspace_id).strip() if (workspace_id and str(workspace_id).strip()) else None
-            if ws_filter is not None and row_ws != ws_filter:
+            ws_filter = str(workspace_id).strip()
+            if row_ws != ws_filter:
                 return False
             ws_id = row_ws
 

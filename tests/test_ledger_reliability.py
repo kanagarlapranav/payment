@@ -10,6 +10,7 @@ from database.queries import (
     get_transaction_by_id,
     insert_transaction_with_balance,
     update_transaction,
+    get_default_workspace_id,
 )
 from services.balance_service import (
     recalculate_all_balances,
@@ -202,7 +203,8 @@ class TestLedgerReliability(unittest.TestCase):
         self.assertEqual(get_balance_setting(), 1050.00)
 
         # Edit T1 from SENT 100 to SENT 200
-        success = update_transaction(t1_id, {"amount": 200.00})
+        default_ws = get_default_workspace_id()
+        success = update_transaction(t1_id, {"amount": 200.00}, workspace_id=default_ws)
         self.assertTrue(success)
 
         # Recalculated state:
@@ -210,9 +212,9 @@ class TestLedgerReliability(unittest.TestCase):
         # T1: 1000 -> 800
         # T2: 800 -> 750
         # T3: 750 -> 950
-        row1 = get_transaction_by_id(t1_id)
-        row2 = get_transaction_by_id(t2_id)
-        row3 = get_transaction_by_id(t3_id)
+        row1 = get_transaction_by_id(t1_id, workspace_id=default_ws)
+        row2 = get_transaction_by_id(t2_id, workspace_id=default_ws)
+        row3 = get_transaction_by_id(t3_id, workspace_id=default_ws)
 
         self.assertEqual(row1["balance_before"], 1000.00)
         self.assertEqual(row1["balance_after"], 800.00)
@@ -263,9 +265,10 @@ class TestLedgerReliability(unittest.TestCase):
         )
 
         # Ordering should be: T1 (9/10), T_back (9/11), T2 (9/12)
-        row1 = get_transaction_by_id(t1_id)
-        row_back = get_transaction_by_id(t_back_id)
-        row2 = get_transaction_by_id(t2_id)
+        default_ws = get_default_workspace_id()
+        row1 = get_transaction_by_id(t1_id, workspace_id=default_ws)
+        row_back = get_transaction_by_id(t_back_id, workspace_id=default_ws)
+        row2 = get_transaction_by_id(t2_id, workspace_id=default_ws)
 
         self.assertEqual(row1["balance_before"], 1000.00)
         self.assertEqual(row1["balance_after"], 900.00)
@@ -396,9 +399,10 @@ class TestLedgerReliability(unittest.TestCase):
         t_early_id = insert_transaction_with_balance(t_early)
 
         # Chronological order: 10:02 AM -> 01:44 PM -> 09:57 PM
-        r_early = get_transaction_by_id(t_early_id)
-        r_noon = get_transaction_by_id(t_noon_id)
-        r_late = get_transaction_by_id(t_late_id)
+        default_ws = get_default_workspace_id()
+        r_early = get_transaction_by_id(t_early_id, workspace_id=default_ws)
+        r_noon = get_transaction_by_id(t_noon_id, workspace_id=default_ws)
+        r_late = get_transaction_by_id(t_late_id, workspace_id=default_ws)
 
         # Early (10:02 AM): 1000 - 10 = 990
         self.assertEqual(r_early["balance_before"], 1000.00)

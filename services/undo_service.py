@@ -14,6 +14,7 @@ from database.db import LEDGER_LOCK, get_db_connection
 from database.queries import (
     delete_transaction_by_uid,
     get_balance_setting,
+    get_default_workspace_id,
     get_transaction_by_id,
     get_transaction_by_uid,
     restore_soft_deleted_transaction,
@@ -51,9 +52,10 @@ def record_delete_action(
     if not deleted_tx:
         return False
 
+    ws_id = workspace_id or deleted_tx.get('workspace_id') or get_default_workspace_id()
     uid = deleted_tx.get('uid')
     if not uid and deleted_tx.get('id'):
-        row = get_transaction_by_id(deleted_tx['id'])
+        row = get_transaction_by_id(deleted_tx['id'], workspace_id=ws_id)
         if row:
             uid = row.get('uid')
 
@@ -61,7 +63,6 @@ def record_delete_action(
         logger.warning(f"Cannot record undo for transaction without uid: {deleted_tx}")
         return False
 
-    ws_id = workspace_id or deleted_tx.get('workspace_id') or ""
     valid_uid = validate_uid(uid)
     c_id, u_id, resolved_ws_id = _resolve_scope(chat_id, user_id, ws_id)
     now_utc = utc_now_iso()
@@ -92,12 +93,12 @@ def record_insert_action(
     Scoped by (workspace_id, chat_id, user_id).
     """
     uid = None
-    tx_ws_id = workspace_id or ""
+    tx_ws_id = workspace_id or get_default_workspace_id()
     if isinstance(inserted_tx_uid_or_id, int) or (isinstance(inserted_tx_uid_or_id, str) and inserted_tx_uid_or_id.isdigit()):
-        row = get_transaction_by_id(int(inserted_tx_uid_or_id))
+        row = get_transaction_by_id(int(inserted_tx_uid_or_id), workspace_id=tx_ws_id)
         if row:
             uid = row.get('uid')
-            tx_ws_id = tx_ws_id or row.get('workspace_id', '')
+            tx_ws_id = row.get('workspace_id') or tx_ws_id
     elif inserted_tx_uid_or_id:
         uid = str(inserted_tx_uid_or_id).strip()
 
@@ -144,9 +145,10 @@ def record_edit_action(
     if not previous_tx:
         return False
 
+    ws_id = workspace_id or previous_tx.get('workspace_id') or get_default_workspace_id()
     uid = previous_tx.get('uid')
     if not uid and previous_tx.get('id'):
-        row = get_transaction_by_id(previous_tx['id'])
+        row = get_transaction_by_id(previous_tx['id'], workspace_id=ws_id)
         if row:
             uid = row.get('uid')
 
@@ -154,7 +156,6 @@ def record_edit_action(
         logger.warning(f"Cannot record undo edit for transaction without uid: {previous_tx}")
         return False
 
-    ws_id = workspace_id or previous_tx.get('workspace_id') or ""
     valid_uid = validate_uid(uid)
     c_id, u_id, resolved_ws_id = _resolve_scope(chat_id, user_id, ws_id)
     now_utc = utc_now_iso()

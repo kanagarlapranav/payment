@@ -14,6 +14,7 @@ from database.queries import (
     get_all_transactions,
     get_transaction_by_uid,
     get_balance_setting,
+    get_default_workspace_id,
 )
 from services.backup_service import (
     export_database_to_json,
@@ -70,7 +71,7 @@ class TestBackupRestorePrompt6(unittest.TestCase):
         self.assertTrue(res.get("success"))
         self.assertEqual(res.get("updated"), 1)
 
-        row = get_transaction_by_uid(uid)
+        row = get_transaction_by_uid(uid, workspace_id=get_default_workspace_id())
         self.assertIsNotNone(row)
         self.assertEqual(row["person_name"], "New Person")
         self.assertEqual(row["amount"], 200.0)
@@ -116,7 +117,7 @@ class TestBackupRestorePrompt6(unittest.TestCase):
         self.assertEqual(res.get("updated"), 0)
         self.assertEqual(res.get("skipped"), 1)
 
-        row = get_transaction_by_uid(uid)
+        row = get_transaction_by_uid(uid, workspace_id=get_default_workspace_id())
         self.assertEqual(row["person_name"], "Local Newer")
         self.assertEqual(row["amount"], 500.0)
 
@@ -160,7 +161,7 @@ class TestBackupRestorePrompt6(unittest.TestCase):
         self.assertTrue(res.get("success"))
         self.assertEqual(res.get("updated"), 1)
 
-        row = get_transaction_by_uid(uid)
+        row = get_transaction_by_uid(uid, workspace_id=get_default_workspace_id())
         self.assertIsNotNone(row["deleted_at"])
 
     def test_newer_local_tombstone_beats_older_live_backup(self):
@@ -206,7 +207,7 @@ class TestBackupRestorePrompt6(unittest.TestCase):
         self.assertEqual(res.get("updated"), 0)
         self.assertEqual(res.get("skipped"), 1)
 
-        row = get_transaction_by_uid(uid)
+        row = get_transaction_by_uid(uid, workspace_id=get_default_workspace_id())
         self.assertIsNotNone(row["deleted_at"])
 
     def test_v1_id_collision_cannot_overwrite_local_row(self):
@@ -349,7 +350,7 @@ class TestBackupRestorePrompt6(unittest.TestCase):
         self.assertFalse(res.get("success"))
 
         # Confirm uid1 was NOT inserted due to rollback
-        row1 = get_transaction_by_uid(uid1)
+        row1 = get_transaction_by_uid(uid1, workspace_id=get_default_workspace_id())
         self.assertIsNone(row1)
 
     def test_restart_scenario_deleted_row_stays_deleted(self):
@@ -383,7 +384,7 @@ class TestBackupRestorePrompt6(unittest.TestCase):
             self.assertTrue(res.get("success"))
 
             # Check that row is restored as a tombstone
-            row = get_transaction_by_uid(uid)
+            row = get_transaction_by_uid(uid, workspace_id=get_default_workspace_id())
             self.assertIsNotNone(row)
             self.assertIsNotNone(row["deleted_at"])
         finally:

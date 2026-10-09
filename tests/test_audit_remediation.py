@@ -55,6 +55,7 @@ from database.queries import (
     get_monthly_summary,
     ALLOWED_UPDATE_COLUMNS,
     increment_revision_and_mark_dirty,
+    get_default_workspace_id,
 )
 from services.balance_service import (
     recalculate_all_balances,
@@ -217,7 +218,7 @@ def test_empty_initialized_database_and_delete_all_backup():
     # 3. Insert and then delete all transactions
     t1 = Transaction(amount=250.0, transaction_type="SENT", person_name="Grocery Store")
     t1_id = insert_transaction_with_balance(t1)
-    delete_transaction(t1_id)
+    delete_transaction(t1_id, workspace_id=get_default_workspace_id())
 
     del_backup = export_database_to_json()
     assert del_backup.get("version") == 2
@@ -302,15 +303,16 @@ def test_uid_immutability_enforced():
 
     t = Transaction(amount=100.0, transaction_type="SENT", person_name="Merchant")
     tx_id = insert_transaction_with_balance(t)
-    original_tx = get_transaction_by_id(tx_id)
+    default_ws = get_default_workspace_id()
+    original_tx = get_transaction_by_id(tx_id, workspace_id=default_ws)
     orig_uid = original_tx["uid"]
 
     new_uid = uuid.uuid4().hex
     with pytest.raises(ValueError, match="Disallowed column"):
-        update_transaction(tx_id, {"uid": new_uid})
+        update_transaction(tx_id, {"uid": new_uid}, workspace_id=default_ws)
 
     # Verify UID remained untouched
-    tx_after = get_transaction_by_id(tx_id)
+    tx_after = get_transaction_by_id(tx_id, workspace_id=default_ws)
     assert tx_after["uid"] == orig_uid
 
 
@@ -370,7 +372,7 @@ def test_transfer_transaction_type_invariants():
     id_tr = insert_transaction_with_balance(t_tr)
 
     # Check TRANSFER row balances
-    tx_tr = get_transaction_by_id(id_tr)
+    tx_tr = get_transaction_by_id(id_tr, workspace_id=get_default_workspace_id())
     assert tx_tr["balance_before"] == tx_tr["balance_after"]
     assert tx_tr["balance_after"] == 11500.0  # 10000 - 500 + 2000 = 11500 (unchanged by transfer)
 

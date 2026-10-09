@@ -119,9 +119,10 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
 
 def render_transaction_detail(tx_id: int, workspace_id: str = None):
     """Renders the detailed view of a single transaction."""
-    from database.queries import get_transaction_by_id
+    from database.queries import get_transaction_by_id, get_default_workspace_id
     from bot.keyboards import get_transaction_detail_keyboard
-    tx = get_transaction_by_id(tx_id)
+    target_ws = workspace_id or get_default_workspace_id()
+    tx = get_transaction_by_id(tx_id, workspace_id=target_ws)
     if not tx or (workspace_id and tx.get('workspace_id') and tx.get('workspace_id') != workspace_id):
         return "❌ <b>Transaction not found or deleted.</b>", get_back_to_menu_keyboard()
         
@@ -1552,6 +1553,9 @@ async def cafeedit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Opens the interactive cafeteria item selector for the most recent or specified cafeteria payment."""
     if not await require_admin(update): return
     from database.queries import get_cafeteria_transactions, get_transaction_by_id
+    from bot.auth import get_workspace_context
+    ws_ctx = get_workspace_context(update)
+    ws_id = ws_ctx.workspace_id
     from bot.keyboards import get_cafeteria_selection_keyboard
     import html
     
@@ -1559,10 +1563,10 @@ async def cafeedit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         clean_id = context.args[0].replace('#', '').strip()
         if clean_id.isdigit():
-            target_tx = get_transaction_by_id(int(clean_id))
+            target_tx = get_transaction_by_id(int(clean_id), workspace_id=ws_id)
             
     if not target_tx:
-        cafe_txs = get_cafeteria_transactions(limit=1)
+        cafe_txs = get_cafeteria_transactions(limit=1, workspace_id=ws_id)
         if cafe_txs:
             target_tx = cafe_txs[0]
             

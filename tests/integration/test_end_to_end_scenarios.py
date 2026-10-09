@@ -36,7 +36,8 @@ from database.queries import (
     delete_transaction,
     get_all_transactions,
     get_balance_setting,
-    get_transaction_by_id
+    get_transaction_by_id,
+    get_default_workspace_id
 )
 from services.balance_service import set_explicit_balance
 from services.undo_service import (
@@ -114,14 +115,15 @@ def test_ledger_lifecycle_chain_edit_delete_undo():
         assert rows[0]["uid"] != rows[1]["uid"]
 
     # 4. Edit transaction #1 (Change amount from 200 to 300)
-    edit_success = update_transaction(tx1_id, {"amount": 300.0})
+    ws_id = get_default_workspace_id()
+    edit_success = update_transaction(tx1_id, {"amount": 300.0}, workspace_id=ws_id)
     assert edit_success is True
     assert get_balance_setting() == 1200.0
 
     # 5. Delete transaction #1 -> verify tombstone & balance recalculation
-    tx1_row = get_transaction_by_id(tx1_id)
+    tx1_row = get_transaction_by_id(tx1_id, workspace_id=ws_id)
     record_delete_action(tx1_row)
-    delete_success = delete_transaction(tx1_id)
+    delete_success = delete_transaction(tx1_id, workspace_id=ws_id)
     assert delete_success is True
     assert get_balance_setting() == 1500.0
 
@@ -171,7 +173,7 @@ def test_backup_tamper_rejection_and_empty_ledger_restart(tmp_path):
     # 3. Delete everything and export empty ledger backup (tombstones preserved)
     all_txs = get_all_transactions()
     for t in all_txs:
-        delete_transaction(t["id"])
+        delete_transaction(t["id"], workspace_id=get_default_workspace_id())
 
     empty_backup_file = Path(tmp_path / "empty_backup.json")
     export_database_to_json(empty_backup_file)

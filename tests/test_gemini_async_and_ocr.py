@@ -316,10 +316,11 @@ def test_preprocess_image_uses_splitext(tmp_path):
 def test_update_transaction_whitelist_and_live_rows():
     """update_transaction strictly enforces whitelist and rejects unknown columns."""
     from database.db import setup_database, get_db_connection
-    from database.queries import insert_transaction_with_balance, get_transaction_by_id, delete_transaction
+    from database.queries import insert_transaction_with_balance, get_transaction_by_id, delete_transaction, get_default_workspace_id
     from database.models import Transaction
 
     setup_database()
+    default_ws = get_default_workspace_id()
     sample_tx = Transaction(
         amount=100.0,
         transaction_type="SENT",
@@ -331,17 +332,17 @@ def test_update_transaction_whitelist_and_live_rows():
     assert tx_id is not None
 
     # 1. Valid update on live row
-    ok = update_transaction(tx_id, {"amount": 150.0, "category": "Food & Dining"})
+    ok = update_transaction(tx_id, {"amount": 150.0, "category": "Food & Dining"}, workspace_id=default_ws)
     assert ok is True
-    updated_tx = get_transaction_by_id(tx_id)
+    updated_tx = get_transaction_by_id(tx_id, workspace_id=default_ws)
     assert updated_tx["amount"] == 150.0
     assert updated_tx["category"] == "Food & Dining"
 
     # 2. Unknown column raises ValueError
     with pytest.raises(ValueError, match="Disallowed column"):
-        update_transaction(tx_id, {"non_existent_field": "hacked"})
+        update_transaction(tx_id, {"non_existent_field": "hacked"}, workspace_id=default_ws)
 
     # 3. Soft-deleted row is not updated
-    delete_transaction(tx_id)
-    ok_del = update_transaction(tx_id, {"amount": 200.0})
+    delete_transaction(tx_id, workspace_id=default_ws)
+    ok_del = update_transaction(tx_id, {"amount": 200.0}, workspace_id=default_ws)
     assert ok_del is False

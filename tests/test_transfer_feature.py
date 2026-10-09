@@ -5,7 +5,8 @@ from database.db import get_db_connection
 from database.models import Transaction
 from database.queries import (
     insert_transaction_with_balance, get_transaction_by_id,
-    get_transactions_paginated, get_monthly_summary
+    get_transactions_paginated, get_monthly_summary,
+    get_default_workspace_id
 )
 from services.balance_service import (
     recalculate_all_balances, validate_ledger_invariants,
@@ -44,7 +45,7 @@ class TestTransferFeature(unittest.TestCase):
         self.assertIsNotNone(tx_id)
 
         # 3. Verify row has balance_after == balance_before
-        inserted_tx = get_transaction_by_id(tx_id)
+        inserted_tx = get_transaction_by_id(tx_id, workspace_id=get_default_workspace_id())
         self.assertEqual(inserted_tx['transaction_type'], "TRANSFER")
         self.assertEqual(inserted_tx['balance_before'], inserted_tx['balance_after'])
 
@@ -72,7 +73,7 @@ class TestTransferFeature(unittest.TestCase):
         # Check today summary
         today = get_today_summary()
         # total_sent and total_received should not include the 2500 transfer
-        tx = get_transaction_by_id(tx_id)
+        tx = get_transaction_by_id(tx_id, workspace_id=get_default_workspace_id())
         self.assertIsNotNone(tx)
         
         # Monthly summary

@@ -4,7 +4,7 @@ from database.db import get_db_connection
 from database.models import Transaction
 from database.queries import (
     insert_transaction_with_balance, get_transaction_by_id, get_transactions_paginated,
-    get_payee_category, remember_payee_category
+    get_payee_category, remember_payee_category, get_default_workspace_id
 )
 from bot.keyboards import (
     get_home_menu_keyboard, get_add_menu_keyboard, get_more_menu_keyboard,
@@ -393,7 +393,7 @@ class TestUXAndNavigation(unittest.TestCase):
         self.assertIn("nav:home", callbacks)
 
         # 4. Verify transaction is deleted in DB
-        self.assertIsNone(get_transaction_by_id(tx_id))
+        self.assertIsNone(get_transaction_by_id(tx_id, workspace_id=get_default_workspace_id()))
 
     def test_delete_confirm_when_already_deleted(self):
         """Verify tapping Confirm Delete on an already deleted record still shows Delete Confirmed clearly."""
@@ -410,7 +410,7 @@ class TestUXAndNavigation(unittest.TestCase):
             category="Food"
         )
         tx_id = insert_transaction_with_balance(tx)
-        delete_transaction(tx_id) # Already deleted
+        delete_transaction(tx_id, workspace_id=get_default_workspace_id()) # Already deleted
 
         update = MagicMock()
         query = MagicMock()
