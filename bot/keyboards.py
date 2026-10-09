@@ -303,6 +303,14 @@ def get_history_paginated_keyboard(page: int, total_pages: int, filter_type: str
     """Returns interactive pagination buttons, filter chips, sort toggle, and row tap shortcuts for /history."""
     keyboard = []
     sort_by = sort_by or "date_desc"
+    try:
+        total_pages = max(1, int(total_pages or 1))
+    except (ValueError, TypeError):
+        total_pages = 1
+    try:
+        page = max(1, min(int(page or 1), total_pages))
+    except (ValueError, TypeError):
+        page = 1
     
     # 1. Row buttons to open detail screen for items on this page
     if tx_rows:

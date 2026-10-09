@@ -77,6 +77,23 @@ class TestUXAndNavigation(unittest.TestCase):
         self.assertIn("No transactions found for this filter.", empty_text)
         self.assertIsNotNone(empty_markup)
 
+        # 3. Boundary check: page <= 1 (page 0 or -1 clamps safely to page 1)
+        zero_text, zero_markup = render_history_page(page=0, filter_type="ALL", page_size=5)
+        self.assertIn("🧾", zero_text)
+        self.assertIn("Page 1 of", zero_text)
+
+        # 4. Keyboard boundary verification
+        kb_page1 = get_history_paginated_keyboard(page=1, total_pages=3)
+        cb_p1 = [b.callback_data for r in kb_page1.inline_keyboard for b in r]
+        self.assertFalse(any("nav:history:0:" in c for c in cb_p1), "Page 1 keyboard should not have Prev link to page 0")
+        self.assertTrue(any("nav:history:2:" in c for c in cb_p1), "Page 1 of 3 should have Next link to page 2")
+
+        kb_page3 = get_history_paginated_keyboard(page=3, total_pages=3)
+        cb_p3 = [b.callback_data for r in kb_page3.inline_keyboard for b in r]
+        self.assertFalse(any("nav:history:4:" in c for c in cb_p3), "Page 3 of 3 keyboard should not have Next link to page 4")
+        self.assertTrue(any("nav:history:2:" in c for c in cb_p3), "Page 3 of 3 should have Prev link to page 2")
+
+
     def test_transaction_detail_screen(self):
         """Test transaction detail view rendering and keyboard actions."""
         # Insert a sample transaction

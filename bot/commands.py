@@ -56,12 +56,26 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
     """Renders a formatted page of transactions with navigation keyboard and sort order control."""
     from database.queries import get_transactions_paginated
     sort_by = sort_by or "date_desc"
+    try:
+        page = max(1, int(page or 1))
+    except (ValueError, TypeError):
+        page = 1
+    try:
+        page_size = max(1, int(page_size or 5))
+    except (ValueError, TypeError):
+        page_size = 5
+
     tx_filter = filter_type if filter_type in ('SENT', 'RECEIVED', 'TRANSFER') else None
     data = get_transactions_paginated(page=page, page_size=page_size, tx_type=tx_filter, sort_by=sort_by, workspace_id=workspace_id, user_id=user_id)
     
     items = data['transactions']
-    total_pages = data['total_pages']
-    total_count = data['total_count']
+    total_pages = max(1, int(data.get('total_pages', 1)))
+    total_count = int(data.get('total_count', 0))
+
+    if page > total_pages and total_count > 0:
+        page = total_pages
+        data = get_transactions_paginated(page=page, page_size=page_size, tx_type=tx_filter, sort_by=sort_by, workspace_id=workspace_id, user_id=user_id)
+        items = data['transactions']
     
     if not items:
         text = (
@@ -73,7 +87,7 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
         )
         return text, get_history_paginated_keyboard(1, 1, filter_type, tx_rows=[], sort_by=sort_by)
         
-    if page == 1 and filter_type == "ALL":
+    if page <= 1 and filter_type == "ALL":
         if sort_by == "date_asc":
             header = f"🧾 <b>Transactions (Oldest First — ASC)</b>"
         elif sort_by in ("id_desc", "created_desc"):
