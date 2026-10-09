@@ -1049,6 +1049,73 @@ class TestUXAndNavigation(unittest.TestCase):
             self.assertIn("nav_home", log_formatted)
             self.assertIn("BadRequest", log_formatted)
 
+    def test_group_pending_receipt_bound_to_creator_author(self):
+        """P2-z: Verify pending cards reject unrelated members and preserve creator author ID."""
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from bot.handlers import handle_callback_query, set_pending_transaction, fetch_pending_transaction
+        from database.models import Transaction
+        from database.queries import add_workspace_member, get_transaction_by_id, get_default_workspace_id
+
+        ws_id = get_default_workspace_id()
+        author_id = 771122
+        stranger_id = 773344
+
+        # Register author and stranger as members in workspace
+        add_workspace_member(ws_id, author_id, username="author", display_name="Author", role="member")
+        add_workspace_member(ws_id, stranger_id, username="stranger", display_name="Stranger", role="member")
+
+        # 1. Create a pending receipt authored by author_id
+        pending_id = "test_pending_bound_author"
+        tx = Transaction(
+            amount=250.0,
+            transaction_type="SENT",
+            person_name="Bound Cafe",
+            category="Food & Dining",
+            workspace_id=ws_id,
+            telegram_user_id=author_id
+        )
+        set_pending_transaction(pending_id, tx, workspace_id=ws_id)
+
+        # 2. Stranger attempts to click save_p -> REJECTED
+        update = MagicMock()
+        query = MagicMock()
+        query.data = f"save_p:{pending_id}"
+        query.from_user.id = stranger_id
+        update.effective_user.id = stranger_id
+        update.effective_chat.id = -100123456789
+        update.effective_chat.type = "supergroup"
+        query.message.text = "Receipt Card"
+        query.edit_message_text = AsyncMock()
+        query.answer = AsyncMock()
+        update.callback_query = query
+        context = MagicMock()
+
+        asyncio.run(handle_callback_query(update, context))
+        query.answer.assert_called_with("⛔ Only the creator of this receipt or an admin can confirm it.", show_alert=True)
+        # Pending transaction must still exist in pending store
+        self.assertIsNotNone(fetch_pending_transaction(pending_id, workspace_id=ws_id))
+
+        # 3. Stranger attempts to click cancel_p -> REJECTED
+        query.data = f"cancel_p:{pending_id}"
+        query.answer.reset_mock()
+        asyncio.run(handle_callback_query(update, context))
+        query.answer.assert_called_with("⛔ Only the creator of this receipt or an admin can discard it.", show_alert=True)
+        self.assertIsNotNone(fetch_pending_transaction(pending_id, workspace_id=ws_id))
+
+        # 4. Author clicks save_p -> SUCCEEDS and preserves author_id
+        query.data = f"save_p:{pending_id}"
+        query.from_user.id = author_id
+        update.effective_user.id = author_id
+        query.answer.reset_mock()
+        asyncio.run(handle_callback_query(update, context))
+        query.answer.assert_called_with("✅ Payment Saved!", show_alert=False)
+
+        # Saved transaction in DB must have telegram_user_id == author_id
+        saved = get_transaction_by_id(tx.id, workspace_id=ws_id)
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved['telegram_user_id'], author_id)
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -1128,6 +1128,22 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         if ws_id:
             transaction.workspace_id = ws_id
 
+        # Bind pendings to author: only author or admin/owner can confirm
+        creator_uid = getattr(transaction, 'telegram_user_id', None)
+        clicker_uid = query.from_user.id if query.from_user else None
+        if creator_uid and clicker_uid and int(creator_uid) != int(clicker_uid):
+            from bot.auth import is_admin_or_owner
+            if not is_admin_or_owner(update, workspace_id=ws_id):
+                # Put back into pending since we popped it
+                set_pending_transaction(pending_id, transaction, workspace_id=ws_id)
+                try:
+                    ans = query.answer("⛔ Only the creator of this receipt or an admin can confirm it.", show_alert=True)
+                    if asyncio.iscoroutine(ans):
+                        await ans
+                except Exception:
+                    pass
+                return
+
         # Check if this exact receipt/transaction was already saved in the database
         existing = None
         if not is_force:
@@ -1185,7 +1201,8 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         if transaction.person_name and transaction.category:
             remember_payee_category(transaction.person_name, transaction.category, workspace_id=ws_id)
             
-        if query.from_user and getattr(query.from_user, 'id', None):
+        # Bind pendings to the author; never overwrite creator_uid with another clicker
+        if not getattr(transaction, 'telegram_user_id', None) and query.from_user and getattr(query.from_user, 'id', None):
             transaction.telegram_user_id = int(query.from_user.id)
 
         success = commit_transaction(transaction, allow_duplicate=is_force)
@@ -1299,6 +1316,17 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
 
     elif action == "edit_p":
         pending_id = parts[1]
+        transaction = fetch_pending_transaction(pending_id, workspace_id=ws_id)
+        creator_uid = getattr(transaction, 'telegram_user_id', None) if transaction else None
+        clicker_uid = query.from_user.id if query.from_user else None
+        if creator_uid and clicker_uid and int(creator_uid) != int(clicker_uid):
+            from bot.auth import is_admin_or_owner
+            if not is_admin_or_owner(update, workspace_id=ws_id):
+                try:
+                    await query.answer("⛔ Only the creator of this receipt or an admin can edit it.", show_alert=True)
+                except Exception:
+                    pass
+                return
         await safe_edit_callback_message(
             query,
             "✏️ <b>Select Field to Edit:</b>\n"
@@ -1390,8 +1418,23 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         return
 
     elif action == "cancel_p":
-        await query.answer("❌ Receipt discarded.", show_alert=False)
         pending_id = parts[1]
+        transaction = fetch_pending_transaction(pending_id, workspace_id=ws_id)
+        creator_uid = getattr(transaction, 'telegram_user_id', None) if transaction else None
+        clicker_uid = query.from_user.id if query.from_user else None
+        if creator_uid and clicker_uid and int(creator_uid) != int(clicker_uid):
+            from bot.auth import is_admin_or_owner
+            if not is_admin_or_owner(update, workspace_id=ws_id):
+                try:
+                    await query.answer("⛔ Only the creator of this receipt or an admin can discard it.", show_alert=True)
+                except Exception:
+                    pass
+                return
+
+        try:
+            await query.answer("❌ Receipt discarded.", show_alert=False)
+        except Exception:
+            pass
         pop_pending_transaction(pending_id, workspace_id=ws_id)
         await safe_edit_callback_message(query, "❌ Receipt discarded.", reply_markup=get_back_to_menu_keyboard())
         return
