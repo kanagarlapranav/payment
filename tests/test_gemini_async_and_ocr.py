@@ -12,6 +12,8 @@ Comprehensive Unit Tests for PROMPT 8:
 import pytest
 import asyncio
 import os
+import io
+import base64
 import json
 import time
 from decimal import Decimal
@@ -269,14 +271,32 @@ def test_prompt_hygiene_and_untrusted_caption():
 
 def test_image_crop_conditional_and_1280px(tmp_path):
     """Image resizing caps max side at 1280px and only crops tall screenshots."""
-    # 1. Square image (not tall screenshot) -> should not crop
-    square_path = tmp_path / "square.jpg"
-    img = Image.new("RGB", (1500, 1500), color="white")
-    img.save(square_path)
+    # 1. Tall screenshot (2000x3000, h/w = 1.5 > 1.4) -> should crop and resize to max side <= 1280
+    tall_path = tmp_path / "tall.jpg"
+    img_tall = Image.new("RGB", (2000, 3000), color="white")
+    img_tall.save(tall_path)
 
-    b64, mime = gv._prepare_image_b64(str(square_path))
-    assert mime == "image/jpeg"
-    assert len(b64) > 0
+    b64_tall, mime_tall = gv._prepare_image_b64(str(tall_path))
+    assert mime_tall == "image/jpeg"
+    decoded_tall = Image.open(io.BytesIO(base64.b64decode(b64_tall)))
+    w_tall, h_tall = decoded_tall.size
+    assert max(w_tall, h_tall) <= 1280
+    # Because height is cropped by 6% (3% top, 3% bottom from 3000 to 2820), aspect ratio is 2000 / 2820:
+    assert h_tall == 1280
+    assert w_tall == round(2000 * (1280 / 2820))  # 908px, which confirms crop was applied
+    assert w_tall != round(2000 * (1280 / 3000))
+
+    # 2. Square image (1500x1500, h/w = 1.0 <= 1.4) -> should not crop, only resize to 1280x1280
+    square_path = tmp_path / "square.jpg"
+    img_square = Image.new("RGB", (1500, 1500), color="white")
+    img_square.save(square_path)
+
+    b64_sq, mime_sq = gv._prepare_image_b64(str(square_path))
+    assert mime_sq == "image/jpeg"
+    decoded_sq = Image.open(io.BytesIO(base64.b64decode(b64_sq)))
+    w_sq, h_sq = decoded_sq.size
+    assert max(w_sq, h_sq) <= 1280
+    assert w_sq == 1280 and h_sq == 1280
 
 
 # --- 4. Real OCR Pipeline Timeout with Module-Level Executor ---
