@@ -1,6 +1,8 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Any
 from datetime import datetime, date
+
+_UNSET = object()
 
 @dataclass
 class Transaction:
@@ -30,7 +32,7 @@ class Transaction:
     telegram_chat_id: str = ""
     telegram_user_id: Optional[int] = None
     uid: Optional[str] = None
-    workspace_id: Optional[str] = None
+    workspace_id: Any = _UNSET
     occurred_at: Optional[str] = None
     deleted_at: Optional[datetime] = None
     created_at: Optional[datetime] = None

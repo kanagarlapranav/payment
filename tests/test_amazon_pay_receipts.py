@@ -255,6 +255,8 @@ def test_amazon_pay_gemini_valid_sent_response():
                         assert tx.person_name == "AMAZON SELLER"
                         assert tx.reference_number == "112233445566"
 
+                        from database.queries import get_default_workspace_id
+                        tx.workspace_id = get_default_workspace_id()
                         from services.transaction_service import commit_transaction
                         assert commit_transaction(tx) is True
 
@@ -303,6 +305,8 @@ def test_amazon_pay_gemini_valid_received_response():
                         assert tx.transaction_type == "RECEIVED"
                         assert tx.person_name == "CASHBACK REWARD"
 
+                        from database.queries import get_default_workspace_id
+                        tx.workspace_id = get_default_workspace_id()
                         from services.transaction_service import commit_transaction
                         assert commit_transaction(tx) is True
 
@@ -372,6 +376,8 @@ def test_amazon_pay_gemini_fallback_to_rapidocr():
         assert "Grocery Store" in tx.person_name
         assert conf > 50
 
+        from database.queries import get_default_workspace_id
+        tx.workspace_id = get_default_workspace_id()
         assert commit_transaction(tx) is True
 
         from database.db import get_db_connection

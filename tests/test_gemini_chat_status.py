@@ -195,7 +195,9 @@ class TestGeminiChatStatus(unittest.TestCase):
         )
 
         async def _run():
+            mock_ws_ctx = MagicMock(workspace_id="test_ws", workspace_title="Test", is_owner=True, role="owner")
             with patch("bot.handlers.require_admin", AsyncMock(return_value=True)), \
+                 patch("bot.handlers.get_workspace_context", return_value=mock_ws_ctx), \
                  patch("bot.handlers.is_gemini_available", return_value=True), \
                  patch("ocr.gemini_vision.get_last_extraction_error", return_value="RATE_LIMIT"), \
                  patch("bot.handlers.extract_transaction_with_gemini", return_value=(None, 0)), \

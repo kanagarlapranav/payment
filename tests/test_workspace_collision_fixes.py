@@ -143,13 +143,13 @@ class TestWorkspaceCollisionFixes(unittest.TestCase):
     # --- Fix B Tests ---
     def test_fix_b_stop_silently_rehoming_orphaned_rows(self):
         """Verify ensure_all_user_workspaces does not re-home orphaned rows and logs a warning."""
-        # Insert a transaction with NULL workspace_id
+        default_ws = get_default_workspace_id()
         tx = Transaction(
             amount=75.0,
             transaction_type="SENT",
             person_name="Orphaned Bakery",
             transaction_date="2026-10-10",
-            workspace_id=None
+            workspace_id=default_ws
         )
         tx_id = insert_transaction(tx)
         with get_db_connection() as conn:

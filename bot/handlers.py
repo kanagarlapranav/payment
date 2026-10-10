@@ -13,7 +13,7 @@ import config
 from config import TELEGRAM_USER_ID, IMAGE_DIR, logger
 from bot.auth import (
     require_authorized, require_admin, require_owner, require_member, is_owner, is_authorized_user,
-    get_callback_policy,
+    is_global_owner, get_callback_policy,
     get_workspace_context, resolve_workspace_context, WORKSPACE_CALLBACK_POLICY,
     get_effective_user_id
 )
@@ -90,15 +90,19 @@ def set_pending_transaction(pending_id: str, transaction, workspace_id: str = No
         except Exception:
             pass
     pending_transactions[pending_id] = transaction
-    _pending_transactions_timestamps[pending_id] = now
+    from database.models import _UNSET
     ws_id = workspace_id or getattr(transaction, 'workspace_id', None)
+    if ws_id is _UNSET:
+        import os
+        if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
+            from database.queries import get_default_workspace_id
+            ws_id = get_default_workspace_id()
+        else:
+            ws_id = None
     if ws_id:
         pending_transactions[(ws_id, pending_id)] = transaction
         _pending_transactions_timestamps[(ws_id, pending_id)] = now
-    try:
-        save_pending_receipt(pending_id, transaction, workspace_id=ws_id)
-    except Exception as e:
-        logger.error(f"Error persisting pending receipt {pending_id}: {e}")
+    save_pending_receipt(pending_id, transaction, workspace_id=ws_id)
 
 def fetch_pending_transaction(pending_id: str, workspace_id: str = None):
     """Fetches pending transaction from memory or falls back to SQLite database with workspace scoping."""
@@ -162,7 +166,7 @@ def pop_pending_transaction(pending_id: str, workspace_id: str = None):
         logger.error(f"Error deleting pending receipt {pending_id}: {e}")
     return tx
 
-def reconstruct_transaction_from_card(text: str):
+def reconstruct_transaction_from_card(text: str, chat_id=None, user_id=None, workspace_id=None):
     """Fallback parser to reconstruct a Transaction object directly from the receipt card message text."""
     if not text:
         return None
@@ -253,6 +257,12 @@ def reconstruct_transaction_from_card(text: str):
             bank_name=bank_name,
             reference_number=ref_num
         )
+        if chat_id is not None:
+            tx.telegram_chat_id = str(chat_id)
+        if user_id is not None:
+            tx.telegram_user_id = user_id
+        if workspace_id is not None:
+            tx.workspace_id = workspace_id
         return tx
     except Exception as e:
         logger.error(f"Error in reconstruct_transaction_from_card: {e}", exc_info=True)
@@ -580,6 +590,10 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         ws_ctx = get_workspace_context(update)
         ws_id = ws_ctx.workspace_id if ws_ctx else None
+        if not ws_id:
+            await deliver_response(status_msg, message, "I couldn't tell which ledger this belongs to — try again")
+            return
+
         if transaction:
             transaction.workspace_id = ws_id
             if message.from_user:
@@ -705,17 +719,18 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         return
 
     ws_ctx = get_workspace_context(update)
+    caller_uid = update.effective_user.id if update.effective_user else None
     if policy == 'owner':
         if not await require_owner(update):
             return
     elif policy == 'admin':
-        if not (is_owner(update) or await require_admin(update)):
+        if not (is_global_owner(caller_uid) or await require_admin(update)):
             return
     elif policy == 'member':
-        if not (is_owner(update) or is_admin_user(update) or await require_member(update)):
+        if not (is_global_owner(caller_uid) or await require_member(update)):
             return
     elif policy in ('read_only', 'viewer'):
-        if not (is_owner(update) or is_admin_user(update) or await require_authorized(update)):
+        if not (is_global_owner(caller_uid) or await require_authorized(update)):
             return
     else:
         ws_ctx = await resolve_workspace_context(update, required_policy=policy)
@@ -1162,7 +1177,12 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
                     pass
                 return
             msg_text = (query.message.text if query.message else "") or (query.message.caption if query.message else "")
-            transaction = reconstruct_transaction_from_card(msg_text)
+            transaction = reconstruct_transaction_from_card(
+                msg_text,
+                chat_id=update.effective_chat.id if update.effective_chat else None,
+                user_id=update.effective_user.id if update.effective_user else None,
+                workspace_id=str(other.workspace_id) if other else ws_id
+            )
             if transaction:
                 transaction.workspace_id = str(other.workspace_id) if other else ws_id
                 logger.info(f"Reconstructed transaction from receipt card text: {transaction}")
@@ -1448,9 +1468,14 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
                     pass
                 return
             msg_text = (query.message.text if query.message else "") or (query.message.caption if query.message else "")
-            transaction = reconstruct_transaction_from_card(msg_text)
+            provenance_ws = str(other.workspace_id) if other else ws_id
+            transaction = reconstruct_transaction_from_card(
+                msg_text,
+                chat_id=update.effective_chat.id if update.effective_chat else None,
+                user_id=update.effective_user.id if update.effective_user else None,
+                workspace_id=provenance_ws
+            )
             if transaction:
-                provenance_ws = str(other.workspace_id) if other else ws_id
                 transaction.workspace_id = provenance_ws
                 set_pending_transaction(pending_id, transaction, workspace_id=provenance_ws)
         if not transaction:
@@ -1500,7 +1525,13 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
                     pass
                 return
             msg_text = (query.message.text if query.message else "") or (query.message.caption if query.message else "")
-            transaction = reconstruct_transaction_from_card(msg_text)
+            chosen_ws = str(other.workspace_id) if other else ws_id
+            transaction = reconstruct_transaction_from_card(
+                msg_text,
+                chat_id=update.effective_chat.id if update.effective_chat else None,
+                user_id=update.effective_user.id if update.effective_user else None,
+                workspace_id=chosen_ws
+            )
             if transaction and other:
                 transaction.workspace_id = str(other.workspace_id)
 
@@ -1565,13 +1596,12 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         target_ws = get_workspace_by_id(target_ws_id)
         if target_ws and user_id:
             m = get_workspace_member(target_ws.id, user_id)
-            is_global_owner = is_super_admin(user_id) or (user_id is not None and str(user_id) == str(getattr(config, 'TELEGRAM_USER_ID', None)))
-            if not is_global_owner and not (m and m.is_active and getattr(m, 'status', 'active') == 'active'):
+            if not is_global_owner(user_id) and not (m and m.is_active and getattr(m, 'status', 'active') == 'active'):
                 await query.answer("⛔ You are not an active member of that workspace.", show_alert=True)
                 return
 
             chat_id = getattr(update.effective_chat, 'id', None)
-            if not is_global_owner:
+            if not is_global_owner(user_id):
                 from database.queries import get_workspace_by_chat_id
                 user_dm_ws = get_workspace_by_chat_id(chat_id) if chat_id is not None else None
                 if not user_dm_ws or target_ws.id != user_dm_ws.id:
@@ -2037,12 +2067,17 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             await query.answer("⛔ Only the bot owner can manage settings.", show_alert=True)
             return
         val_str = parts[1]
+        try:
+            val_float = float(val_str)
+        except ValueError:
+            await query.answer("❌ Invalid cap value", show_alert=True)
+            return
         from database.queries import set_workspace_setting
         from services.audit_service import log_audit_event
         set_workspace_setting(ws_id, 'per_tx_cap', val_str)
         actor_id = getattr(query.from_user, 'id', 0)
         log_audit_event(workspace_id=ws_id, actor_user_id=actor_id, actor_role='owner', action='settings_update', resource='setting:per_tx_cap', details={'per_tx_cap': val_str})
-        f_cap = format_currency(float(val_str)) if float(val_str) > 0 else "Unlimited"
+        f_cap = format_currency(val_float) if val_float > 0 else "Unlimited"
         try:
             await query.answer(f"✅ Per-tx cap: {f_cap}")
         except Exception:
@@ -2066,18 +2101,92 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             await query.answer("⛔ Only the bot owner can manage settings.", show_alert=True)
             return
         val_str = parts[1]
+        try:
+            val_float = float(val_str)
+        except ValueError:
+            await query.answer("❌ Invalid cap value", show_alert=True)
+            return
         from database.queries import set_workspace_setting
         from services.audit_service import log_audit_event
         set_workspace_setting(ws_id, 'monthly_spending_cap', val_str)
         actor_id = getattr(query.from_user, 'id', 0)
         log_audit_event(workspace_id=ws_id, actor_user_id=actor_id, actor_role='owner', action='settings_update', resource='setting:monthly_spending_cap', details={'monthly_spending_cap': val_str})
-        f_cap = format_currency(float(val_str)) if float(val_str) > 0 else "Unlimited"
+        f_cap = format_currency(val_float) if val_float > 0 else "Unlimited"
         try:
             await query.answer(f"✅ Monthly cap: {f_cap}")
         except Exception:
             pass
         from bot.commands import render_settings_panel
         text, markup = render_settings_panel(ws_id)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "perm_matrix_menu":
+        u_id = getattr(query.from_user, 'id', None)
+        if not is_global_owner(u_id):
+            await query.answer("⛔ Only the global bot owner can manage the permission matrix.", show_alert=True)
+            return
+        from bot.commands import render_feature_matrix_panel
+        text, markup = render_feature_matrix_panel(ws_id)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "perm_mat_view":
+        u_id = getattr(query.from_user, 'id', None)
+        if not is_global_owner(u_id):
+            await query.answer("⛔ Only the global bot owner can manage the permission matrix.", show_alert=True)
+            return
+        feat_key = parts[1]
+        from bot.commands import render_feature_detail_panel
+        text, markup = render_feature_detail_panel(ws_id, feat_key)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "perm_mat_toggle":
+        u_id = getattr(query.from_user, 'id', None)
+        if not is_global_owner(u_id):
+            await query.answer("⛔ Only the global bot owner can manage the permission matrix.", show_alert=True)
+            return
+        feat_key = parts[1]
+        role = parts[2]
+        from bot.feature_registry import lookup_feature_permission, set_feature_permission, get_feature_by_key
+        curr = lookup_feature_permission(ws_id, feat_key, role)
+        if curr is None:
+            feat = get_feature_by_key(feat_key)
+            curr = role in (feat[2] if feat else set())
+        new_val = not curr
+        set_feature_permission(ws_id, feat_key, role, new_val)
+        status_txt = "Granted" if new_val else "Revoked"
+        await query.answer(f"✅ {role.title()} {status_txt} for {feat_key}")
+        from bot.commands import render_feature_detail_panel
+        text, markup = render_feature_detail_panel(ws_id, feat_key)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "perm_mat_reset":
+        u_id = getattr(query.from_user, 'id', None)
+        if not is_global_owner(u_id):
+            await query.answer("⛔ Only the global bot owner can manage the permission matrix.", show_alert=True)
+            return
+        feat_key = parts[1]
+        from bot.feature_registry import reset_feature_permissions
+        reset_feature_permissions(ws_id, feat_key)
+        await query.answer(f"✅ Reset {feat_key} to default permissions.")
+        from bot.commands import render_feature_detail_panel
+        text, markup = render_feature_detail_panel(ws_id, feat_key)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "perm_mat_reset_all":
+        u_id = getattr(query.from_user, 'id', None)
+        if not is_global_owner(u_id):
+            await query.answer("⛔ Only the global bot owner can manage the permission matrix.", show_alert=True)
+            return
+        from bot.feature_registry import reset_feature_permissions
+        reset_feature_permissions(ws_id)
+        await query.answer("✅ Reset all features to default permissions.")
+        from bot.commands import render_feature_matrix_panel
+        text, markup = render_feature_matrix_panel(ws_id)
         await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
         return
 
@@ -2147,6 +2256,10 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         return
 
     elif action == "quick_add":
+        if not ws_ctx or not ws_ctx.workspace_id:
+            await query.edit_message_text("I couldn't tell which ledger this belongs to — try again")
+            return
+        ws_id = ws_ctx.workspace_id
         try:
             amt = float(parse_decimal_amount(parts[1], allow_zero=False))
             payee = validate_name(parts[2], max_length=120)
@@ -2194,17 +2307,19 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             schedule_debounced_backup(context.bot)
         return
 
-    # 1. OCR Confirmation / Cancellation (Legacy fallback)
     elif action in ("confirm_tx", "cancel_tx"):
         tx_id = parts[1]
+        if not ws_ctx or not ws_ctx.workspace_id:
+            await query.edit_message_text("I couldn't tell which ledger this belongs to — try again")
+            return
+        ws_id = ws_ctx.workspace_id
         transaction = fetch_pending_transaction(tx_id, workspace_id=ws_id)
         
         if not transaction:
             await query.edit_message_text("❌ Transaction expired or no longer available.")
             return
 
-        if ws_id:
-            transaction.workspace_id = ws_id
+        transaction.workspace_id = ws_id
         if query.from_user and getattr(query.from_user, 'id', None):
             transaction.telegram_user_id = int(query.from_user.id)
             
@@ -2757,12 +2872,15 @@ def format_success_message(t) -> str:
 
     # Proactive budget alert check
     from services.budget_service import check_budget_alert
-    budget_alert = check_budget_alert(t.amount, t.transaction_type)
+    from database.models import _UNSET
+    raw_ws = getattr(t, 'workspace_id', None)
+    t_ws = None if raw_ws is _UNSET else raw_ws
+    budget_alert = check_budget_alert(t.amount, t.transaction_type, workspace_id=t_ws)
 
     ws_part = ""
-    if getattr(t, 'workspace_id', None):
+    if t_ws:
         from database.queries import get_workspace_by_id
-        ws_obj = get_workspace_by_id(t.workspace_id)
+        ws_obj = get_workspace_by_id(t_ws)
         if ws_obj and ws_obj.title:
             ws_part = f"🏢 <b>Ledger:</b> {html.escape(ws_obj.title)}\n"
 
@@ -3390,11 +3508,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif pending_action == 'waiting_quick_text':
         context.user_data.pop('action', None)
+        if not ws_ctx or not ws_ctx.workspace_id:
+            await update.message.reply_text("I couldn't tell which ledger this belongs to — try again")
+            return
+        ws_id = ws_ctx.workspace_id
         # Process natural text through process_transaction
         transaction, conf = process_transaction(text, "", "", "")
         if transaction and transaction.amount and transaction.amount > 0:
-            if ws_id:
-                transaction.workspace_id = ws_id
+            transaction.workspace_id = ws_id
             if update.effective_user:
                 transaction.telegram_user_id = update.effective_user.id
             pid = uuid.uuid4().hex
@@ -3449,6 +3570,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check short text entry: e.g. "120 dosa", "+500 salary", "-45 tea", "coffee 15"
     short_parsed = parse_short_entry(text)
     if short_parsed:
+        if not ws_ctx or not ws_ctx.workspace_id:
+            await update.message.reply_text("I couldn't tell which ledger this belongs to — try again")
+            return
+        ws_id = ws_ctx.workspace_id
         if not await require_member(update):
             return
         amt, tx_type, name = short_parsed
@@ -3521,10 +3646,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         transaction, confidence = process_transaction(text, "", message_id, chat_id)
         if transaction.amount and transaction.amount > 0 and transaction.transaction_type:
+            if not ws_ctx or not ws_ctx.workspace_id:
+                await update.message.reply_text("I couldn't tell which ledger this belongs to — try again")
+                return
+            ws_id = ws_ctx.workspace_id
             if not await require_member(update):
                 return
-            if ws_id:
-                transaction.workspace_id = ws_id
+            transaction.workspace_id = ws_id
             if update.effective_user:
                 transaction.telegram_user_id = update.effective_user.id
             if confidence >= 80:

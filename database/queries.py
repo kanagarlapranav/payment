@@ -1,6 +1,7 @@
 from typing import Optional, List, Dict, Any, Tuple
 from decimal import Decimal
 import uuid
+import sqlite3
 from datetime import datetime
 from database.models import Transaction
 from database.db import get_db_connection, LEDGER_LOCK
@@ -51,27 +52,41 @@ def get_default_workspace_id() -> str:
         cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
         row = cursor.fetchone()
         if row and row['value']:
-            return str(row['value'])
-        
-        # Fallback: check workspaces table for any existing workspace
-        cursor.execute("SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1")
-        ws_row = cursor.fetchone()
-        if ws_row and ws_row['id']:
-            ws_id = str(ws_row['id'])
-            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('default_workspace_id', ?, ?)", (ws_id, utc_now_iso()))
-            conn.commit()
-            return ws_id
+            candidate_id = str(row['value'])
+            cursor.execute("SELECT id FROM workspaces WHERE id = ? AND is_active = 1", (candidate_id,))
+            if cursor.fetchone():
+                return candidate_id
 
-        # Provision new default workspace
-        new_ws_id = str(uuid.uuid4())
-        now_utc = utc_now_iso()
-        cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('default_workspace_id', ?, ?)", (new_ws_id, now_utc))
-        cursor.execute("""
-            INSERT OR IGNORE INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
-            VALUES (?, 0, 'private', 'Primary Workspace', 1, ?, ?)
-        """, (new_ws_id, now_utc, now_utc))
-        conn.commit()
-        return new_ws_id
+    with LEDGER_LOCK:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
+            row = cursor.fetchone()
+            if row and row['value']:
+                candidate_id = str(row['value'])
+                cursor.execute("SELECT id FROM workspaces WHERE id = ? AND is_active = 1", (candidate_id,))
+                if cursor.fetchone():
+                    return candidate_id
+
+            # Fallback: check workspaces table for oldest active workspace
+            cursor.execute("SELECT id FROM workspaces WHERE is_active = 1 ORDER BY created_at ASC LIMIT 1")
+            ws_row = cursor.fetchone()
+            if ws_row and ws_row['id']:
+                ws_id = str(ws_row['id'])
+                cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('default_workspace_id', ?, ?)", (ws_id, utc_now_iso()))
+                conn.commit()
+                return ws_id
+
+            # Provision new default workspace
+            new_ws_id = str(uuid.uuid4())
+            now_utc = utc_now_iso()
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('default_workspace_id', ?, ?)", (new_ws_id, now_utc))
+            cursor.execute("""
+                INSERT OR IGNORE INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
+                VALUES (?, 0, 'private', 'Primary Workspace', 1, ?, ?)
+            """, (new_ws_id, now_utc, now_utc))
+            conn.commit()
+            return new_ws_id
 
 class RowDict(dict):
     """Dict subclass allowing dot-notation attribute access alongside standard dict indexing."""
@@ -113,13 +128,6 @@ def get_or_create_workspace(
             cursor.execute("SELECT * FROM workspaces WHERE chat_id = ? AND is_active = 1", (int(chat_id),))
             row = cursor.fetchone()
             if row:
-                clean_title = (title or "").strip()[:200]
-                if clean_title and row['title'] != clean_title:
-                    cursor.execute("UPDATE workspaces SET title = ?, updated_at = ? WHERE id = ?", (clean_title, now_utc, row['id']))
-                    conn.commit()
-                    d = dict(row)
-                    d['title'] = clean_title
-                    return RowDict(d)
                 return RowDict(dict(row))
             
             ws_id = str(uuid.uuid4())
@@ -155,7 +163,7 @@ def get_workspace_by_id(workspace_id: str) -> RowDict | None:
         return None
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM workspaces WHERE id = ?", (str(workspace_id),))
+        cursor.execute("SELECT * FROM workspaces WHERE id = ? AND is_active = 1", (str(workspace_id),))
         row = cursor.fetchone()
         return RowDict(dict(row)) if row else None
 
@@ -205,9 +213,9 @@ def create_custom_workspace(
     display_name: str = ""
 ) -> RowDict:
     """Creates a custom standalone workspace not bound to a telegram chat."""
-    import time
-    synthetic_chat_id = -abs(int(time.time() * 1000) % 2000000000 + 1000000000)
-    return get_or_create_workspace(
+    import time, random
+    synthetic_chat_id = -abs(int(time.time() * 1000) % 1000000000 + random.randint(1000000000, 2000000000))
+    ws = get_or_create_workspace(
         chat_id=synthetic_chat_id,
         chat_type="group",
         title=title,
@@ -215,6 +223,12 @@ def create_custom_workspace(
         username=username,
         display_name=display_name
     )
+    try:
+        from bot.feature_registry import seed_default_feature_permissions
+        seed_default_feature_permissions(ws.id)
+    except Exception:
+        pass
+    return ws
 
 def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current_chat_id: Optional[int] = None) -> None:
     """
@@ -263,6 +277,10 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                 cursor.execute("""
                     INSERT INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
                     VALUES (?, ?, 'supergroup', ?, 1, ?, ?)
+                    ON CONFLICT(chat_id) DO UPDATE SET
+                        title = excluded.title,
+                        is_active = 1,
+                        updated_at = excluded.updated_at
                 """, (new_grp_id, int(current_chat_id), c_title, now_utc, now_utc))
                 group_workspaces_list = [{'id': new_grp_id, 'chat_id': int(current_chat_id), 'title': c_title}]
 
@@ -361,25 +379,27 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                         cursor.execute("""
                             INSERT OR REPLACE INTO workspace_members 
                             (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
-                            VALUES (?, ?, 'pranav', 'Pranav', 'owner', 1, ?, ?)
+                            VALUES (?, ?, 'owner', 'Owner', 'owner', 1, ?, ?)
                         """, (grp_id, owner_id, now_utc, now_utc))
                     else:
                         cursor.execute("UPDATE workspace_members SET role = 'owner', is_active = 1 WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, owner_id))
 
-                # Ensure restricted users are in the group workspace as members
-                for r_uid in RESTRICTED_USER_IDS:
-                    cursor.execute("SELECT id, role FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, r_uid))
-                    r_row = cursor.fetchone()
-                    r_disp, r_uname = RESTRICTED_USER_NAMES.get(r_uid, ("Member", "member"))
-                    if not r_row:
-                        cursor.execute("""
-                            INSERT OR REPLACE INTO workspace_members 
-                            (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
-                            VALUES (?, ?, ?, ?, 'member', 1, ?, ?)
-                        """, (grp_id, r_uid, r_uname, r_disp, now_utc, now_utc))
-                    else:
-                        if r_row['role'] == 'owner':
-                            cursor.execute("UPDATE workspace_members SET role = 'member', is_active = 1 WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, r_uid))
+                # Flag-gated legacy restricted users force-add
+                import config
+                if getattr(config, 'LEGACY_FORCE_ADD_RESTRICTED', False):
+                    for r_uid in RESTRICTED_USER_IDS:
+                        cursor.execute("SELECT id, role FROM workspace_members WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, r_uid))
+                        r_row = cursor.fetchone()
+                        r_disp, r_uname = RESTRICTED_USER_NAMES.get(r_uid, ("Member", "member"))
+                        if not r_row:
+                            cursor.execute("""
+                                INSERT OR REPLACE INTO workspace_members 
+                                (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
+                                VALUES (?, ?, ?, ?, 'member', 1, ?, ?)
+                            """, (grp_id, r_uid, r_uname, r_disp, now_utc, now_utc))
+                        else:
+                            if r_row['role'] == 'owner':
+                                cursor.execute("UPDATE workspace_members SET role = 'member', is_active = 1 WHERE workspace_id = ? AND telegram_user_id = ?", (grp_id, r_uid))
 
             # 2. Collect all known user IDs with their best display names / usernames
             known_users: dict[int, tuple[str, str]] = {}
@@ -842,8 +862,8 @@ def set_user_permission_and_role(telegram_user_id: int, role: str, is_active: bo
 
 def get_workspace_setting(workspace_id: str, key: str, default: str = None) -> str | None:
     """
-    Dual-read helper: checks workspace_settings first, then global settings table.
-    Financial anchors ('initial_balance', 'current_balance') are strictly isolated to non-default workspaces.
+    Dual-read helper: checks workspace_settings first, then global settings table only for default workspace.
+    Non-default workspaces use workspace_settings exclusively to prevent settings bleed.
     """
     if not key:
         return default
@@ -854,18 +874,18 @@ def get_workspace_setting(workspace_id: str, key: str, default: str = None) -> s
         row = cursor.fetchone()
         if row and row['value'] is not None:
             return str(row['value'])
-        if key in ('initial_balance', 'current_balance') and ws_id != get_default_workspace_id():
-            return default
-        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
-        global_row = cursor.fetchone()
-        if global_row and global_row['value'] is not None:
-            return str(global_row['value'])
+        is_cap = key.endswith('_cap') or key in ('per_tx_cap', 'monthly_spending_cap')
+        if not is_cap or ws_id == get_default_workspace_id():
+            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            global_row = cursor.fetchone()
+            if global_row and global_row['value'] is not None:
+                return str(global_row['value'])
         return default
 
 def set_workspace_setting(workspace_id: str, key: str, value: str) -> str:
     """
     Sets a setting in workspace_settings.
-    If workspace is the default workspace, mirrors to global settings table for 100% backward compatibility.
+    Mirrors to global settings table ONLY when target workspace is the default workspace (and not cap settings).
     """
     ws_id = workspace_id or get_default_workspace_id()
     now_utc = utc_now_iso()
@@ -877,9 +897,9 @@ def set_workspace_setting(workspace_id: str, key: str, value: str) -> str:
                 VALUES (?, ?, ?, ?)
             """, (ws_id, key, str(value), now_utc))
             
-            # Mirror to global settings if this is the default workspace
+            # Mirror to global settings if this is the default workspace (caps remain strictly scoped)
             default_ws = get_default_workspace_id()
-            if ws_id == default_ws:
+            if ws_id == default_ws and not key.endswith('_cap'):
                 cursor.execute("""
                     INSERT OR REPLACE INTO settings (key, value, updated_at)
                     VALUES (?, ?, ?)
@@ -922,8 +942,20 @@ def insert_transaction_with_balance(t: Transaction) -> int:
             tx_uid = uuid.uuid4().hex
         t.uid = tx_uid
 
-        # Resolve workspace_id
-        ws_id = getattr(t, 'workspace_id', None) or get_default_workspace_id()
+        # Resolve workspace_id (fail-closed)
+        from database.models import _UNSET
+        raw_ws = getattr(t, 'workspace_id', None)
+        if raw_ws is _UNSET:
+            import os
+            if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
+                ws_id = get_default_workspace_id()
+            else:
+                raise ValueError("workspace_id is required for transaction insert")
+        else:
+            ws_id = raw_ws
+
+        if not ws_id:
+            raise ValueError("workspace_id is required for transaction insert")
         t.workspace_id = ws_id
 
         t.person_name = validate_string_length(t.person_name, max_length=120, field_name="Person name")
@@ -934,6 +966,13 @@ def insert_transaction_with_balance(t: Transaction) -> int:
         # Step 2: Compute occurred_at and timestamps
         occurred_at = build_occurred_at(t.transaction_date, t.transaction_time)
         t.occurred_at = occurred_at
+
+        # Validate date format (YYYY-MM-DD) and reject impossible dates
+        if t.transaction_date:
+            try:
+                datetime.strptime(str(t.transaction_date).strip()[:10], "%Y-%m-%d")
+            except Exception:
+                raise ValueError(f"Invalid transaction_date: {t.transaction_date}")
 
         # Check if transaction falls into a closed/frozen month
         if t.transaction_date:
@@ -1134,8 +1173,14 @@ def get_transaction_by_reference(reference_number: str, workspace_id: str = None
     """Fetches a transaction by its reference number with workspace isolation."""
     if not reference_number:
         return None
+    if not workspace_id:
+        import os
+        if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
+            workspace_id = get_default_workspace_id()
+        else:
+            return None
+    ws_id = str(workspace_id)
     default_ws = get_default_workspace_id()
-    ws_id = workspace_id or default_ws
     ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -1146,30 +1191,24 @@ def get_transaction_by_reference(reference_number: str, workspace_id: str = None
         row = cursor.fetchone()
         return dict(row) if row else None
 
+def _require_ws(workspace_id: str) -> str:
+    """Validates that a workspace_id is provided, failing closed."""
+    if not workspace_id:
+        import os
+        if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
+            return get_default_workspace_id()
+        raise ValueError("workspace_id is required for this query")
+    return str(workspace_id)
+
 def _resolve_query_workspace_filter(workspace_id: str = None, user_id: int = None) -> tuple[str, list]:
     """
-    Returns (ws_filter_sql, [ws_params]) ensuring workspace and user isolation.
-    If user_id is a non-owner with an active personal workspace and querying the default workspace,
-    includes both the queried workspace and their personal workspace.
+    Returns (ws_filter_sql, [ws_params]) ensuring workspace isolation.
+    Personal workspace union is strictly removed; queries isolate to target workspace.
     """
+    ws_id = _require_ws(workspace_id)
     default_ws = get_default_workspace_id()
-    ws_id = workspace_id or default_ws
     ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
-    params = [ws_id]
-
-    if user_id is not None:
-        from config import TELEGRAM_USER_ID
-        owner_id = int(TELEGRAM_USER_ID) if TELEGRAM_USER_ID else None
-        if not (owner_id and int(user_id) == owner_id):
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT id FROM workspaces WHERE chat_id = ? AND is_active = 1", (int(user_id),))
-                p_r = cursor.fetchone()
-                if p_r and p_r['id'] and p_r['id'] != ws_id:
-                    ws_filter = "(workspace_id = ? OR workspace_id = ?)"
-                    params = [ws_id, p_r['id']]
-
-    return ws_filter, params
+    return ws_filter, [ws_id]
 
 def _build_user_filter(user_id: int = None):
     """Builds SQL condition and parameter tuple for isolating queries to a specific telegram_user_id."""
@@ -1184,7 +1223,7 @@ def _build_user_filter(user_id: int = None):
         else:
             return "telegram_user_id = ?", [uid_val]
     except (ValueError, TypeError):
-        return "", []
+        return "1 = 0", []
 
 def get_recent_transactions(limit: int = 10, workspace_id: str = None, user_id: int = None):
     """Fetches recent transactions ordered by occurred_at, created_at, and id with workspace isolation and optional user filtering."""
@@ -1300,12 +1339,12 @@ def search_transactions(
         conditions.append("transaction_date = ?")
         params.append(str(target_date))
     elif month and year:
-        # SQLite strftime for month and year
+        # Canonical occurred_at month filter
         month_str = f"{year:04d}-{month:02d}"
-        conditions.append("strftime('%Y-%m', transaction_date) = ?")
+        conditions.append("substr(COALESCE(occurred_at, transaction_date), 1, 7) = ?")
         params.append(month_str)
     elif year:
-        conditions.append("strftime('%Y', transaction_date) = ?")
+        conditions.append("substr(COALESCE(occurred_at, transaction_date), 1, 4) = ?")
         params.append(str(year))
         
     if tx_type:
@@ -1357,7 +1396,7 @@ def get_monthly_summary(year: int, month: int, workspace_id: str = None, user_id
                 COUNT(*) as count,
                 SUM(amount) as total_amount
             FROM transactions 
-            WHERE strftime('%Y-%m', transaction_date) = ? 
+            WHERE substr(COALESCE(occurred_at, transaction_date), 1, 7) = ? 
               AND {ws_filter}
               AND deleted_at IS NULL
               {u_clause}
@@ -1381,7 +1420,7 @@ def get_monthly_summary(year: int, month: int, workspace_id: str = None, user_id
         cursor.execute(f"""
             SELECT person_name, SUM(amount) as total
             FROM transactions
-            WHERE strftime('%Y-%m', transaction_date) = ? 
+            WHERE substr(COALESCE(occurred_at, transaction_date), 1, 7) = ? 
               AND {ws_filter}
               AND transaction_type = 'SENT' AND person_name != '' AND deleted_at IS NULL
               {u_clause}
@@ -1571,10 +1610,15 @@ def delete_transaction(tx_id: int, workspace_id: str) -> bool:
             from services.monthly_review_service import is_month_closed
             tx_date = row['transaction_date']
             if tx_date and len(str(tx_date).strip()) >= 7 and '-' in str(tx_date):
-                parts = str(tx_date).split('-')
-                dy, dm = int(parts[0]), int(parts[1])
-                if is_month_closed(dy, dm, workspace_id=ws_id):
-                    raise ValueError(f"Cannot delete transaction in closed month {dy:04d}-{dm:02d}. Month is closed and frozen.")
+                try:
+                    parts = str(tx_date).split('-')
+                    dy, dm = int(parts[0]), int(parts[1])
+                    if is_month_closed(dy, dm, workspace_id=ws_id):
+                        raise ValueError(f"Cannot delete transaction in closed month {dy:04d}-{dm:02d}. Month is closed and frozen.")
+                except ValueError as ve:
+                    if "Cannot delete transaction in closed month" in str(ve):
+                        raise
+                    # Ignore date formatting errors on corrupt rows so they can be deleted
 
             cursor.execute(
                 "UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
@@ -1741,7 +1785,7 @@ def get_monthly_spending(year: int, month: int, workspace_id: str = None) -> flo
         cursor.execute(f"""
             SELECT SUM(amount) as total
             FROM transactions
-            WHERE strftime('%Y-%m', transaction_date) = ? 
+            WHERE substr(COALESCE(occurred_at, transaction_date), 1, 7) = ? 
               AND {ws_filter}
               AND transaction_type = 'SENT' AND deleted_at IS NULL
         """, (month_str, ws_id))
@@ -1763,7 +1807,7 @@ def get_category_summary(year: int, month: int, workspace_id: str = None):
                 COUNT(*) as count,
                 SUM(amount) as total_amount
             FROM transactions
-            WHERE strftime('%Y-%m', transaction_date) = ? 
+            WHERE substr(COALESCE(occurred_at, transaction_date), 1, 7) = ? 
               AND {ws_filter}
               AND deleted_at IS NULL
             GROUP BY category, transaction_type
@@ -1901,9 +1945,9 @@ def find_potential_duplicate(
     workspace_id: str = None
 ):
     """Checks if a similar transaction already exists strictly within the target workspace (by reference number or amount/payee/date)."""
-    ws_id = workspace_id or get_default_workspace_id()
-    if not ws_id:
+    if not workspace_id:
         return None
+    ws_id = str(workspace_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         
@@ -1979,10 +2023,10 @@ def get_top_payees(limit: int = 5, year: int = None, month: int = None, workspac
         """
         params = [ws_id]
         if year and month:
-            query += " AND strftime('%Y-%m', transaction_date) = ?"
+            query += " AND substr(COALESCE(occurred_at, transaction_date), 1, 7) = ?"
             params.append(f"{year:04d}-{month:02d}")
         elif year:
-            query += " AND strftime('%Y', transaction_date) = ?"
+            query += " AND substr(COALESCE(occurred_at, transaction_date), 1, 4) = ?"
             params.append(str(year))
             
         query += " GROUP BY person_name ORDER BY total_amount DESC LIMIT ?"
@@ -2006,7 +2050,7 @@ def get_daily_spend_series(year: int, month: int, workspace_id: str = None):
                 SUM(CASE WHEN transaction_type = 'RECEIVED' THEN amount ELSE 0 END) as received,
                 COUNT(*) as count
             FROM transactions
-            WHERE strftime('%Y-%m', transaction_date) = ? 
+            WHERE substr(COALESCE(occurred_at, transaction_date), 1, 7) = ? 
               AND {ws_filter}
               AND deleted_at IS NULL
             GROUP BY transaction_date
@@ -2101,12 +2145,12 @@ def get_transactions_paginated(
             raise ValueError(f"Year out of range: {year}")
         if not (1 <= int(month) <= 12):
             raise ValueError(f"Month out of range: {month}")
-        conditions.append("strftime('%Y-%m', transaction_date) = ?")
+        conditions.append("substr(COALESCE(occurred_at, transaction_date), 1, 7) = ?")
         params.append(f"{int(year):04d}-{int(month):02d}")
     elif year:
         if not (1900 <= int(year) <= 2200):
             raise ValueError(f"Year out of range: {year}")
-        conditions.append("strftime('%Y', transaction_date) = ?")
+        conditions.append("substr(COALESCE(occurred_at, transaction_date), 1, 4) = ?")
         params.append(str(int(year)))
     elif month:
         if not (1 <= int(month) <= 12):
@@ -2197,13 +2241,30 @@ def save_pending_receipt(pending_id: str, transaction, workspace_id: Optional[st
     """Persists a pending receipt transaction in SQLite so it survives bot reboots/restarts."""
     import json
     from datetime import date, datetime
+    from decimal import Decimal
+    from database.models import _UNSET
 
-    ws_id = workspace_id or getattr(transaction, 'workspace_id', None) or get_default_workspace_id()
+    raw_ws = workspace_id or getattr(transaction, 'workspace_id', None)
+    if raw_ws is _UNSET:
+        import os
+        if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
+            ws_id = get_default_workspace_id()
+        else:
+            raise ValueError("workspace_id is required for save_pending_receipt")
+    else:
+        ws_id = raw_ws
+
+    if not ws_id:
+        raise ValueError("workspace_id is required for save_pending_receipt")
 
     d = {}
     for k, v in transaction.__dict__.items():
-        if isinstance(v, (datetime, date)):
+        if v is _UNSET:
+            d[k] = None
+        elif isinstance(v, (datetime, date)):
             d[k] = v.isoformat()
+        elif isinstance(v, Decimal):
+            d[k] = float(v)
         else:
             d[k] = v
     if ws_id:

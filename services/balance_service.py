@@ -99,6 +99,13 @@ def recalculate_all_balances(workspace_id: str = None) -> float:
     under LEDGER_LOCK. Uses Decimal arithmetic rounded to 2 decimals.
     Sets current_balance and returns it. Does NOT touch updated_at on transactions.
     """
+    if not workspace_id:
+        import os
+        if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
+            from database.queries import get_default_workspace_id
+            workspace_id = get_default_workspace_id()
+        else:
+            raise ValueError("workspace_id is required for recalculate_all_balances")
     with LEDGER_LOCK:
         with get_db_connection() as conn:
             final_float = recalculate_in_connection(conn, workspace_id=workspace_id)
@@ -177,7 +184,9 @@ def update_balance_for_transaction(transaction: Transaction) -> Transaction:
     Pure calculation helper: populates balance_before and balance_after
     based on current_balance and transaction type without independently mutating settings.
     """
-    ws_id = getattr(transaction, 'workspace_id', None)
+    from database.models import _UNSET
+    raw_ws = getattr(transaction, 'workspace_id', None)
+    ws_id = None if raw_ws is _UNSET else raw_ws
     raw_bal = get_balance_setting(ws_id) if ws_id else get_balance_setting()
     current_balance = Decimal(str(raw_bal)).quantize(CENT)
     amount = parse_decimal_amount(transaction.amount, allow_zero=False)

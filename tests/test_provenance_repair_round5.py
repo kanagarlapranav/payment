@@ -249,8 +249,8 @@ def test_ambiguous_chat_and_user_matches_are_safely_skipped(tmp_path, monkeypatc
 # WORK ITEM 3 TESTS — Honest /restore errors
 # ==============================================================================
 
-def test_import_backup_with_uid_conflict_surfaces_exact_constraint_error(tmp_path, monkeypatch):
-    """Importing a backup payload with a UID already taken by another workspace surfaces the constraint error."""
+def test_import_backup_with_uid_conflict_skips_row_cleanly_without_exception(tmp_path, monkeypatch):
+    """Importing a backup payload with a UID already taken by another workspace skips the row gracefully."""
     from database.db import setup_database
     from database.queries import get_or_create_workspace
     from services.backup_service import import_database_from_json
@@ -288,7 +288,7 @@ def test_import_backup_with_uid_conflict_surfaces_exact_constraint_error(tmp_pat
         "workspace_id": ws_b_id,
         "revision": 10,
         "exported_at": "2026-10-10T12:00:00Z",
-        "balance": 100.0,
+        "balance": 0.0,
         "transactions": [
             {
                 "uid": conflict_uid,
@@ -308,10 +308,20 @@ def test_import_backup_with_uid_conflict_surfaces_exact_constraint_error(tmp_pat
     }
     payload["checksum"] = compute_canonical_checksum(payload)
 
-    # Import targeting Workspace B fails on the global UID UNIQUE constraint
+    # Import targeting Workspace B skips the colliding UID cleanly without throwing a constraint error
     res = import_database_from_json(data_dict=payload, target_workspace_id=ws_b_id)
-    assert res["success"] is False
-    assert "UNIQUE constraint failed" in res["error"] or "transactions.uid" in res["error"]
+    assert res["success"] is True
+    assert res["skipped"] == 1
+    assert res["inserted"] == 0
+
+    # Ensure row in Workspace A was untouched
+    conn = sqlite3.connect(str(db_file))
+    cursor = conn.cursor()
+    cursor.execute("SELECT workspace_id, amount FROM transactions WHERE uid = ?", (conflict_uid,))
+    row = cursor.fetchone()
+    conn.close()
+    assert row[0] == ws_a_id
+    assert row[1] == 50.0
 
 
 def test_restore_from_telegram_distinguishes_no_backup_vs_import_failure():

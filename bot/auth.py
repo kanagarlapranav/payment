@@ -186,28 +186,33 @@ def is_super_admin(user_id: Optional[int]) -> bool:
         return False
 
 
+def is_global_owner(user_id: Any) -> bool:
+    """True only for the configured bot owner, in any chat."""
+    if user_id is None:
+        return False
+    uid = str(user_id).strip()
+    owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+    if owner_id is not None and uid == str(owner_id).strip():
+        return True
+    extra = getattr(config, "SUPER_ADMIN_IDS", None) or getattr(config, "SUPER_ADMIN_USER_IDS", None) or []
+    return uid in {str(x).strip() for x in extra}
+
+
 def is_owner(update: Update, workspace_id: Optional[str] = None) -> bool:
     """
-    Returns True if caller is emergency SUPER_ADMIN, owner of the workspace in workspace_members,
-    or legacy TELEGRAM_USER_ID if LEGACY_SINGLE_TENANT_MODE is True.
+    Returns True if caller is emergency SUPER_ADMIN, global bot owner,
+    or owner of the workspace in workspace_members.
     """
     user_id = get_effective_user_id(update)
     if user_id is None:
         return False
+    if is_global_owner(user_id):
+        return True
     # Restricted users are strictly member only, never owner
     if is_restricted_user(user_id):
         return False
     if is_super_admin(user_id):
         return True
-
-    # Global bot owner (configured via TELEGRAM_USER_ID) always has owner privileges
-    owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
-    if owner_id is not None:
-        try:
-            if int(user_id) == int(owner_id):
-                return True
-        except (ValueError, TypeError):
-            pass
 
     from database.queries import get_workspace_member, get_workspace_by_chat_id, get_default_workspace_id
     chat_id = get_effective_chat_id(update)
@@ -940,12 +945,11 @@ async def require_admin(update: Update, silent: bool = False) -> bool:
 
 async def require_owner(update: Update, silent: bool = False) -> bool:
     """
-    Ensures the caller is the global bot owner or workspace owner.
+    Ensures the caller is the true global bot owner.
     """
-    if is_owner(update):
-        return True
-
     user_id = get_effective_user_id(update)
+    if is_global_owner(user_id):
+        return True
     chat_id = get_effective_chat_id(update)
 
     if silent:

@@ -30,7 +30,7 @@ def calculate_monthly_closing_metrics(year: int, month: int, workspace_id: Optio
                 COUNT(*) as count,
                 SUM(amount) as total_amount
             FROM transactions
-            WHERE strftime('%Y-%m', transaction_date) = ? AND {ws_filter} AND deleted_at IS NULL
+            WHERE substr(COALESCE(occurred_at, transaction_date), 1, 7) = ? AND {ws_filter} AND deleted_at IS NULL
             GROUP BY transaction_type
         """, (month_str, ws_id))
         rows = cursor.fetchall()
@@ -60,7 +60,7 @@ def calculate_monthly_closing_metrics(year: int, month: int, workspace_id: Optio
         cursor.execute(f"""
             SELECT category, SUM(amount) as total
             FROM transactions
-            WHERE strftime('%Y-%m', transaction_date) = ? AND transaction_type = 'SENT' AND {ws_filter} AND deleted_at IS NULL
+            WHERE substr(COALESCE(occurred_at, transaction_date), 1, 7) = ? AND transaction_type = 'SENT' AND {ws_filter} AND deleted_at IS NULL
             GROUP BY category
             ORDER BY total DESC LIMIT 1
         """, (month_str, ws_id))
@@ -72,7 +72,7 @@ def calculate_monthly_closing_metrics(year: int, month: int, workspace_id: Optio
         cursor.execute(f"""
             SELECT person_name, SUM(amount) as total
             FROM transactions
-            WHERE strftime('%Y-%m', transaction_date) = ? AND transaction_type = 'SENT' AND person_name != '' AND {ws_filter} AND deleted_at IS NULL
+            WHERE substr(COALESCE(occurred_at, transaction_date), 1, 7) = ? AND transaction_type = 'SENT' AND person_name != '' AND {ws_filter} AND deleted_at IS NULL
             GROUP BY person_name
             ORDER BY total DESC LIMIT 1
         """, (month_str, ws_id))
@@ -84,7 +84,7 @@ def calculate_monthly_closing_metrics(year: int, month: int, workspace_id: Optio
         cursor.execute(f"""
             SELECT id, person_name, amount
             FROM transactions
-            WHERE strftime('%Y-%m', transaction_date) = ? AND transaction_type = 'SENT' AND {ws_filter} AND deleted_at IS NULL
+            WHERE substr(COALESCE(occurred_at, transaction_date), 1, 7) = ? AND transaction_type = 'SENT' AND {ws_filter} AND deleted_at IS NULL
             ORDER BY amount DESC LIMIT 1
         """, (month_str, ws_id))
         max_tx_row = cursor.fetchone()
@@ -150,6 +150,8 @@ def close_and_record_monthly_review(year: int, month: int, notes: str = '', work
     metrics = calculate_monthly_closing_metrics(year, month, workspace_id=workspace_id)
     now_iso = utc_now_iso()
     ws_id = metrics.get('workspace_id') or workspace_id
+    if not ws_id:
+        raise ValueError("workspace_id is required to record monthly review")
     
     with LEDGER_LOCK:
         with get_db_connection() as conn:

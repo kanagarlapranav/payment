@@ -59,7 +59,7 @@ class TestUndoService(unittest.TestCase):
         t.amount = 200.0
         t.person_name = "Legacy Store"
         t.transaction_date = "2026-10-09"
-        t.workspace_id = None
+        t.workspace_id = get_default_workspace_id()
         tx_id = insert_transaction(t)
         with get_db_connection() as conn:
             conn.cursor().execute("UPDATE transactions SET workspace_id = NULL WHERE id = ?", (tx_id,))

@@ -65,6 +65,24 @@ def repair_provenance(
                 "undo_log": {"scanned": 0, "retagged": 0, "skipped": {}},
             }
 
+        snapshot_path = None
+        if apply:
+            import shutil, datetime
+            db_path = None
+            if not isinstance(conn_or_db_path, sqlite3.Connection):
+                db_path = str(conn_or_db_path) if conn_or_db_path is not None else str(target_path)
+            else:
+                try:
+                    for row in cursor.execute("PRAGMA database_list").fetchall():
+                        if row[1] == "main" and row[2]:
+                            db_path = row[2]
+                            break
+                except Exception:
+                    pass
+            if db_path and os.path.exists(db_path):
+                snapshot_path = f"{db_path}.pre-repair-{datetime.datetime.now():%Y%m%d-%H%M%S}.bak"
+                shutil.copy2(db_path, snapshot_path)
+
         # Cache active workspaces by chat_id string
         cursor.execute("SELECT id, chat_id, title FROM workspaces WHERE is_active = 1")
         ws_by_chat: dict[str, list[dict[str, Any]]] = {}
@@ -94,6 +112,8 @@ def repair_provenance(
         summary: dict[str, Any] = {
             "success": True,
             "apply": apply,
+            "snapshot_path": snapshot_path,
+            "deactivated_stale_owner_workspaces": 0,
             "transactions": {
                 "scanned": 0,
                 "retagged": 0,
@@ -148,8 +168,16 @@ def repair_provenance(
                 target_title = ""
                 reason = None
 
-                # Pass 1: telegram_chat_id exact-match against active workspaces
-                if origin_chat:
+                # Pass 1: Global owner rows ALWAYS go home to default workspace (Fix 8 step 1)
+                if (owner_id and user_id_int == owner_id) or (origin_chat and origin_chat == str(owner_id)):
+                    if default_ws_id and default_ws_id in active_ws_ids:
+                        target_ws = default_ws_id
+                        target_title = ws_id_to_title.get(default_ws_id, "Default Workspace")
+                        reason = "owner_default"
+                    else:
+                        reason = "skipped:no_default_workspace"
+                # Pass 2: telegram_chat_id exact-match against active workspaces
+                elif origin_chat:
                     matching = ws_by_chat.get(origin_chat, [])
                     if len(matching) == 1:
                         target_ws = matching[0]["id"]
@@ -158,7 +186,7 @@ def repair_provenance(
                     elif len(matching) > 1:
                         reason = "skipped:ambiguous_chat_match"
 
-                # Pass 2: Fallback matching for rows still unmatched (stale or missing workspace_id)
+                # Pass 3: Fallback matching for rows still unmatched via telegram_user_id
                 if target_ws is None and not reason:
                     if user_id_str:
                         user_matching = ws_by_chat.get(user_id_str, [])
@@ -168,13 +196,6 @@ def repair_provenance(
                             reason = "user_match"
                         elif len(user_matching) > 1:
                             reason = "skipped:ambiguous_user_match"
-                        elif owner_id and user_id_int == owner_id:
-                            if default_ws_id and default_ws_id in active_ws_ids:
-                                target_ws = default_ws_id
-                                target_title = ws_id_to_title.get(default_ws_id, "Default Workspace")
-                                reason = "owner_default"
-                            else:
-                                reason = "skipped:no_default_workspace"
 
                 if target_ws is None and not reason:
                     if not origin_chat and not user_id_str:
@@ -244,8 +265,16 @@ def repair_provenance(
                 target_title = ""
                 reason = None
 
-                # Pass 1: chat_id exact-match against active workspaces
-                if origin_chat:
+                # Pass 1: Global owner rows ALWAYS go home to default workspace (Fix 8 step 1)
+                if (owner_id and user_id_int == owner_id) or (origin_chat and origin_chat == str(owner_id)):
+                    if default_ws_id and default_ws_id in active_ws_ids:
+                        target_ws = default_ws_id
+                        target_title = ws_id_to_title.get(default_ws_id, "Default Workspace")
+                        reason = "owner_default"
+                    else:
+                        reason = "skipped:no_default_workspace"
+                # Pass 2: chat_id exact-match against active workspaces
+                elif origin_chat:
                     matching = ws_by_chat.get(origin_chat, [])
                     if len(matching) == 1:
                         target_ws = matching[0]["id"]
@@ -254,7 +283,7 @@ def repair_provenance(
                     elif len(matching) > 1:
                         reason = "skipped:ambiguous_chat_match"
 
-                # Pass 2: Fallback matching for rows still unmatched (stale or missing workspace_id)
+                # Pass 3: Fallback matching for rows still unmatched via user_id
                 if target_ws is None and not reason:
                     if user_id_str:
                         user_matching = ws_by_chat.get(user_id_str, [])
@@ -264,13 +293,6 @@ def repair_provenance(
                             reason = "user_match"
                         elif len(user_matching) > 1:
                             reason = "skipped:ambiguous_user_match"
-                        elif owner_id and user_id_int == owner_id:
-                            if default_ws_id and default_ws_id in active_ws_ids:
-                                target_ws = default_ws_id
-                                target_title = ws_id_to_title.get(default_ws_id, "Default Workspace")
-                                reason = "owner_default"
-                            else:
-                                reason = "skipped:no_default_workspace"
 
                 if target_ws is None and not reason:
                     if not origin_chat and not user_id_str:
@@ -350,6 +372,21 @@ def repair_provenance(
                 })
 
         if apply:
+            # Fix 8 step 3: Post-repair deactivation of stale owner personal workspaces
+            if owner_id and default_ws_id:
+                try:
+                    cursor.execute("""
+                        UPDATE workspaces
+                        SET is_active = 0
+                        WHERE is_active = 1
+                          AND id != ?
+                          AND (chat_id = ? OR (title LIKE '%Personal%' AND chat_id = ?))
+                    """, (default_ws_id, owner_id, owner_id))
+                    deactivated = cursor.rowcount
+                    summary["deactivated_stale_owner_workspaces"] = deactivated
+                except Exception:
+                    pass
+
             try:
                 from services.balance_service import recalculate_in_connection
                 for ws_id in touched_workspaces:

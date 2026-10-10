@@ -32,7 +32,8 @@ class TestBalance(unittest.TestCase):
     def test_backup_roundtrip(self):
         from services.backup_service import export_database_to_json, import_database_from_json
         from database.db import LEDGER_LOCK, get_db_connection
-        from database.queries import insert_transaction_with_balance
+        from database.queries import insert_transaction_with_balance, get_default_workspace_id
+        default_ws = get_default_workspace_id()
         with LEDGER_LOCK, get_db_connection() as conn:
             conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('database_initialized', '1')")
         for i in range(4):
@@ -42,6 +43,7 @@ class TestBalance(unittest.TestCase):
             t.person_name = f"Roundtrip Test {i}"
             t.transaction_date = "2026-09-22"
             t.transaction_time = "00:00:00"
+            t.workspace_id = default_ws
             insert_transaction_with_balance(t)
         data = export_database_to_json()
         self.assertGreaterEqual(data.get("transaction_count", 0), 4)

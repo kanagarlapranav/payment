@@ -87,13 +87,23 @@ async def on_startup(app):
         else:
             logger.info(f"Startup check: restore skipped (total={total_rows}, live={live_rows}, tombstones={tombstones}, initialized={is_initialized})")
 
-        # Always run provenance repair on startup to guarantee all rows belong to their active workspace
-        try:
-            from scripts.repair_workspace_provenance import repair_provenance
-            repair_provenance(apply=True)
-            logger.info("Startup check: workspace provenance repair executed successfully.")
-        except Exception as e:
-            logger.warning(f"Startup provenance check note: {e}")
+        # Opt-in provenance repair on startup (Fix 8b)
+        if os.getenv("PROVENANCE_AUTO_REPAIR") == "1":
+            try:
+                from scripts.repair_workspace_provenance import repair_provenance
+                await asyncio.to_thread(repair_provenance, apply=True)
+                logger.info("Startup check: workspace provenance repair executed successfully.")
+            except Exception as e:
+                logger.error(f"Provenance repair failed: {e} — no rows were moved", exc_info=True)
+                try:
+                    owner_id = int(getattr(config, 'TELEGRAM_USER_ID', 0) or 0)
+                    if owner_id and app and hasattr(app, "bot") and app.bot:
+                        await app.bot.send_message(
+                            chat_id=owner_id,
+                            text=f"Provenance repair failed: {e} — no rows were moved"
+                        )
+                except Exception:
+                    pass
 
         # Clean up any leftover temporary images from prior runs
         try:

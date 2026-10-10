@@ -574,6 +574,7 @@ class TestUXAndNavigation(unittest.TestCase):
         with patch('bot.handlers.get_workspace_context', return_value=mock_ctx), \
              patch('bot.handlers.get_transaction_by_id', return_value=dummy_tx), \
              patch('database.queries.can_user_modify_transaction', return_value=True), \
+             patch('bot.handlers.require_member', AsyncMock(return_value=True)), \
              patch('bot.handlers.is_owner', return_value=True):
             asyncio.run(handle_callback_query(update, context))
             query.edit_message_text.assert_called_once()
@@ -635,6 +636,7 @@ class TestUXAndNavigation(unittest.TestCase):
 
         with patch('bot.handlers.get_workspace_context', return_value=mock_ctx), \
              patch('bot.handlers.is_admin_user', return_value=True), \
+             patch('bot.handlers.require_member', AsyncMock(return_value=True)), \
              patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
              patch('bot.handlers.get_transaction_by_id', return_value=dummy_tx):
             asyncio.run(handle_callback_query(update, context))

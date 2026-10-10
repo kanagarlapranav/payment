@@ -24,6 +24,10 @@ from utils.validation import (
 BACKUP_JSON_PATH = DATA_DIR / 'backup_transactions.json'
 EXPORT_LOCK = threading.RLock()
 
+class RestoreAborted(Exception):
+    """Exception raised when database restore or import must abort and roll back all changes."""
+    pass
+
 def export_database_to_json(output_path: Path = None) -> dict:
     """
     Exports all transactions (including tombstones), custom menu items, budgets, and settings
@@ -478,7 +482,7 @@ def verify_backup_payload(data_dict: dict) -> tuple[bool, str]:
 validate_json_backup = verify_backup_payload
 
 
-def preview_database_import(input_path: Path = None, data_dict: dict = None) -> dict:
+def preview_database_import(input_path: Path = None, data_dict: dict = None, target_workspace_id: str = None) -> dict:
     """
     Dry-run preview of importing a backup: validates schema/checksum and calculates
     counts for rows to be added, updated, and skipped without modifying the database.
@@ -507,17 +511,41 @@ def preview_database_import(input_path: Path = None, data_dict: dict = None) -> 
     with LEDGER_LOCK:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, uid, updated_at, deleted_at, reference_number, transaction_type, amount, transaction_date, transaction_time, person_name FROM transactions")
+            cursor.execute("SELECT id, uid, workspace_id, updated_at, deleted_at, reference_number, transaction_type, amount, transaction_date, transaction_time, person_name FROM transactions")
             existing_rows = cursor.fetchall()
+
+            from database.queries import get_default_workspace_id
+            fallback_ws = get_default_workspace_id()
+            target_ws = target_workspace_id or data_dict.get('workspace_id')
+
+            remapped_ws = {}
+            for w in data_dict.get("workspaces", []):
+                w_id = w.get('id')
+                w_chat_id = w.get('chat_id')
+                if not w_id:
+                    continue
+                if target_ws and str(w_id) != str(target_ws):
+                    continue
+                if w_chat_id is not None:
+                    cursor.execute("SELECT id FROM workspaces WHERE chat_id = ? AND id != ?", (w_chat_id, w_id))
+                    conflict = cursor.fetchone()
+                    if conflict:
+                        remapped_ws[str(w_id)] = str(conflict[0])
 
             if version >= 2:
                 existing_by_uid = {r['uid']: dict(r) for r in existing_rows if r['uid']}
                 for tx in transactions:
                     tx_uid = tx.get('uid')
+                    row_ws = target_ws or tx.get('workspace_id') or fallback_ws
+                    if str(row_ws) in remapped_ws:
+                        row_ws = remapped_ws[str(row_ws)]
                     if not tx_uid or tx_uid not in existing_by_uid:
                         to_add += 1
                     else:
                         local_row = existing_by_uid[tx_uid]
+                        if local_row.get('workspace_id') and str(local_row['workspace_id']) != str(row_ws):
+                            to_skip += 1
+                            continue
                         dt_inc = parse_utc_iso(tx.get('updated_at'))
                         dt_loc = parse_utc_iso(local_row.get('updated_at'))
                         inc_del = bool(tx.get('deleted_at'))
@@ -638,6 +666,26 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
             with get_db_connection() as conn:
                 cursor = conn.cursor()
 
+                # Step 4a: Detect workspace remappings on chat_id collision before processing rows
+                remapped_ws = {}
+                for w in data_dict.get("workspaces", []):
+                    w_id = w.get('id')
+                    w_chat_id = w.get('chat_id')
+                    if not w_id:
+                        continue
+                    if target_ws and str(w_id) != str(target_ws):
+                        continue
+                    if w_chat_id is not None:
+                        cursor.execute("SELECT id FROM workspaces WHERE chat_id = ? AND id != ?", (w_chat_id, w_id))
+                        conflict = cursor.fetchone()
+                        if conflict:
+                            local_id = str(conflict[0])
+                            remapped_ws[str(w_id)] = local_id
+                            logger.warning(
+                                f"Workspace chat_id collision: incoming workspace {w_id} has chat_id {w_chat_id} "
+                                f"which belongs to local workspace {local_id}. Remapping incoming transactions to {local_id}."
+                            )
+
                 # Step 5: Destructive empty-backup protection & revision check
                 cursor.execute("SELECT value FROM settings WHERE key = 'backup_revision'")
                 rev_row = cursor.fetchone()
@@ -658,28 +706,17 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                 if is_empty_backup and local_live_count > 0:
                     if inc_rev <= local_rev:
                         logger.warning(f"Stale or equal-revision empty backup rejected (inc_rev={inc_rev} <= local_rev={local_rev})")
-                        return {
-                            'success': False,
-                            'error': (
-                                f"Empty backup rejected: incoming revision {inc_rev} ≤ local revision {local_rev}. "
-                                "This looks like a stale or same-database re-import. "
-                                "Explicit owner confirmation required (allow_empty_ledger=True)."
-                            )
-                        }
+                        raise RestoreAborted(
+                            f"Empty backup rejected: incoming revision {inc_rev} ≤ local revision {local_rev}. "
+                            "This looks like a stale or same-database re-import. "
+                            "Explicit owner confirmation required (allow_empty_ledger=True)."
+                        )
                     if not allow_empty_ledger:
                         logger.warning("Empty backup restore over live rows attempted without allow_empty_ledger=True")
-                        return {
-                            'success': False,
-                            'error': "Restoring an empty backup over live transactions requires explicit owner confirmation."
-                        }
+                        raise RestoreAborted("Restoring an empty backup over live transactions requires explicit owner confirmation.")
 
-                if target_ws:
-                    cursor.execute(
-                        "SELECT * FROM transactions WHERE workspace_id = ? OR (workspace_id IS NULL AND ? = ?)",
-                        (target_ws, target_ws, fallback_ws)
-                    )
-                else:
-                    cursor.execute("SELECT * FROM transactions")
+                # Fix 5: Existing transaction lookup must be unscoped to prevent cross-tenant UID constraint failures
+                cursor.execute("SELECT id, uid, workspace_id, updated_at, deleted_at, reference_number, transaction_type, amount, transaction_date, transaction_time, person_name FROM transactions")
                 existing_rows = cursor.fetchall()
                 existing_by_uid = {r['uid']: dict(r) for r in existing_rows if r['uid']}
 
@@ -721,6 +758,8 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                         created_at = tx.get('created_at') or utc_now_iso()
                         incoming_updated = tx.get('updated_at') or utc_now_iso()
                         row_ws = target_ws or tx.get('workspace_id') or fallback_ws
+                        if str(row_ws) in remapped_ws:
+                            row_ws = remapped_ws[str(row_ws)]
 
                         if tx_uid not in existing_by_uid:
                             cursor.execute('''
@@ -830,6 +869,8 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                         r_name = validate_string_length(tx.get('recipient_name', ''), max_length=120)
                         cat_val = validate_string_length(tx.get('category', 'General'), max_length=100) or 'General'
                         row_ws = target_ws or tx.get('workspace_id') or fallback_ws
+                        if str(row_ws) in remapped_ws:
+                            row_ws = remapped_ws[str(row_ws)]
 
                         fp = (
                             tt_val,
@@ -875,6 +916,8 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                     dish_price = float(parse_decimal_amount(dish.get('price', 0.0), allow_zero=False))
                     dish_cat = validate_string_length(dish.get('category', 'Snacks & Tea'), max_length=50) or "Snacks & Tea"
                     menu_ws = target_ws or dish.get('workspace_id') or fallback_ws
+                    if str(menu_ws) in remapped_ws:
+                        menu_ws = remapped_ws[str(menu_ws)]
                     cursor.execute("""
                         SELECT id FROM custom_menu_items
                         WHERE (workspace_id = ? OR (workspace_id IS NULL AND ? IS NULL))
@@ -909,14 +952,25 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                                 cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))
                         except Exception:
                             pass
-                    elif k in ('default_workspace_id', 'database_id'):
+                    elif k == 'default_workspace_id':
                         if not target_ws:
-                            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)", (k, str(v), now_utc))
+                            candidate_ws_id = remapped_ws.get(str(v), str(v))
+                            cursor.execute("SELECT id FROM workspaces WHERE id = ? AND is_active = 1", (candidate_ws_id,))
+                            if cursor.fetchone():
+                                cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('default_workspace_id', ?, ?)", (candidate_ws_id, now_utc))
+                            else:
+                                logger.warning(f"Backup default_workspace_id {v} does not exist in local active workspaces. Keeping existing local default_workspace_id.")
+                    elif k == 'database_id':
+                        # Fix 2: Never overwrite local database_id with backup payload
+                        pass
 
                 # Restore workspaces, members, and workspace_settings if present
                 for w in data_dict.get("workspaces", []):
                     w_id = w.get('id')
                     if not w_id:
+                        continue
+                    if str(w_id) in remapped_ws:
+                        # Collision was detected and transactions remapped; skip duplicate workspace row
                         continue
                     if target_ws and str(w_id) != str(target_ws):
                         continue
@@ -927,7 +981,7 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                         if conflict:
                             err_msg = f"Restore aborted: chat_id {w_chat_id} is claimed by workspace {conflict[0]}"
                             logger.error(err_msg)
-                            return {'success': False, 'error': err_msg}
+                            raise RestoreAborted(err_msg)
 
                     cursor.execute("""
                         INSERT INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
@@ -942,26 +996,30 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
 
                 from config import is_restricted_user
                 for m in data_dict.get("workspace_members", []):
-                    if target_ws and str(m.get('workspace_id')) != str(target_ws):
+                    m_ws = remapped_ws.get(str(m.get('workspace_id')), m.get('workspace_id'))
+                    if target_ws and str(m_ws) != str(target_ws):
                         continue
                     m_role = 'member' if (is_restricted_user(m.get('telegram_user_id', 0)) and m.get('role') == 'owner') else m.get('role', 'member')
                     cursor.execute("""
                         INSERT OR REPLACE INTO workspace_members (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (m.get('workspace_id'), m.get('telegram_user_id'), m.get('username', ''), m.get('display_name', ''), m_role, m.get('is_active', 1), m.get('joined_at', now_utc), m.get('updated_at', now_utc)))
+                    """, (m_ws, m.get('telegram_user_id'), m.get('username', ''), m.get('display_name', ''), m_role, m.get('is_active', 1), m.get('joined_at', now_utc), m.get('updated_at', now_utc)))
 
                 for ws in data_dict.get("workspace_settings", []):
-                    if target_ws and str(ws.get('workspace_id')) != str(target_ws):
+                    ws_ws = remapped_ws.get(str(ws.get('workspace_id')), ws.get('workspace_id'))
+                    if target_ws and str(ws_ws) != str(target_ws):
                         continue
                     cursor.execute("""
                         INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at)
                         VALUES (?, ?, ?, ?)
-                    """, (ws.get('workspace_id'), ws.get('key'), ws.get('value'), ws.get('updated_at', now_utc)))
+                    """, (ws_ws, ws.get('key'), ws.get('value'), ws.get('updated_at', now_utc)))
 
                 # Restore recurring payments if present
                 for rp in data_dict.get("recurring_payments", []):
                     rp_ws = target_ws or rp.get('workspace_id') or fallback_ws
-                    if target_ws and rp.get('workspace_id') and str(rp.get('workspace_id')) != str(target_ws):
+                    if str(rp_ws) in remapped_ws:
+                        rp_ws = remapped_ws[str(rp_ws)]
+                    if target_ws and str(rp_ws) != str(target_ws):
                         continue
                     payee_name = rp.get('payee_name') or rp.get('title') or rp.get('payee') or 'Subscription'
                     cursor.execute("""
@@ -982,7 +1040,9 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                 # Restore monthly reviews if present
                 for mr in data_dict.get("monthly_reviews", []):
                     mr_ws = target_ws or mr.get('workspace_id') or fallback_ws
-                    if target_ws and mr.get('workspace_id') and str(mr.get('workspace_id')) != str(target_ws):
+                    if str(mr_ws) in remapped_ws:
+                        mr_ws = remapped_ws[str(mr_ws)]
+                    if target_ws and str(mr_ws) != str(target_ws):
                         continue
                     cursor.execute("""
                         INSERT OR REPLACE INTO monthly_reviews (
@@ -1069,6 +1129,39 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                 final_rev = max(local_rev, backup_rev)
                 cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('backup_revision', ?, ?)", (str(final_rev), now_utc))
 
+                # Post-restore reconciliation of orphaned transactions
+                cursor.execute("""
+                    SELECT id, telegram_chat_id, telegram_user_id, workspace_id
+                    FROM transactions
+                    WHERE workspace_id IS NULL OR workspace_id NOT IN (SELECT id FROM workspaces WHERE is_active = 1)
+                """)
+                orphaned_txs = cursor.fetchall()
+                if orphaned_txs:
+                    import config
+                    owner_id_str = str(getattr(config, "TELEGRAM_USER_ID", "")).strip()
+                    for otx in orphaned_txs:
+                        otx_id = otx['id']
+                        t_chat = str(otx['telegram_chat_id'] or '').strip()
+                        t_user = str(otx['telegram_user_id'] or '').strip()
+                        new_ws = None
+                        if t_chat:
+                            cursor.execute("SELECT id FROM workspaces WHERE chat_id = ? AND is_active = 1 LIMIT 1", (t_chat,))
+                            c_ws = cursor.fetchone()
+                            if c_ws:
+                                new_ws = c_ws[0]
+                        if not new_ws and t_user == owner_id_str:
+                            new_ws = fallback_ws
+                        if not new_ws and t_user:
+                            cursor.execute("SELECT id FROM workspaces WHERE chat_id = ? AND is_active = 1 LIMIT 1", (t_user,))
+                            u_ws = cursor.fetchone()
+                            if u_ws:
+                                new_ws = u_ws[0]
+                        if new_ws:
+                            cursor.execute("UPDATE transactions SET workspace_id = ? WHERE id = ?", (new_ws, otx_id))
+                            logger.info(f"Reconciled orphaned transaction {otx_id} to workspace {new_ws}")
+                        else:
+                            logger.error(f"Orphaned transaction {otx_id} could not be reconciled (chat={t_chat}, user={t_user}, current_ws={otx['workspace_id']})")
+
                 conn.commit()
 
             logger.info(f"Imported database from JSON: {inserted_count} inserted, {updated_count} updated, {skipped_count} skipped (workspace={target_ws}).")
@@ -1084,6 +1177,9 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                 'balance_discrepancy': balance_discrepancy,
                 'workspace_id': target_ws
             }
+        except RestoreAborted as e:
+            logger.error(f"Restore aborted: {e}")
+            return {'success': False, 'error': str(e)}
         except Exception as e:
             logger.error(f"Error importing database from JSON (rolled back): {e}", exc_info=True)
             return {'success': False, 'error': str(e)}
@@ -1193,7 +1289,7 @@ async def backup_to_telegram(bot, chat_id: str = None, timeout: float = 20.0, fo
             row = cursor.fetchone()
             last_ok_rev = int(row['value']) if row and row['value'] and str(row['value']).isdigit() else 0
 
-        if rev < last_ok_rev and not force:
+        if rev < last_ok_rev:
             logger.warning(f"Refusing to upload backup: local revision ({rev}) is lower than last confirmed cloud revision ({last_ok_rev}).")
             return False
 
@@ -1204,7 +1300,7 @@ async def backup_to_telegram(bot, chat_id: str = None, timeout: float = 20.0, fo
                 m = re.search(r"Rev\s+(\d+)", pinned.caption)
                 if m:
                     cloud_rev = int(m.group(1))
-                    if rev < cloud_rev and not force:
+                    if rev < cloud_rev:
                         logger.warning(f"Refusing to upload backup: local revision ({rev}) is lower than cloud revision ({cloud_rev}).")
                         return False
         except Exception as chat_err:

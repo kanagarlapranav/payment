@@ -50,7 +50,7 @@ def record_delete_action(
     if not deleted_tx:
         return False
 
-    ws_id = workspace_id or deleted_tx.get('workspace_id') or get_default_workspace_id()
+    ws_id = workspace_id or deleted_tx.get('workspace_id')
     uid = deleted_tx.get('uid')
     if not uid and deleted_tx.get('id'):
         row = get_transaction_by_id(deleted_tx['id'], workspace_id=ws_id)
@@ -116,7 +116,6 @@ def record_insert_action(
         return False
 
     valid_uid = validate_uid(uid)
-    tx_ws_id = tx_ws_id or get_default_workspace_id()
 
     c_id, u_id, resolved_ws_id = _resolve_scope(chat_id, user_id, tx_ws_id)
     now_utc = utc_now_iso()
@@ -149,7 +148,7 @@ def record_edit_action(
     if not previous_tx:
         return False
 
-    ws_id = workspace_id or previous_tx.get('workspace_id') or get_default_workspace_id()
+    ws_id = workspace_id or previous_tx.get('workspace_id')
     uid = previous_tx.get('uid')
     if not uid and previous_tx.get('id'):
         row = get_transaction_by_id(previous_tx['id'], workspace_id=ws_id)

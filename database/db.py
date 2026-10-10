@@ -83,7 +83,9 @@ def setup_database():
                     cursor.execute("ALTER TABLE transactions ADD COLUMN category TEXT DEFAULT 'General'")
                 if "uid" not in columns:
                     cursor.execute("ALTER TABLE transactions ADD COLUMN uid TEXT")
-                cursor.execute("UPDATE transactions SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL OR uid = ''")
+                cursor.execute("SELECT COUNT(*) FROM transactions WHERE uid IS NULL OR uid = ''")
+                if cursor.fetchone()[0] > 0:
+                    cursor.execute("UPDATE transactions SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL OR uid = ''")
                 if "workspace_id" not in columns:
                     cursor.execute("ALTER TABLE transactions ADD COLUMN workspace_id TEXT")
                 if "deleted_at" not in columns:
@@ -495,6 +497,11 @@ def setup_database():
                         INSERT OR IGNORE INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
                         VALUES (?, ?, ?, 'Primary Workspace', 1, ?, ?)
                     """, (default_ws_id, primary_chat_id, chat_type, now_utc, now_utc))
+                    cursor.execute("SELECT id FROM workspaces WHERE chat_id = ?", (primary_chat_id,))
+                    actual_ws = cursor.fetchone()
+                    if actual_ws and actual_ws['id']:
+                        default_ws_id = str(actual_ws['id'])
+                        cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('default_workspace_id', ?, ?)", (default_ws_id, now_utc))
 
                     if primary_owner_id:
                         cursor.execute("""
@@ -553,13 +560,20 @@ def setup_database():
 
                     logger.info(f"Schema migration v4 re-homed row counts: {rehomed_counts}")
 
-                    # Copy all existing settings into workspace_settings for the default workspace
+                    # Copy domain settings into workspace_settings for the default workspace (skip system keys)
+                    system_keys = {
+                        'schema_version', 'database_id', 'is_dirty', 'backup_revision',
+                        'last_backup_ok_revision', 'telegram_backup_message_ids',
+                        'last_local_backup_at', 'last_telegram_backup_at', 'last_drive_backup_at',
+                        'database_initialized', 'backup_blocked'
+                    }
                     cursor.execute("SELECT key, value, updated_at FROM settings")
                     for s_row in cursor.fetchall():
-                        cursor.execute("""
-                            INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at)
-                            VALUES (?, ?, ?, ?)
-                        """, (default_ws_id, s_row['key'], s_row['value'], s_row['updated_at'] or now_utc))
+                        if s_row['key'] not in system_keys:
+                            cursor.execute("""
+                                INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at)
+                                VALUES (?, ?, ?, ?)
+                            """, (default_ws_id, s_row['key'], s_row['value'], s_row['updated_at'] or now_utc))
 
                     # Create tenant-scoped indexes
                     cursor.execute("CREATE INDEX IF NOT EXISTS idx_workspaces_chat_id ON workspaces(chat_id)")
@@ -624,6 +638,15 @@ def setup_database():
                 if def_ws_row and def_ws_row['value']:
                     d_id = str(def_ws_row['value'])
                     cursor.execute("UPDATE transactions SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''", (d_id,))
+                    if cursor.rowcount > 0:
+                        logger.warning(f"Startup legacy transaction assignment: assigned {cursor.rowcount} orphan rows to default workspace {d_id}")
+
+                # Initialize and backfill feature permissions matrix (Fix 11)
+                try:
+                    from bot.feature_registry import init_feature_permissions_table
+                    init_feature_permissions_table(conn)
+                except Exception as feat_err:
+                    logger.debug(f"Notice initializing feature_permissions table: {feat_err}")
                 
                 # If transactions already exist, ensure database is marked initialized
                 cursor.execute("SELECT COUNT(*) FROM transactions")

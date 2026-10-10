@@ -340,11 +340,12 @@ def render_contacts_ledger_text(workspace_id: str = None) -> str:
     lines.append("━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
-from bot.auth import require_authorized, require_admin, is_owner, is_authorized_user, require_member
+from bot.auth import require_authorized, require_admin, is_owner, is_authorized_user, require_member, is_global_owner
 
 def is_admin_user(update: Update) -> bool:
-    """Checks if the user is the primary bot owner (TELEGRAM_USER_ID)."""
-    return is_owner(update)
+    """Checks if the user is the true global bot owner (TELEGRAM_USER_ID) or super admin."""
+    user_id = get_effective_user_id(update)
+    return is_global_owner(user_id)
 
 is_authorized = require_authorized
 
@@ -624,11 +625,10 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
-    ws_id = ctx.workspace_id if ctx else None
-    caller_id = update.effective_user.id if update.effective_user else None
-
-    ctx = get_workspace_context(update)
-    ws_id = ctx.workspace_id if ctx else None
+    if not ctx or not ctx.workspace_id:
+        await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
+        return
+    ws_id = ctx.workspace_id
     caller_id = update.effective_user.id if update.effective_user else None
     view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
 
@@ -662,7 +662,10 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
-    ws_id = ctx.workspace_id if ctx else None
+    if not ctx or not ctx.workspace_id:
+        await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
+        return
+    ws_id = ctx.workspace_id
     caller_id = update.effective_user.id if update.effective_user else None
     view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
 
@@ -697,9 +700,10 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Calculate summary
-    total_sent = sum(t['amount'] for t in transactions if t['transaction_type'] == 'SENT')
-    total_received = sum(t['amount'] for t in transactions if t['transaction_type'] == 'RECEIVED')
+    # Calculate summary via Decimal
+    from decimal import Decimal
+    total_sent = float(sum(Decimal(str(t['amount'])) for t in transactions if t['transaction_type'] == 'SENT'))
+    total_received = float(sum(Decimal(str(t['amount'])) for t in transactions if t['transaction_type'] == 'RECEIVED'))
     overall = get_overall_summary(workspace_id=ws_id, user_id=view_user_id)
     curr_balance = overall.current_balance
 
@@ -808,7 +812,10 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
-    ws_id = ctx.workspace_id if ctx else None
+    if not ctx or not ctx.workspace_id:
+        await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
+        return
+    ws_id = ctx.workspace_id
     from bot.keyboards import get_standard_nav_keyboard
     
     if not context.args:
@@ -864,7 +871,10 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
-    ws_id = ctx.workspace_id if ctx else None
+    if not ctx or not ctx.workspace_id:
+        await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
+        return
+    ws_id = ctx.workspace_id
     caller_id = update.effective_user.id if update.effective_user else None
     view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
     from bot.keyboards import get_standard_nav_keyboard
@@ -915,7 +925,10 @@ async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
-    ws_id = ctx.workspace_id if ctx else None
+    if not ctx or not ctx.workspace_id:
+        await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
+        return
+    ws_id = ctx.workspace_id
     from bot.keyboards import get_standard_nav_keyboard
     
     if not context.args:
@@ -968,7 +981,10 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
-    ws_id = ctx.workspace_id if ctx else None
+    if not ctx or not ctx.workspace_id:
+        await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
+        return
+    ws_id = ctx.workspace_id
     caller_id = update.effective_user.id if update.effective_user else None
     view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
     
@@ -1396,10 +1412,19 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Exports transactions as a PDF Statement or Excel spreadsheet."""
     from bot.auth import require_authorized, is_owner, get_workspace_context
     from database.queries import get_workspace_by_chat_id
+    from bot.feature_registry import feature_allowed
     if not await require_authorized(update): return
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     ctx = get_workspace_context(update)
-    ws_id = ctx.workspace_id if ctx else None
+    if not ctx or not ctx.workspace_id:
+        await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
+        return
+    ws_id = ctx.workspace_id
+
+    caller_uid = update.effective_user.id if update.effective_user else None
+    if not feature_allowed(ws_id, caller_uid, "export"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> Export feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
 
     # Gate: Owner can export any workspace; non-owners can only export their own DM-bound workspace
     if not is_owner(update):
@@ -1530,7 +1555,10 @@ async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
-    ws_id = ctx.workspace_id if ctx else None
+    if not ctx or not ctx.workspace_id:
+        await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
+        return
+    ws_id = ctx.workspace_id
     from services.scheduler_service import format_daily_digest
     from bot.keyboards import get_digest_keyboard
     
@@ -1556,7 +1584,10 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from config import RENDER_EXTERNAL_URL
     render_url = RENDER_EXTERNAL_URL
     ctx = get_workspace_context(update)
-    ws_id = ctx.workspace_id if ctx else None
+    if not ctx or not ctx.workspace_id:
+        await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
+        return
+    ws_id = ctx.workspace_id
     user_id = ctx.user_id if ctx else None
     role = ctx.role if ctx else 'member'
     code = create_one_time_code(user_id=user_id, workspace_id=ws_id, role=role)
@@ -1642,7 +1673,10 @@ async def cafestats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
-    ws_id = ctx.workspace_id if ctx else None
+    if not ctx or not ctx.workspace_id:
+        await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
+        return
+    ws_id = ctx.workspace_id
     from services.cafeteria_service import format_cafeteria_stats
     from bot.keyboards import get_cafestats_keyboard
     stats_text = format_cafeteria_stats(workspace_id=ws_id)
@@ -2076,12 +2110,14 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
             seen.add(w.id)
             unique_workspaces.append(w)
 
+    is_group = bool(chat and getattr(chat, 'type', 'private') in ('group', 'supergroup'))
+
     if is_admin_mode:
         group_workspaces = [w for w in unique_workspaces if w.chat_type != 'dm']
         dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm']
     else:
         group_workspaces = []
-        dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm'] or unique_workspaces
+        dm_workspaces = [] if is_group else ([w for w in unique_workspaces if w.chat_type == 'dm'] or unique_workspaces)
 
     curr_ws_id = ctx.workspace_id if ctx else ""
     curr_title = ctx.workspace.title if (ctx and ctx.workspace and ctx.workspace.title) else "Workspace"
@@ -2117,7 +2153,7 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
         lines.append("")
 
     if is_admin_mode:
-        if chat and getattr(chat, 'type', 'private') in ('group', 'supergroup'):
+        if is_group:
             lines.append("<i>Note: Switching affects your Direct Messages (DM) only. This group chat always records to its own shared ledger.</i>")
         else:
             lines.append("<i>Tap any ledger below to switch your active view:</i>")
@@ -2164,6 +2200,19 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         get_workspace_by_id, create_custom_workspace, ensure_all_user_workspaces, get_workspace_by_chat_id
     )
 
+    user_id = get_effective_user_id(update)
+    is_global_owner = is_super_admin(user_id) or (user_id is not None and str(user_id) == str(getattr(config, 'TELEGRAM_USER_ID', None)))
+
+    # Subcommand: /workspace reset or /workspace clear (placed first so bricked DMs can always recover)
+    if context.args and context.args[0].lower() in ('reset', 'clear', 'default'):
+        set_user_active_workspace(user_id, None)
+        await update.message.reply_text(
+            "🔄 <b>Active workspace reset to default for this chat.</b>\n\n"
+            "You are back to your standard chat view.",
+            parse_mode='HTML'
+        )
+        return
+
     chat = update.effective_chat
     chat_title = getattr(chat, 'title', None) or getattr(chat, 'first_name', None) or "This Chat"
     chat_id = getattr(chat, 'id', None)
@@ -2177,9 +2226,6 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ctx or not ctx.workspace:
         await update.message.reply_text("❌ No active workspace found for this chat.")
         return
-
-    user_id = get_effective_user_id(update)
-    is_global_owner = is_super_admin(user_id) or (user_id is not None and str(user_id) == str(getattr(config, 'TELEGRAM_USER_ID', None)))
 
     # Subcommand: /workspace create <name> or /workspace new <name>
     if context.args and context.args[0].lower() in ('create', 'new', 'add'):
@@ -2224,20 +2270,13 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Subcommand: /workspace reset or /workspace clear
-    if context.args and context.args[0].lower() in ('reset', 'clear', 'default'):
-        set_user_active_workspace(user_id, None)
-        await update.message.reply_text(
-            "🔄 <b>Active workspace reset to default for this chat.</b>\n\n"
-            "You are back to your standard chat view.",
-            parse_mode='HTML'
-        )
-        return
-
     # Subcommand: direct switch by ID (/workspace <id> or /workspace switch <id>)
     if context.args:
         target_id = context.args[-1].strip()
         target_ws = get_workspace_by_id(target_id)
+        if not target_ws:
+            await update.message.reply_text("❌ Workspace not found.")
+            return
         if target_ws:
             from database.queries import get_workspace_member
             m = get_workspace_member(target_ws.id, user_id)
@@ -2722,10 +2761,85 @@ def render_settings_panel(workspace_id: Optional[str] = None) -> tuple[str, Inli
             InlineKeyboardButton(f"⚡ Quick-Add: {quick_confirm}", callback_data="set_quick_confirm")
         ],
         [
+            InlineKeyboardButton("🔐 Feature Access", callback_data="perm_matrix_menu"),
             InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_main")
         ]
     ])
     return text, markup
+
+
+def render_feature_matrix_panel(workspace_id: Optional[str] = None) -> tuple[str, InlineKeyboardMarkup]:
+    """Lists all features and their role access matrix for the workspace (Global Owner only)."""
+    from bot.feature_registry import FEATURES, get_workspace_feature_matrix
+    from database.queries import get_default_workspace_id
+    ws_id = workspace_id or get_default_workspace_id()
+    matrix = get_workspace_feature_matrix(ws_id)
+
+    lines = [
+        "🔐 <b>Role-Based Feature Access Matrix</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "Control which roles can access each feature in this workspace.",
+        "• <b>A</b> = Admin, <b>M</b> = Member, <b>V</b> = Viewer",
+        "",
+        "<i>Tap any feature below to edit role permissions:</i>\n"
+    ]
+
+    buttons = []
+    for feat_key, label, _ in FEATURES:
+        roles_map = matrix.get(feat_key, {})
+        a_icon = "✅" if roles_map.get("admin", False) else "❌"
+        m_icon = "✅" if roles_map.get("member", False) else "❌"
+        v_icon = "✅" if roles_map.get("viewer", False) else "❌"
+        btn_text = f"{label} (A{a_icon} M{m_icon} V{v_icon})"
+        buttons.append([InlineKeyboardButton(btn_text, callback_data=f"perm_mat_view:{feat_key}")])
+
+    buttons.append([
+        InlineKeyboardButton("↩️ Reset All to Defaults", callback_data="perm_mat_reset_all"),
+        InlineKeyboardButton("⬅️ Back to Settings", callback_data="settings_menu")
+    ])
+    return "\n".join(lines), InlineKeyboardMarkup(buttons)
+
+
+def render_feature_detail_panel(workspace_id: str, feature_key: str) -> tuple[str, InlineKeyboardMarkup]:
+    """Detail view for a single feature allowing role permission toggling."""
+    from bot.feature_registry import get_feature_by_key, lookup_feature_permission
+    feat = get_feature_by_key(feature_key)
+    label = feat[1] if feat else feature_key
+    def_roles = feat[2] if feat else set()
+
+    a_allowed = lookup_feature_permission(workspace_id, feature_key, "admin")
+    if a_allowed is None: a_allowed = ("admin" in def_roles)
+    m_allowed = lookup_feature_permission(workspace_id, feature_key, "member")
+    if m_allowed is None: m_allowed = ("member" in def_roles)
+    v_allowed = lookup_feature_permission(workspace_id, feature_key, "viewer")
+    if v_allowed is None: v_allowed = ("viewer" in def_roles)
+
+    text = (
+        f"🔐 <b>Feature Permission: {html.escape(label)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"Feature Key: <code>{feature_key}</code>\n\n"
+        f"Configure which roles are allowed to use this feature.\n"
+        f"Tap a button below to toggle permissions:"
+    )
+
+    a_badge = "Admin: ✅ Allowed" if a_allowed else "Admin: ❌ Denied"
+    m_badge = "Member: ✅ Allowed" if m_allowed else "Member: ❌ Denied"
+    v_badge = "Viewer: ✅ Allowed" if v_allowed else "Viewer: ❌ Denied"
+
+    buttons = [
+        [
+            InlineKeyboardButton(a_badge, callback_data=f"perm_mat_toggle:{feature_key}:admin"),
+            InlineKeyboardButton(m_badge, callback_data=f"perm_mat_toggle:{feature_key}:member"),
+        ],
+        [
+            InlineKeyboardButton(v_badge, callback_data=f"perm_mat_toggle:{feature_key}:viewer")
+        ],
+        [
+            InlineKeyboardButton("↩️ Reset Feature to Defaults", callback_data=f"perm_mat_reset:{feature_key}"),
+            InlineKeyboardButton("⬅️ Back to Matrix", callback_data="perm_matrix_menu")
+        ]
+    ]
+    return text, InlineKeyboardMarkup(buttons)
 
 
 def render_restricted_users_panel(workspace_id: Optional[str] = None) -> tuple[str, InlineKeyboardMarkup]:
@@ -2937,6 +3051,10 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif sub in ('restrict', 'add_restricted') and len(context.args) > 1:
             try:
                 r_uid = int(context.args[1])
+                from bot.auth import is_global_owner
+                if is_global_owner(r_uid):
+                    await update.message.reply_text("❌ You cannot restrict yourself.")
+                    return
                 curr_list = get_restricted_user_ids(workspace_id=ws_id)
                 if r_uid not in curr_list:
                     curr_list.append(r_uid)

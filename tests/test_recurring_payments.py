@@ -36,13 +36,15 @@ class TestRecurringPayments(unittest.TestCase):
         self.assertEqual(next_year, date(2027, 9, 1))
 
     def test_add_and_get_recurring(self):
+        ws_id = get_default_workspace_id()
         rec_id = add_recurring_payment(
             payee_name="Broadband WiFi",
             amount=999.0,
             category="Bills & Utilities",
             frequency="MONTHLY",
             start_date=date(2026, 9, 15),
-            notes="Fiber optic plan"
+            notes="Fiber optic plan",
+            workspace_id=ws_id
         )
         self.assertIsNotNone(rec_id)
         
@@ -53,16 +55,18 @@ class TestRecurringPayments(unittest.TestCase):
         self.assertEqual(str(rec['next_due_date'])[:10], "2026-09-15")
 
     def test_mark_paid_creates_transaction_and_advances_date(self):
+        ws_id = get_default_workspace_id()
         rec_id = add_recurring_payment(
             payee_name="Gym Membership",
             amount=1500.0,
             category="Fitness",
             frequency="MONTHLY",
-            start_date=date(2026, 9, 10)
+            start_date=date(2026, 9, 10),
+            workspace_id=ws_id
         )
         
         paid_date = date(2026, 9, 10)
-        tx_id, next_due = mark_recurring_paid(rec_id, paid_date=paid_date)
+        tx_id, next_due = mark_recurring_paid(rec_id, paid_date=paid_date, workspace_id=ws_id)
         
         # Verify transaction created
         self.assertIsNotNone(tx_id)
@@ -78,11 +82,13 @@ class TestRecurringPayments(unittest.TestCase):
         self.assertEqual(next_due, date(2026, 10, 10))
 
     def test_skip_recurring_due(self):
+        ws_id = get_default_workspace_id()
         rec_id = add_recurring_payment(
             payee_name="Newspaper Subscription",
             amount=300.0,
             frequency="MONTHLY",
-            start_date=date(2026, 9, 1)
+            start_date=date(2026, 9, 1) ,
+            workspace_id=ws_id
         )
         
         new_due = skip_recurring_due(rec_id)

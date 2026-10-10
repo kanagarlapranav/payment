@@ -49,9 +49,9 @@ def add_recurring_payment(
     workspace_id: Optional[str] = None
 ) -> int:
     """Creates a new active recurring payment rule with workspace scoping."""
-    from database.queries import get_default_workspace_id
-    default_ws = get_default_workspace_id()
-    ws_id = str(workspace_id) if workspace_id else default_ws
+    if not workspace_id or not str(workspace_id).strip():
+        raise ValueError("workspace_id is required to add recurring payment")
+    ws_id = str(workspace_id).strip()
 
     dec_amount = float(parse_decimal_amount(amount, allow_zero=False))
     clean_payee = validate_string_length(payee_name, max_length=120, field_name="Payee name")
@@ -171,6 +171,8 @@ def mark_recurring_paid(rec_id: int, paid_date: Optional[date] = None, workspace
 
         now_iso = utc_now_iso()
         ws_id = rec.get('workspace_id') or workspace_id
+        if not ws_id:
+            raise ValueError("workspace_id is required to mark recurring paid")
 
         with get_db_connection() as conn:
             cursor = conn.cursor()

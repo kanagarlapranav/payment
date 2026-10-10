@@ -3,7 +3,7 @@ import sys
 import logging
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
-from typing import Optional, List, Set
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,7 +25,11 @@ IS_TEST_ENV = (
     or "PYTEST_CURRENT_TEST" in os.environ
 )
 
-DEFAULT_PERSISTENT_DATA_DIR = (Path.home() / ".payment_tracker" / "data").resolve()
+try:
+    _home = Path.home()
+except Exception:
+    _home = Path("/tmp") if os.name != "nt" else Path(os.environ.get("TEMP", "C:\\temp"))
+DEFAULT_PERSISTENT_DATA_DIR = (_home / ".payment_tracker" / "data").resolve()
 repo_internal_dir = (BASE_DIR / "data").resolve()
 production_dir = DEFAULT_PERSISTENT_DATA_DIR
 
@@ -85,9 +89,21 @@ if IS_TEST_ENV:
         raise RuntimeError(f"Refusing to run tests with LOG_DIR pointing inside production/global logs: {LOG_DIR}")
 
 # Ensure directories exist safely
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-IMAGE_DIR.mkdir(parents=True, exist_ok=True)
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+except Exception as e:
+    raise RuntimeError(f"Failed to create data/log directory: {e}") from e
+
+def _get_int_env(name: str, default: int) -> int:
+    val = os.getenv(name)
+    if val is None or not val.strip():
+        return default
+    try:
+        return int(val.strip())
+    except ValueError as e:
+        raise ValueError(f"Invalid integer value for environment variable {name}: {val!r}") from e
 
 # Multi-tenant and Legacy Compatibility Flags
 LEGACY_SINGLE_TENANT_MODE = os.getenv('LEGACY_SINGLE_TENANT_MODE', 'false').strip().lower() in ('1', 'true', 'yes')
@@ -96,8 +112,8 @@ ALLOW_PUBLIC_WORKSPACES = os.getenv('ALLOW_PUBLIC_WORKSPACES', 'false').strip().
 ALLOW_PUBLIC_WORKSPACE_CREATION = os.getenv('ALLOW_PUBLIC_WORKSPACE_CREATION', 'false').strip().lower() in ('1', 'true', 'yes')
 MEMBERSHIP_MODE = os.getenv('MEMBERSHIP_MODE', 'admin_approval').strip().lower()
 DEFAULT_MEMBER_ROLE = os.getenv('DEFAULT_MEMBER_ROLE', 'member').strip().lower()
-INVITE_EXPIRY_MINUTES = int(os.getenv('INVITE_EXPIRY_MINUTES', '60'))
-ACCESS_REQUEST_EXPIRY_HOURS = int(os.getenv('ACCESS_REQUEST_EXPIRY_HOURS', '72'))
+INVITE_EXPIRY_MINUTES = _get_int_env('INVITE_EXPIRY_MINUTES', 60)
+ACCESS_REQUEST_EXPIRY_HOURS = _get_int_env('ACCESS_REQUEST_EXPIRY_HOURS', 72)
 DEFAULT_FALLBACK_WORKSPACE_ID = os.getenv('DEFAULT_FALLBACK_WORKSPACE_ID', '').strip()
 
 # Telegram Configuration
@@ -126,7 +142,6 @@ SUPER_ADMIN_USER_IDS = [
     if uid.strip() and (uid.strip().isdigit() or (uid.strip().startswith('-') and uid.strip()[1:].isdigit()))
 ]
 SUPER_ADMIN_IDS = SUPER_ADMIN_USER_IDS
-DEFAULT_FALLBACK_WORKSPACE_ID = os.getenv('DEFAULT_FALLBACK_WORKSPACE_ID', '')
 
 # Restricted users (strictly members only, never permitted owner privileges)
 raw_restricted_users = os.getenv('RESTRICTED_USER_IDS', '8343764796')
