@@ -134,7 +134,7 @@ def test_ledger_lifecycle_chain_edit_delete_undo():
         assert deleted_row["deleted_at"] is not None
 
     # 6. Undo delete -> restores transaction #1
-    success, undo_msg = perform_undo()
+    success, undo_msg = perform_undo(workspace_id=ws_id)
     assert success is True
     assert get_balance_setting() == 1200.0
 

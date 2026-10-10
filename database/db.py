@@ -502,10 +502,56 @@ def setup_database():
                             VALUES (?, ?, '', 'Primary Owner', 'owner', 1, ?, ?)
                         """, (default_ws_id, primary_owner_id, now_utc, now_utc))
 
-                    # Backfill all existing rows in domain tables with default_ws_id
+                    # Provenance-aware backfill of existing rows in domain tables
+                    rehomed_counts = {}
+
+                    # 1. Backfill transactions with matching workspace chat_id if available
+                    cursor.execute("""
+                        UPDATE transactions
+                        SET workspace_id = (
+                            SELECT id FROM workspaces
+                            WHERE CAST(workspaces.chat_id AS TEXT) = CAST(transactions.telegram_chat_id AS TEXT)
+                              AND is_active = 1
+                            LIMIT 1
+                        )
+                        WHERE (workspace_id IS NULL OR workspace_id = '')
+                          AND telegram_chat_id IS NOT NULL
+                          AND telegram_chat_id != ''
+                          AND EXISTS (
+                            SELECT 1 FROM workspaces
+                            WHERE CAST(workspaces.chat_id AS TEXT) = CAST(transactions.telegram_chat_id AS TEXT)
+                          )
+                    """)
+                    if cursor.rowcount > 0:
+                        rehomed_counts['transactions (provenance-matched)'] = cursor.rowcount
+
+                    # 2. Backfill undo_log with matching workspace chat_id if available
+                    cursor.execute("""
+                        UPDATE undo_log
+                        SET workspace_id = (
+                            SELECT id FROM workspaces
+                            WHERE workspaces.chat_id = undo_log.chat_id
+                              AND is_active = 1
+                            LIMIT 1
+                        )
+                        WHERE (workspace_id IS NULL OR workspace_id = '')
+                          AND chat_id IS NOT NULL
+                          AND EXISTS (
+                            SELECT 1 FROM workspaces
+                            WHERE workspaces.chat_id = undo_log.chat_id
+                          )
+                    """)
+                    if cursor.rowcount > 0:
+                        rehomed_counts['undo_log (provenance-matched)'] = cursor.rowcount
+
+                    # 3. Fall back genuinely origin-less rows to default_ws_id
                     for t_name in ['transactions', 'custom_menu_items', 'payee_categories', 
                                   'recurring_payments', 'monthly_reviews', 'pending_receipts', 'undo_log']:
                         cursor.execute(f"UPDATE {t_name} SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''", (default_ws_id,))
+                        if cursor.rowcount > 0:
+                            rehomed_counts[f"{t_name} (default-fallback)"] = cursor.rowcount
+
+                    logger.info(f"Schema migration v4 re-homed row counts: {rehomed_counts}")
 
                     # Copy all existing settings into workspace_settings for the default workspace
                     cursor.execute("SELECT key, value, updated_at FROM settings")

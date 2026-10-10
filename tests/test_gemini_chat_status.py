@@ -261,7 +261,13 @@ class TestGeminiChatStatus(unittest.TestCase):
         query.data = "set_model:gemini-3.5-flash-lite"
         update.callback_query = query
 
-        with patch("bot.handlers.require_admin", AsyncMock(return_value=True)), \
+        mock_ctx = MagicMock()
+        mock_ctx.workspace_id = "test_ws"
+        mock_ctx.role = "admin"
+        mock_ctx.has_role.return_value = True
+
+        with patch("bot.handlers.get_workspace_context", return_value=mock_ctx), \
+             patch("bot.handlers.require_admin", AsyncMock(return_value=True)), \
              patch("ocr.gemini_vision.check_gemini_api_status_async", AsyncMock(return_value={
                  "status": "OK", "model": "gemini-3.5-flash-lite", "masked_key": "…1234", "preferred_setting": "gemini-3.5-flash-lite"
              })):

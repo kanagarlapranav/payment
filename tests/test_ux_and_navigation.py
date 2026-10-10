@@ -515,7 +515,11 @@ class TestUXAndNavigation(unittest.TestCase):
         dummy_action = {'action': 'delete', 'uid': 'test-uid-123'}
         dummy_tx = {'id': 99, 'person_name': 'Ramesh', 'amount': 150.0, 'transaction_date': '2026-09-23', 'transaction_type': 'SENT'}
 
-        with patch('bot.commands.require_admin', AsyncMock(return_value=True)), \
+        mock_ctx = MagicMock()
+        mock_ctx.workspace_id = 'test_ws'
+
+        with patch('bot.auth.get_workspace_context', return_value=mock_ctx), \
+             patch('bot.commands.require_admin', AsyncMock(return_value=True)), \
              patch('services.undo_service.get_last_action', return_value=dummy_action), \
              patch('database.db.get_db_connection') as mock_conn:
             cursor = MagicMock()
@@ -549,8 +553,14 @@ class TestUXAndNavigation(unittest.TestCase):
 
         dummy_tx = {'id': 42, 'person_name': 'Test', 'amount': 100.0, 'telegram_user_id': 11111}
 
+        mock_ctx = MagicMock()
+        mock_ctx.workspace_id = "test_ws"
+        mock_ctx.role = "member"
+        mock_ctx.has_role.return_value = True
+
         # Case 1: Unauthorized user -> denied with alert
-        with patch('bot.handlers.get_transaction_by_id', return_value=dummy_tx), \
+        with patch('bot.handlers.get_workspace_context', return_value=mock_ctx), \
+             patch('bot.handlers.get_transaction_by_id', return_value=dummy_tx), \
              patch('database.queries.can_user_modify_transaction', return_value=False), \
              patch('bot.handlers.is_owner', return_value=False), \
              patch('bot.handlers.is_admin_user', return_value=False), \
@@ -561,7 +571,8 @@ class TestUXAndNavigation(unittest.TestCase):
 
         # Case 2: Authorized user -> renders edit UI
         query.reset_mock()
-        with patch('bot.handlers.get_transaction_by_id', return_value=dummy_tx), \
+        with patch('bot.handlers.get_workspace_context', return_value=mock_ctx), \
+             patch('bot.handlers.get_transaction_by_id', return_value=dummy_tx), \
              patch('database.queries.can_user_modify_transaction', return_value=True), \
              patch('bot.handlers.is_owner', return_value=True):
             asyncio.run(handle_callback_query(update, context))
@@ -617,7 +628,13 @@ class TestUXAndNavigation(unittest.TestCase):
 
         dummy_tx = {'id': 42, 'person_name': 'Suresh', 'amount': 250.0, 'transaction_date': '2026-09-23', 'transaction_type': 'SENT'}
 
-        with patch('bot.handlers.is_admin_user', return_value=True), \
+        mock_ctx = MagicMock()
+        mock_ctx.workspace_id = "test_ws"
+        mock_ctx.role = "admin"
+        mock_ctx.has_role.return_value = True
+
+        with patch('bot.handlers.get_workspace_context', return_value=mock_ctx), \
+             patch('bot.handlers.is_admin_user', return_value=True), \
              patch('bot.handlers.require_admin', AsyncMock(return_value=True)), \
              patch('bot.handlers.get_transaction_by_id', return_value=dummy_tx):
             asyncio.run(handle_callback_query(update, context))
@@ -752,7 +769,7 @@ class TestUXAndNavigation(unittest.TestCase):
             self.assertIn(format_currency(saved_db_tx['balance_after']), saved_text)
 
             # Verify undo record exists
-            undo_act = get_last_action(chat_id=owner_id, user_id=owner_id)
+            undo_act = get_last_action(chat_id=owner_id, user_id=owner_id, workspace_id=saved_db_tx['workspace_id'])
             self.assertIsNotNone(undo_act)
             self.assertEqual(undo_act.get('action'), 'insert')
             self.assertIsNotNone(undo_act.get('uid'))
@@ -897,7 +914,13 @@ class TestUXAndNavigation(unittest.TestCase):
         update.callback_query = query
         context = MagicMock()
 
-        with patch("bot.handlers.is_owner", return_value=True), \
+        mock_ctx = MagicMock()
+        mock_ctx.workspace_id = "test_ws"
+        mock_ctx.role = "owner"
+        mock_ctx.has_role.return_value = True
+
+        with patch('bot.handlers.get_workspace_context', return_value=mock_ctx), \
+             patch("bot.handlers.is_owner", return_value=True), \
              patch("bot.handlers.require_owner", AsyncMock(return_value=True)), \
              patch("bot.handlers.require_admin", AsyncMock(return_value=True)):
             asyncio.run(handle_callback_query(update, context))

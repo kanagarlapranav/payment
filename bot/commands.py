@@ -344,7 +344,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
     caller_id = update.effective_user.id if update.effective_user else None
-    menu_text = render_home_menu_text(workspace_id=ws_id, user_id=caller_id)
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    menu_text = render_home_menu_text(workspace_id=ws_id, user_id=view_user_id)
     await update.message.reply_text(menu_text, reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
 
 async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1576,7 +1577,7 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Fallback: send plain text link if button fails
         await update.message.reply_text(
             f"📊 <b>Dashboard Link:</b>\n\n{auth_url}\n\n"
-            f"🔒 <i>Valid for 5 minutes. Open in your browser.</i>",
+            f"🔒 <i>Valid for 60 seconds. Open in your browser.</i>",
             parse_mode='HTML'
         )
 
@@ -1916,7 +1917,9 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id if update.effective_chat else None
     user_id = update.effective_user.id if update.effective_user else None
     ctx = get_workspace_context(update)
-    ws_id = ctx.workspace_id if ctx else None
+    if not ctx:
+        return
+    ws_id = ctx.workspace_id
 
     last_action = get_last_action(chat_id=chat_id, user_id=user_id, workspace_id=ws_id)
     if not last_action:
@@ -1976,7 +1979,7 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def render_workspaces_view(update: Update) -> tuple[str, Any]:
     """Helper that computes the text and inline markup for the workspace switcher view."""
-    from bot.auth import get_workspace_context, is_owner, is_super_admin, get_effective_user_id
+    from bot.auth import get_workspace_context, is_super_admin, get_effective_user_id
     from database.queries import (
         ensure_all_user_workspaces, get_all_active_workspaces,
         get_user_workspaces
@@ -2160,18 +2163,25 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_ws = get_workspace_by_id(target_id)
         if target_ws:
             from database.queries import get_workspace_member
-            from bot.auth import is_super_admin, is_owner
+            from bot.auth import is_super_admin
             m = get_workspace_member(target_ws.id, user_id)
             is_global_owner = is_super_admin(user_id) or (user_id is not None and str(user_id) == str(getattr(config, 'TELEGRAM_USER_ID', None)))
             if not is_global_owner and not (m and m.is_active and getattr(m, 'status', 'active') == 'active'):
                 await update.message.reply_text("⛔ <b>Access Denied:</b> You are not an active member of that workspace.", parse_mode='HTML')
                 return
             set_user_active_workspace(user_id, target_ws.id)
-            await update.message.reply_text(
-                f"✅ Switched active workspace to: <b>{html.escape(target_ws.title or 'Workspace')}</b>\n\n"
-                f"Commands (/balance, /history, /last5, /edit, /delete, /report) will now operate on this workspace.",
-                parse_mode='HTML'
-            )
+            is_group = bool(chat and getattr(chat, 'type', 'private') in ('group', 'supergroup'))
+            if is_group:
+                notice = (
+                    f"✅ Switched active workspace to: <b>{html.escape(target_ws.title or 'Workspace')}</b> for your <b>Direct Messages (DM)</b>.\n\n"
+                    f"<i>Note: Group chat commands will continue to use this group's shared ledger. Your selected workspace is active when messaging the bot directly in DM.</i>"
+                )
+            else:
+                notice = (
+                    f"✅ Switched active workspace to: <b>{html.escape(target_ws.title or 'Workspace')}</b>\n\n"
+                    f"Commands (/balance, /history, /last5, /edit, /delete, /report) will now operate on this workspace."
+                )
+            await update.message.reply_text(notice, parse_mode='HTML')
             return
 
     text, markup = render_workspaces_view(update)

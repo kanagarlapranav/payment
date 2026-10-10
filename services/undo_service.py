@@ -31,11 +31,9 @@ def _resolve_scope(chat_id: int | None, user_id: int | None, workspace_id: str |
     """Resolves effective chat_id, user_id, and workspace_id."""
     c_id = int(chat_id) if chat_id is not None else int(TELEGRAM_GROUP_ID or TELEGRAM_USER_ID or 0)
     u_id = int(user_id) if user_id is not None else int(TELEGRAM_USER_ID or 0)
-    if workspace_id and str(workspace_id).strip():
-        ws_id = str(workspace_id).strip()
-    else:
-        from database.queries import get_default_workspace_id
-        ws_id = get_default_workspace_id()
+    if not workspace_id or not str(workspace_id).strip():
+        raise ValueError("workspace_id is required")
+    ws_id = str(workspace_id).strip()
     return c_id, u_id, ws_id
 
 

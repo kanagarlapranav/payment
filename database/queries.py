@@ -296,17 +296,41 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                 from config import DEFAULT_FALLBACK_WORKSPACE_ID
                 canonical_default_ws_id = DEFAULT_FALLBACK_WORKSPACE_ID or str(uuid.uuid4())
 
-            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('default_workspace_id', ?, ?)", (canonical_default_ws_id, now_utc))
+            # Only write settings.default_workspace_id when it is missing, empty, or points to an invalid/nonexistent row
+            cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
+            curr_d_row = cursor.fetchone()
+            existing_default_id = curr_d_row['value'] if curr_d_row and curr_d_row['value'] else None
 
-            # Adopt all legacy, orphaned, or unassigned transactions into the canonical default group workspace:
+            existing_is_valid = False
+            if existing_default_id:
+                cursor.execute("SELECT id FROM workspaces WHERE id = ? AND is_active = 1", (existing_default_id,))
+                existing_is_valid = bool(cursor.fetchone())
+
+            if existing_is_valid:
+                logger.warning(
+                    f"ensure_all_user_workspaces: keeping existing valid default_workspace_id={existing_default_id} "
+                    f"(not overwriting with canonical={canonical_default_ws_id})"
+                )
+                effective_default_ws_id = existing_default_id
+            else:
+                logger.warning(
+                    f"ensure_all_user_workspaces: replacing invalid/missing default_workspace_id ({existing_default_id}) "
+                    f"with {canonical_default_ws_id}"
+                )
+                cursor.execute(
+                    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('default_workspace_id', ?, ?)",
+                    (canonical_default_ws_id, now_utc),
+                )
+                effective_default_ws_id = canonical_default_ws_id
+
+            # Adopt all legacy, orphaned, or unassigned transactions into the effective default workspace:
             cursor.execute("""
                 UPDATE OR IGNORE transactions 
                 SET workspace_id = ? 
                 WHERE workspace_id IS NULL 
                    OR workspace_id = '' 
-                   OR workspace_id = '39648d95-f24d-4459-be59-40c62e13df85'
                    OR workspace_id NOT IN (SELECT id FROM workspaces)
-            """, (canonical_default_ws_id,))
+            """, (effective_default_ws_id,))
 
             for g_row in group_workspaces_list:
                 grp_id = g_row['id']

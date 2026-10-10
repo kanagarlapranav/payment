@@ -34,7 +34,7 @@ class TestUndoService(unittest.TestCase):
         self.assertIsNone(get_transaction_by_id(tx_id, workspace_id=ws_id))
         
         # Perform undo
-        success, msg = perform_undo()
+        success, msg = perform_undo(workspace_id=ws_id)
         self.assertTrue(success)
         self.assertIn("Undo Successful", msg)
         
@@ -46,7 +46,8 @@ class TestUndoService(unittest.TestCase):
 
     def test_undo_empty(self):
         _UNDO_STACK.clear()
-        success, msg = perform_undo()
+        ws_id = get_default_workspace_id()
+        success, msg = perform_undo(workspace_id=ws_id)
         self.assertFalse(success)
         self.assertIn("No recent action", msg)
 
@@ -68,13 +69,9 @@ class TestUndoService(unittest.TestCase):
         self.assertIsNotNone(tx)
         uid = tx['uid']
 
-        record_insert_action(uid, chat_id=123, user_id=456, workspace_id="")
-        success, msg = perform_undo(chat_id=123, user_id=456, workspace_id="")
-        self.assertTrue(success, f"Undo failed: {msg}")
-        self.assertIn("Removed newly added transaction", msg)
-
-        tx_check = get_transaction_by_uid(uid, workspace_id=get_default_workspace_id())
-        self.assertIsNotNone(tx_check['deleted_at'])
+        # Undo with empty workspace_id must raise ValueError instead of silently defaulting
+        with self.assertRaises(ValueError):
+            perform_undo(chat_id=123, user_id=456, workspace_id="")
 
     def test_undo_insert_non_default_workspace(self):
         from services.undo_service import record_insert_action

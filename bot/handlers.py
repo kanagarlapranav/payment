@@ -752,19 +752,13 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             pass
     
     if not ws_ctx:
-        chat_id_val = getattr(update.effective_chat, 'id', None)
-        if not isinstance(chat_id_val, int):
-            from database.queries import get_default_workspace_id
-            ws_id = get_default_workspace_id()
-        else:
-            logger.warning(f"Could not resolve workspace context for action '{action}'. Rejecting callback.")
-            try:
-                await query.answer("❌ Workspace context not found.", show_alert=True)
-            except Exception:
-                pass
-            return
-    else:
-        ws_id = ws_ctx.workspace_id
+        logger.warning(f"Could not resolve workspace context for action '{action}'. Rejecting callback.")
+        try:
+            await query.answer("❌ Workspace context not found.", show_alert=True)
+        except Exception:
+            pass
+        return
+    ws_id = ws_ctx.workspace_id
 
     # Enforce unified undo authorization at dispatch (B9 / P1-N2)
     if action in ("undo_action", "undo_confirm", "undo_cancel"):
@@ -1166,8 +1160,6 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             await safe_edit_callback_message(query, "❌ Receipt confirmation expired.", reply_markup=get_back_to_menu_keyboard())
             return
 
-        if ws_id:
-            transaction.workspace_id = ws_id
 
         # Bind pendings to author: only author or admin/owner can confirm
         creator_uid = getattr(transaction, 'telegram_user_id', None)
@@ -1492,8 +1484,6 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
                 return
 
         if transaction:
-            if ws_id:
-                transaction.workspace_id = ws_id
             transaction.category = new_cat
             set_pending_transaction(pending_id, transaction, workspace_id=ws_id)
             if transaction.person_name:
@@ -3167,7 +3157,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check quick menu trigger
     if text.strip().lower() in ('menu', 'home', 'start'):
         caller_id = update.effective_user.id if update.effective_user else None
-        await update.message.reply_text(render_home_menu_text(workspace_id=ws_id, user_id=caller_id), reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
+        view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin')) else caller_id
+        await update.message.reply_text(render_home_menu_text(workspace_id=ws_id, user_id=view_user_id), reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
         return
 
     # Check short text entry: e.g. "120 dosa", "+500 salary", "-45 tea", "coffee 15"

@@ -189,7 +189,7 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
         delete_transaction(tx['id'], workspace_id=ws_id)
 
         # First undo succeeds
-        success1, msg1 = perform_undo(chat_id=chat_id, user_id=user_id)
+        success1, msg1 = perform_undo(chat_id=chat_id, user_id=user_id, workspace_id=ws_id)
         self.assertTrue(success1)
         self.assertIn("Undo Successful", msg1)
 
@@ -197,13 +197,14 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
         self.assertIsNotNone(get_transaction_by_id(tx['id'], workspace_id=ws_id))
 
         # Second undo on same scope fails because record was already consumed
-        success2, msg2 = perform_undo(chat_id=chat_id, user_id=user_id)
+        success2, msg2 = perform_undo(chat_id=chat_id, user_id=user_id, workspace_id=ws_id)
         self.assertFalse(success2)
         self.assertIn("No recent action found to undo", msg2)
 
     def test_undo_cannot_restore_live_row_or_another_uid(self):
         tx = self._create_sample_tx(amount=120.0, ref="REF_LIVE_RESTORE")
         live_uid = tx['uid']
+        ws_id = get_default_workspace_id()
 
         # 1. Attempt direct restore on an active, non-deleted row
         direct_restored = restore_soft_deleted_transaction(uid=live_uid)
@@ -217,12 +218,12 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
         # 3. Via undo log: record action pointing to a live row
         with get_db_connection() as conn:
             conn.execute(
-                "INSERT INTO undo_log (chat_id, user_id, action, uid, created_at) VALUES (1, 1, 'delete', ?, ?)",
-                (live_uid, utc_now_iso()),
+                "INSERT INTO undo_log (workspace_id, chat_id, user_id, action, uid, created_at) VALUES (?, 1, 1, 'delete', ?, ?)",
+                (ws_id, live_uid, utc_now_iso()),
             )
             conn.commit()
 
-        success, msg = perform_undo(chat_id=1, user_id=1)
+        success, msg = perform_undo(chat_id=1, user_id=1, workspace_id=ws_id)
         self.assertFalse(success)
         self.assertIn("Cannot restore transaction", msg)
 
@@ -237,7 +238,7 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
         delete_transaction(tx['id'], workspace_id=ws_id)
 
         # Other user tries to undo -> refused
-        success_other, msg_other = perform_undo(chat_id=chat_id, user_id=other_user_id)
+        success_other, msg_other = perform_undo(chat_id=chat_id, user_id=other_user_id, workspace_id=ws_id)
         self.assertFalse(success_other)
         self.assertIn("No recent action found to undo", msg_other)
 
@@ -245,7 +246,7 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
         self.assertIsNone(get_transaction_by_id(tx['id'], workspace_id=ws_id))
 
         # Legitimate owner undoes -> succeeds
-        success_owner, msg_owner = perform_undo(chat_id=chat_id, user_id=owner_id)
+        success_owner, msg_owner = perform_undo(chat_id=chat_id, user_id=owner_id, workspace_id=ws_id)
         self.assertTrue(success_owner)
         self.assertIn("Undo Successful", msg_owner)
         self.assertIsNotNone(get_transaction_by_id(tx['id'], workspace_id=ws_id))
@@ -267,7 +268,7 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
 
         delete_transaction(tx['id'], workspace_id=ws_id)
 
-        success, msg = perform_undo(chat_id=chat_id, user_id=user_id)
+        success, msg = perform_undo(chat_id=chat_id, user_id=user_id, workspace_id=ws_id)
         self.assertFalse(success)
         self.assertIn("expired", msg.lower())
 
@@ -294,7 +295,7 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
             self.assertIsNone(row['used_at'])
 
         # Re-invoke undo as fresh caller: still succeeds
-        success, _ = perform_undo(chat_id=chat_id, user_id=user_id)
+        success, _ = perform_undo(chat_id=chat_id, user_id=user_id, workspace_id=ws_id)
         self.assertTrue(success)
         self.assertIsNotNone(get_transaction_by_id(tx['id'], workspace_id=ws_id))
 
@@ -313,7 +314,7 @@ class TestSoftDeleteAndUndo(unittest.TestCase):
         self.assertEqual(get_balance_setting(), 1000.00)
 
         # Undo delete -> balance recalculates back to 750.00
-        success, _ = perform_undo(chat_id=1, user_id=1)
+        success, _ = perform_undo(chat_id=1, user_id=1, workspace_id=ws_id)
         self.assertTrue(success)
         self.assertEqual(get_balance_setting(), 750.00)
 

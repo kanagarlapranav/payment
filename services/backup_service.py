@@ -924,8 +924,9 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                         cursor.execute("SELECT id FROM workspaces WHERE chat_id = ? AND id != ?", (w_chat_id, w_id))
                         conflict = cursor.fetchone()
                         if conflict:
-                            logger.warning(f"Skipping restore for workspace {w_id}: chat_id {w_chat_id} is claimed by workspace {conflict[0]}")
-                            continue
+                            err_msg = f"Restore aborted: chat_id {w_chat_id} is claimed by workspace {conflict[0]}"
+                            logger.error(err_msg)
+                            return {'success': False, 'error': err_msg}
 
                     cursor.execute("""
                         INSERT INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
