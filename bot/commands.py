@@ -1844,6 +1844,11 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⏳ Fetching latest cloud backup from Telegram...")
         cloud_res = await restore_from_telegram(context.bot)
         if cloud_res:
+            try:
+                from scripts.repair_workspace_provenance import repair_provenance
+                await asyncio.to_thread(repair_provenance, apply=True)
+            except Exception as e:
+                logger.warning(f"Cloud restore provenance repair note: {e}")
             txs = await asyncio.to_thread(get_all_transactions)
             cur_b = format_currency(get_balance_setting())
             await update.message.reply_text(
@@ -1910,6 +1915,12 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not result.get('success'):
         await update.message.reply_text(f"❌ Nothing was saved: {html.escape(str(result.get('error')))}", parse_mode='HTML')
         return
+
+    try:
+        from scripts.repair_workspace_provenance import repair_provenance
+        await asyncio.to_thread(repair_provenance, apply=True)
+    except Exception as e:
+        logger.warning(f"Local restore provenance repair note: {e}")
 
     backed_up = await backup_to_telegram(context.bot)
     status_line = "✅ Saved and backed up" if backed_up else "⚠️ Saved locally; cloud backup failed (will retry)"

@@ -87,6 +87,14 @@ async def on_startup(app):
         else:
             logger.info(f"Startup check: restore skipped (total={total_rows}, live={live_rows}, tombstones={tombstones}, initialized={is_initialized})")
 
+        # Always run provenance repair on startup to guarantee all rows belong to their active workspace
+        try:
+            from scripts.repair_workspace_provenance import repair_provenance
+            repair_provenance(apply=True)
+            logger.info("Startup check: workspace provenance repair executed successfully.")
+        except Exception as e:
+            logger.warning(f"Startup provenance check note: {e}")
+
         # Clean up any leftover temporary images from prior runs
         try:
             from config import IMAGE_DIR
