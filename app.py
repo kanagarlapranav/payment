@@ -23,7 +23,7 @@ from bot.commands import (
     cafestats_command, cafeedit_command, addmenu_command, delmenu_command, restore_command, undo_command,
     geministatus_command, setmodel_command, backup_command, workspace_command, members_command, setrole_command,
     permissions_command, invite_member_command, join_command, audit_command, removemember_command,
-    admin_command
+    admin_command, settings_command
 )
 from bot.handlers import handle_image, handle_callback_query, handle_text, handle_document, handle_chat_migration
 from services.scheduler_service import register_scheduler_jobs
@@ -229,6 +229,7 @@ def build_application():
     app.add_handler(CommandHandler(["admin", "makeadmin", "promote"], admin_command))
     app.add_handler(CommandHandler(["removemember", "remove_member", "kickmember", "kick"], removemember_command))
     app.add_handler(CommandHandler(["permissions", "roles", "users"], permissions_command))
+    app.add_handler(CommandHandler(["settings", "config"], settings_command))
     app.add_handler(CommandHandler(["invite", "invite_member"], invite_member_command))
     app.add_handler(CommandHandler("join", join_command))
     app.add_handler(CommandHandler("audit", audit_command))

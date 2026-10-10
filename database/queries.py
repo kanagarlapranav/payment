@@ -791,9 +791,9 @@ def set_user_permission_and_role(telegram_user_id: int, role: str, is_active: bo
                 if not cursor.fetchone():
                     # Target user is not yet in this workspace; add them directly to this workspace
                     cursor.execute("""
-                        INSERT INTO workspace_members (workspace_id, telegram_user_id, role, username, display_name, is_active, status, joined_at)
-                        VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
-                    """, (target_ws_id, int(telegram_user_id), clean_role, uname, dname, active_val, now_utc))
+                        INSERT INTO workspace_members (workspace_id, telegram_user_id, role, username, display_name, is_active, status, joined_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                    """, (target_ws_id, int(telegram_user_id), clean_role, uname, dname, active_val, now_utc, now_utc))
                     conn.commit()
                     return True
             else:

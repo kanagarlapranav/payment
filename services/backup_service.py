@@ -7,6 +7,7 @@ import threading
 import uuid
 import asyncio
 from decimal import Decimal
+from typing import Optional, Any
 from pathlib import Path
 from datetime import datetime
 from config import DATA_DIR, DB_PATH, TELEGRAM_GROUP_ID, TELEGRAM_USER_ID, logger
@@ -1397,7 +1398,32 @@ def restore_local_fallback_if_valid() -> bool:
                 logger.warning(f"Error reading local backup fallback from {cand}: {e}")
     return False
 
-async def restore_from_telegram(bot, chat_id: str = None) -> bool:
+class TelegramRestoreResult:
+    """
+    Result object returned by restore_from_telegram.
+    Implements __bool__ and __eq__ so it can be evaluated as a bool for backward compatibility,
+    while preserving .success, .found, and .error details.
+    """
+    def __init__(self, success: bool, found: bool = False, error: Optional[str] = None):
+        self.success = bool(success)
+        self.found = bool(found)
+        self.error = str(error) if error else None
+
+    def __bool__(self) -> bool:
+        return self.success
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, bool):
+            return self.success == other
+        if isinstance(other, TelegramRestoreResult):
+            return self.success == other.success and self.found == other.found and self.error == other.error
+        return False
+
+    def __repr__(self) -> str:
+        return f"TelegramRestoreResult(success={self.success}, found={self.found}, error={self.error!r})"
+
+
+async def restore_from_telegram(bot, chat_id: str = None) -> TelegramRestoreResult:
     """
     Retrieves the latest pinned backup document from Telegram and restores the database.
     Checks owner DM (TELEGRAM_USER_ID) and group chat (TELEGRAM_GROUP_ID).
@@ -1413,7 +1439,12 @@ async def restore_from_telegram(bot, chat_id: str = None) -> bool:
 
     if not chats_to_check or not bot:
         logger.warning("No Telegram chat or bot available for cloud restore.")
-        return restore_local_fallback_if_valid()
+        fallback_ok = restore_local_fallback_if_valid()
+        return TelegramRestoreResult(
+            success=fallback_ok,
+            found=False,
+            error=None if fallback_ok else "No Telegram chat or bot available for cloud restore."
+        )
 
     candidates = []
     for target_chat in chats_to_check:
@@ -1447,9 +1478,19 @@ async def restore_from_telegram(bot, chat_id: str = None) -> bool:
         except Exception as e:
             logger.warning(f"Error checking chat {target_chat} for cloud backup: {e}")
 
+    if not candidates:
+        logger.info("No pinned backup document found in Telegram chats. Attempting local seed/fallback...")
+        fallback_ok = restore_local_fallback_if_valid()
+        return TelegramRestoreResult(
+            success=fallback_ok,
+            found=False,
+            error=None if fallback_ok else "No pinned backup document found in Telegram chats."
+        )
+
     # Sort candidates by revision descending so the highest monotonic revision is imported
     candidates.sort(key=lambda c: c['revision'], reverse=True)
 
+    last_import_error = None
     for cand in candidates:
         target_chat = cand['chat_id']
         rev = cand['revision']
@@ -1462,7 +1503,10 @@ async def restore_from_telegram(bot, chat_id: str = None) -> bool:
                 res = import_database_from_json(input_path=download_path)
                 if res.get('success'):
                     logger.info(f"Cloud restore from {target_chat} (Rev {rev}) succeeded!")
-                    return True
+                    return TelegramRestoreResult(success=True, found=True, error=None)
+                else:
+                    last_import_error = res.get('error') or "Failed to import downloaded backup JSON"
+                    logger.warning(f"Cloud restore from {target_chat} (Rev {rev}) failed import: {last_import_error}")
             finally:
                 if download_path.exists():
                     try:
@@ -1470,10 +1514,16 @@ async def restore_from_telegram(bot, chat_id: str = None) -> bool:
                     except OSError as cleanup_err:
                         logger.warning(f"Could not remove temp cloud backup file {download_path}: {cleanup_err}")
         except Exception as cand_err:
+            last_import_error = str(cand_err)
             logger.warning(f"Error restoring candidate from {target_chat} (Rev {rev}): {cand_err}")
 
     logger.info("Cloud restore checks complete. Attempting local seed/fallback...")
-    return restore_local_fallback_if_valid()
+    fallback_ok = restore_local_fallback_if_valid()
+    return TelegramRestoreResult(
+        success=fallback_ok,
+        found=True,
+        error=None if fallback_ok else (last_import_error or "Cloud backup found but import failed.")
+    )
 
 
 def export_workspace_to_json(workspace_id: str, output_path: Path = None, actor_user_id: int = 0) -> dict:

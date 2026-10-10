@@ -1,5 +1,5 @@
 from typing import Any, Tuple, Optional
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 import config
 from config import TELEGRAM_USER_ID, TELEGRAM_GROUP_ID, DATA_DIR, DAILY_DIGEST_TIME, logger
@@ -86,11 +86,15 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
         items = data['transactions']
     
     if not items:
+        if filter_type == "ALL":
+            hint = "💡 Send your first entry, e.g. <code>paid 200 for chai</code>"
+        else:
+            hint = "💡 <i>Tap a filter below to switch view, or tap Back to return to Home.</i>"
         text = (
             "🧾 <b>Transaction History</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "📭 <i>No transactions found for this filter.</i>\n\n"
-            "💡 <i>Tap a filter below to switch view, or tap Back to return to Home.</i>\n"
+            f"{hint}\n"
             "━━━━━━━━━━━━━━━━━━━━"
         )
         return text, get_history_paginated_keyboard(1, 1, filter_type, tx_rows=[], sort_by=sort_by)
@@ -686,8 +690,11 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     transactions = get_all_transactions_asc(workspace_id=ws_id, user_id=view_user_id)
     if not transactions:
-
-        await update.message.reply_text("ℹ️ No transactions recorded yet.")
+        await update.message.reply_text(
+            "ℹ️ <b>No transactions recorded yet.</b>\n\n"
+            "💡 Send your first entry, e.g. <code>paid 200 for chai</code>",
+            parse_mode='HTML'
+        )
         return
 
     # Calculate summary
@@ -752,7 +759,11 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.keyboards import get_standard_nav_keyboard
     transactions = get_all_transactions_asc(workspace_id=ws_id)
     if not transactions:
-        await update.message.reply_text("No recent transactions found.", reply_markup=get_standard_nav_keyboard())
+        await update.message.reply_text(
+            "No recent transactions found.\n\n💡 Send your first entry, e.g. <code>paid 200 for chai</code>",
+            reply_markup=get_standard_nav_keyboard(),
+            parse_mode='HTML'
+        )
         return
         
     text = "🔍 <b>Detailed Transactions (With IDs)</b>\n\n"
@@ -875,7 +886,12 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txs = search_transactions(query_text=query_text, limit=15, workspace_id=ws_id, user_id=view_user_id)
     
     if not txs:
-        await update.message.reply_text(f"🔍 No transactions found matching <b>'{html.escape(query_text)}'</b>.", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
+        await update.message.reply_text(
+            f"🔍 No transactions found matching <b>'{html.escape(query_text)}'</b>.\n\n"
+            "💡 Send your first entry, e.g. <code>paid 200 for chai</code>",
+            reply_markup=get_standard_nav_keyboard(),
+            parse_mode='HTML'
+        )
         return
         
     total_amount = sum(t['amount'] for t in txs)
@@ -1378,11 +1394,27 @@ async def send_excel_report(chat, bot, workspace_id: str = None):
 
 async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Exports transactions as a PDF Statement or Excel spreadsheet."""
-    if not await require_admin(update): return
+    from bot.auth import require_authorized, is_owner, get_workspace_context
+    from database.queries import get_workspace_by_chat_id
+    if not await require_authorized(update): return
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
+
+    # Gate: Owner can export any workspace; non-owners can only export their own DM-bound workspace
+    if not is_owner(update):
+        user_dm_ws = get_workspace_by_chat_id(update.effective_chat.id) if update.effective_chat else None
+        if not user_dm_ws or ws_id != user_dm_ws.id:
+            await update.message.reply_text(
+                "⛔ <b>Access Denied:</b> You can only export your own personal ledger.",
+                parse_mode='HTML'
+            )
+            return
+
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_document")
+    except Exception:
+        pass
 
     arg = (context.args[0].lower() if context.args else "")
 
@@ -1412,6 +1444,10 @@ async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates AI spending insights and category analytics (Admin only)."""
     from bot.auth import require_admin, get_workspace_context
     if not await require_admin(update): return
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    except Exception:
+        pass
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
     from services.category_service import format_spending_insights
@@ -1806,8 +1842,8 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. If no local backup exists, fetch from pinned Telegram cloud backup
     if not BACKUP_JSON_PATH.exists():
         await update.message.reply_text("⏳ Fetching latest cloud backup from Telegram...")
-        cloud_ok = await restore_from_telegram(context.bot)
-        if cloud_ok:
+        cloud_res = await restore_from_telegram(context.bot)
+        if cloud_res:
             txs = await asyncio.to_thread(get_all_transactions)
             cur_b = format_currency(get_balance_setting())
             await update.message.reply_text(
@@ -1815,6 +1851,12 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"• <b>{len(txs)}</b> live transactions available.\n"
                 f"• <b>Current Balance:</b> {cur_b}\n\n"
                 f"Use <code>/balance</code> or <code>/history</code> to view your ledger.",
+                parse_mode='HTML'
+            )
+            return
+        elif getattr(cloud_res, 'found', False) and getattr(cloud_res, 'error', None):
+            await update.message.reply_text(
+                f"❌ <b>Cloud Restore Failed:</b> {html.escape(str(cloud_res.error))}",
                 parse_mode='HTML'
             )
             return
@@ -2010,9 +2052,11 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
     if is_admin_mode:
         available_workspaces = get_all_active_workspaces()
     else:
-        available_workspaces = get_user_workspaces(user_id)
-        if not available_workspaces and ctx and ctx.workspace:
-            available_workspaces = [ctx.workspace]
+        from database.queries import get_workspace_by_chat_id
+        dm_ws = get_workspace_by_chat_id(chat_id) if chat_id is not None else None
+        if not dm_ws and ctx and ctx.workspace:
+            dm_ws = ctx.workspace
+        available_workspaces = [dm_ws] if dm_ws else []
 
     seen = set()
     unique_workspaces = []
@@ -2021,8 +2065,12 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
             seen.add(w.id)
             unique_workspaces.append(w)
 
-    group_workspaces = [w for w in unique_workspaces if w.chat_type != 'dm']
-    dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm']
+    if is_admin_mode:
+        group_workspaces = [w for w in unique_workspaces if w.chat_type != 'dm']
+        dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm']
+    else:
+        group_workspaces = []
+        dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm'] or unique_workspaces
 
     curr_ws_id = ctx.workspace_id if ctx else ""
     curr_title = ctx.workspace.title if (ctx and ctx.workspace and ctx.workspace.title) else "Workspace"
@@ -2057,33 +2105,42 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
             lines.append(f"{check}<b>{html.escape(ws.title or 'Personal Ledger')}</b>{badge}")
         lines.append("")
 
-    if chat and getattr(chat, 'type', 'private') in ('group', 'supergroup'):
-        lines.append("<i>Note: Switching affects your Direct Messages (DM) only. This group chat always records to its own shared ledger.</i>")
+    if is_admin_mode:
+        if chat and getattr(chat, 'type', 'private') in ('group', 'supergroup'):
+            lines.append("<i>Note: Switching affects your Direct Messages (DM) only. This group chat always records to its own shared ledger.</i>")
+        else:
+            lines.append("<i>Tap any ledger below to switch your active view:</i>")
     else:
-        lines.append("<i>Tap any ledger below to switch your active view:</i>")
+        lines.append("<i>Your entries are kept strictly private in your personal ledger.</i>")
 
     keyboard_rows = []
-    for ws in group_workspaces:
-        is_curr = (ws.id == curr_ws_id)
-        icon = "✅ " if is_curr else "👥 "
-        keyboard_rows.append([InlineKeyboardButton(f"{icon}{ws.title or 'Group'}"[:32], callback_data=f"ws_switch:{ws.id}")])
+    if is_admin_mode:
+        for ws in group_workspaces:
+            is_curr = (ws.id == curr_ws_id)
+            icon = "✅ " if is_curr else "👥 "
+            keyboard_rows.append([InlineKeyboardButton(f"{icon}{ws.title or 'Group'}"[:32], callback_data=f"ws_switch:{ws.id}")])
 
-    dm_buttons = []
-    for ws in dm_workspaces:
-        is_curr = (ws.id == curr_ws_id)
-        icon = "✅ " if is_curr else "👤 "
-        dm_buttons.append(InlineKeyboardButton(f"{icon}{ws.title or 'Personal'}"[:28], callback_data=f"ws_switch:{ws.id}"))
-        if len(dm_buttons) == 2:
+        dm_buttons = []
+        for ws in dm_workspaces:
+            is_curr = (ws.id == curr_ws_id)
+            icon = "✅ " if is_curr else "👤 "
+            dm_buttons.append(InlineKeyboardButton(f"{icon}{ws.title or 'Personal'}"[:28], callback_data=f"ws_switch:{ws.id}"))
+            if len(dm_buttons) == 2:
+                keyboard_rows.append(dm_buttons)
+                dm_buttons = []
+        if dm_buttons:
             keyboard_rows.append(dm_buttons)
-            dm_buttons = []
-    if dm_buttons:
-        keyboard_rows.append(dm_buttons)
 
-    action_row = [
-        InlineKeyboardButton("🔄 Reset to Chat Default", callback_data="ws_reset"),
-        InlineKeyboardButton("➕ New Ledger", callback_data="ws_new_prompt")
-    ]
-    keyboard_rows.append(action_row)
+        action_row = [
+            InlineKeyboardButton("🔄 Reset to Chat Default", callback_data="ws_reset"),
+            InlineKeyboardButton("➕ New Ledger", callback_data="ws_new_prompt")
+        ]
+        keyboard_rows.append(action_row)
+    else:
+        action_row = [
+            InlineKeyboardButton("🔄 Reset to Chat Default", callback_data="ws_reset")
+        ]
+        keyboard_rows.append(action_row)
 
     return "\n".join(lines), InlineKeyboardMarkup(keyboard_rows)
 
@@ -2091,9 +2148,9 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
 async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays information about the current chat's workspace and allows switching active workspace."""
     if not await require_authorized(update): return
-    from bot.auth import get_workspace_context, get_effective_user_id, set_user_active_workspace
+    from bot.auth import get_workspace_context, get_effective_user_id, set_user_active_workspace, is_super_admin
     from database.queries import (
-        get_workspace_by_id, create_custom_workspace, ensure_all_user_workspaces
+        get_workspace_by_id, create_custom_workspace, ensure_all_user_workspaces, get_workspace_by_chat_id
     )
 
     chat = update.effective_chat
@@ -2111,6 +2168,7 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = get_effective_user_id(update)
+    is_global_owner = is_super_admin(user_id) or (user_id is not None and str(user_id) == str(getattr(config, 'TELEGRAM_USER_ID', None)))
 
     # Subcommand: /workspace create <name> or /workspace new <name>
     if context.args and context.args[0].lower() in ('create', 'new', 'add'):
@@ -2171,12 +2229,15 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_ws = get_workspace_by_id(target_id)
         if target_ws:
             from database.queries import get_workspace_member
-            from bot.auth import is_super_admin
             m = get_workspace_member(target_ws.id, user_id)
-            is_global_owner = is_super_admin(user_id) or (user_id is not None and str(user_id) == str(getattr(config, 'TELEGRAM_USER_ID', None)))
             if not is_global_owner and not (m and m.is_active and getattr(m, 'status', 'active') == 'active'):
                 await update.message.reply_text("⛔ <b>Access Denied:</b> You are not an active member of that workspace.", parse_mode='HTML')
                 return
+            if not is_global_owner:
+                user_dm_ws = get_workspace_by_chat_id(chat.id) if chat and getattr(chat, 'id', None) else None
+                if not user_dm_ws or target_ws.id != user_dm_ws.id:
+                    await update.message.reply_text("⛔ <b>Access Denied:</b> That ledger is not available to you.", parse_mode='HTML')
+                    return
             set_user_active_workspace(user_id, target_ws.id)
             is_group = bool(chat and getattr(chat, 'type', 'private') in ('group', 'supergroup'))
             if is_group:
@@ -2586,6 +2647,313 @@ async def permissions_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not await require_owner(update): return
     card, markup = render_permissions_list_payload()
     await update.message.reply_text(card, reply_markup=markup, parse_mode='HTML')
+
+
+def render_settings_panel(workspace_id: Optional[str] = None) -> tuple[str, InlineKeyboardMarkup]:
+    """Renders the owner /settings control panel with Access, Limits, and Behavior sections."""
+    from config import (
+        get_restricted_user_ids, get_default_member_role,
+        get_per_transaction_cap, get_monthly_spending_cap,
+        get_gemini_daily_quota, get_quick_add_confirmation,
+        RESTRICTED_USER_NAMES
+    )
+    from utils.currency import format_currency
+    from database.queries import get_workspace_by_id, get_default_workspace_id
+
+    ws_id = workspace_id or get_default_workspace_id()
+    ws_obj = get_workspace_by_id(ws_id)
+    ws_title = ws_obj.title if ws_obj and ws_obj.title else "Personal Ledger"
+
+    restricted_uids = get_restricted_user_ids(workspace_id=ws_id)
+    r_users_str = ", ".join(
+        f"{uid} ({RESTRICTED_USER_NAMES.get(uid, ('User', ''))[0]})"
+        for uid in restricted_uids
+    ) if restricted_uids else "None"
+
+    def_role = get_default_member_role(workspace_id=ws_id).upper()
+    per_tx_cap = get_per_transaction_cap(workspace_id=ws_id)
+    per_tx_str = format_currency(per_tx_cap) if per_tx_cap else "Unlimited"
+
+    monthly_cap = get_monthly_spending_cap(workspace_id=ws_id)
+    monthly_str = format_currency(monthly_cap) if monthly_cap else "Unlimited"
+
+    quota = get_gemini_daily_quota(workspace_id=ws_id)
+    quick_confirm = "ON" if get_quick_add_confirmation(workspace_id=ws_id) else "OFF"
+
+    text = (
+        "⚙️ <b>Workspace & Bot Settings</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"🏢 <b>Target Ledger:</b> <b>{html.escape(ws_title)}</b>\n\n"
+        "🔐 <b>Access Control:</b>\n"
+        f"• Restricted Users: <code>{html.escape(r_users_str)}</code>\n"
+        f"• Default New Member Role: <b>{def_role}</b>\n\n"
+        "🛑 <b>Spending Limits:</b>\n"
+        f"• Per-Transaction Cap: <b>{per_tx_str}</b>\n"
+        f"• Monthly Spending Cap: <b>{monthly_str}</b>\n\n"
+        "⚡ <b>Behavior & AI:</b>\n"
+        f"• Gemini Daily Quota: <b>{quota} req/day</b>\n"
+        f"• Quick-Add Confirmation: <b>{quick_confirm}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "<i>Select a setting below to configure:</i>"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("👥 Restricted Users", callback_data="set_access_users"),
+            InlineKeyboardButton(f"🔄 Def Role: {def_role}", callback_data="set_def_role")
+        ],
+        [
+            InlineKeyboardButton(f"💳 Tx Cap: {per_tx_str}", callback_data="set_cap_tx"),
+            InlineKeyboardButton(f"📅 Monthly Cap: {monthly_str}", callback_data="set_cap_month")
+        ],
+        [
+            InlineKeyboardButton(f"🤖 Gemini Quota: {quota}", callback_data="set_gemini_quota"),
+            InlineKeyboardButton(f"⚡ Quick-Add: {quick_confirm}", callback_data="set_quick_confirm")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_main")
+        ]
+    ])
+    return text, markup
+
+
+def render_restricted_users_panel(workspace_id: Optional[str] = None) -> tuple[str, InlineKeyboardMarkup]:
+    """Sub-panel for adding or removing restricted users."""
+    from config import get_restricted_user_ids, RESTRICTED_USER_NAMES
+    from database.queries import get_default_workspace_id
+    ws_id = workspace_id or get_default_workspace_id()
+    uids = get_restricted_user_ids(workspace_id=ws_id)
+
+    lines = [
+        "👥 <b>Restricted Users Management</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "Restricted users are strictly prevented from gaining Owner permissions.",
+        "",
+        "<b>Current Restricted Users:</b>"
+    ]
+    if uids:
+        for uid in uids:
+            name = RESTRICTED_USER_NAMES.get(uid, ("User", ""))[0]
+            lines.append(f"• <code>{uid}</code> — <b>{html.escape(name)}</b>")
+    else:
+        lines.append("<i>None configured.</i>")
+
+    lines.append("")
+    lines.append("<i>Tap a user to remove restriction, or add a new ID:</i>")
+
+    buttons = []
+    for uid in uids:
+        name = RESTRICTED_USER_NAMES.get(uid, (str(uid), ""))[0]
+        buttons.append([InlineKeyboardButton(f"❌ Remove {name} ({uid})", callback_data=f"set_access_remove:{uid}")])
+
+    buttons.append([
+        InlineKeyboardButton("➕ Add User ID", callback_data="set_access_add_prompt"),
+        InlineKeyboardButton("⬅️ Back to Settings", callback_data="settings_menu")
+    ])
+    return "\n".join(lines), InlineKeyboardMarkup(buttons)
+
+
+def render_cap_tx_panel(workspace_id: Optional[str] = None) -> tuple[str, InlineKeyboardMarkup]:
+    """Sub-panel for setting per-transaction cap."""
+    from config import get_per_transaction_cap
+    from utils.formatting import format_currency
+    from database.queries import get_default_workspace_id
+    ws_id = workspace_id or get_default_workspace_id()
+    cap = get_per_transaction_cap(workspace_id=ws_id)
+    curr_str = format_currency(cap) if cap else "Unlimited"
+
+    text = (
+        "💳 <b>Per-Transaction Spending Cap</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"Current Cap: <b>{curr_str}</b>\n\n"
+        "Transactions exceeding this amount will be rejected at record time.\n\n"
+        "<i>Select a preset below, or type:</i> <code>/settings cap_tx &lt;amount&gt;</code>"
+    )
+    buttons = [
+        [
+            InlineKeyboardButton("₹1,000", callback_data="set_cap_tx_val:1000"),
+            InlineKeyboardButton("₹2,500", callback_data="set_cap_tx_val:2500"),
+            InlineKeyboardButton("₹5,000", callback_data="set_cap_tx_val:5000")
+        ],
+        [
+            InlineKeyboardButton("₹10,000", callback_data="set_cap_tx_val:10000"),
+            InlineKeyboardButton("₹25,000", callback_data="set_cap_tx_val:25000"),
+            InlineKeyboardButton("₹50,000", callback_data="set_cap_tx_val:50000")
+        ],
+        [
+            InlineKeyboardButton("❌ Remove Cap (Unlimited)", callback_data="set_cap_tx_val:0")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back to Settings", callback_data="settings_menu")
+        ]
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+def render_cap_month_panel(workspace_id: Optional[str] = None) -> tuple[str, InlineKeyboardMarkup]:
+    """Sub-panel for setting monthly spending cap."""
+    from config import get_monthly_spending_cap
+    from utils.formatting import format_currency
+    from database.queries import get_default_workspace_id
+    ws_id = workspace_id or get_default_workspace_id()
+    cap = get_monthly_spending_cap(workspace_id=ws_id)
+    curr_str = format_currency(cap) if cap else "Unlimited"
+
+    text = (
+        "📅 <b>Monthly Spending Cap</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"Current Cap: <b>{curr_str}</b>\n\n"
+        "Monthly expenses exceeding this amount will be rejected at record time.\n\n"
+        "<i>Select a preset below, or type:</i> <code>/settings cap_month &lt;amount&gt;</code>"
+    )
+    buttons = [
+        [
+            InlineKeyboardButton("₹10,000", callback_data="set_cap_month_val:10000"),
+            InlineKeyboardButton("₹25,000", callback_data="set_cap_month_val:25000"),
+            InlineKeyboardButton("₹50,000", callback_data="set_cap_month_val:50000")
+        ],
+        [
+            InlineKeyboardButton("₹1,00,000", callback_data="set_cap_month_val:100000"),
+            InlineKeyboardButton("₹2,00,000", callback_data="set_cap_month_val:200000")
+        ],
+        [
+            InlineKeyboardButton("❌ Remove Cap (Unlimited)", callback_data="set_cap_month_val:0")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back to Settings", callback_data="settings_menu")
+        ]
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+def render_gemini_quota_panel(workspace_id: Optional[str] = None) -> tuple[str, InlineKeyboardMarkup]:
+    """Sub-panel for setting Gemini daily quota."""
+    from config import get_gemini_daily_quota
+    from database.queries import get_default_workspace_id
+    ws_id = workspace_id or get_default_workspace_id()
+    quota = get_gemini_daily_quota(workspace_id=ws_id)
+
+    text = (
+        "🤖 <b>Gemini Vision AI Daily Quota</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"Current Quota: <b>{quota} requests / day</b>\n\n"
+        "<i>Select a preset below, or type:</i> <code>/settings quota &lt;number&gt;</code>"
+    )
+    buttons = [
+        [
+            InlineKeyboardButton("25 / day", callback_data="set_gemini_quota_val:25"),
+            InlineKeyboardButton("50 / day", callback_data="set_gemini_quota_val:50"),
+            InlineKeyboardButton("100 / day", callback_data="set_gemini_quota_val:100"),
+            InlineKeyboardButton("200 / day", callback_data="set_gemini_quota_val:200")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back to Settings", callback_data="settings_menu")
+        ]
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Interactive workspace and policy settings control panel (Owner only)."""
+    from bot.auth import require_owner, get_workspace_context
+    if not await require_owner(update): return
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
+
+    # Subcommands: /settings <key> <val>
+    if context.args:
+        sub = context.args[0].lower()
+        from database.queries import set_workspace_setting
+        from services.audit_service import log_audit_event
+        from config import get_restricted_user_ids
+        user_id = update.effective_user.id if update.effective_user else 0
+
+        if sub in ('cap_tx', 'tx_cap', 'per_tx_cap') and len(context.args) > 1:
+            try:
+                cap_val = float(context.args[1])
+                set_workspace_setting(ws_id, 'per_tx_cap', str(cap_val))
+                log_audit_event(workspace_id=ws_id, actor_user_id=user_id, actor_role='owner', action='settings_update', resource='setting:per_tx_cap', details={'per_tx_cap': cap_val})
+                from utils.formatting import format_currency
+                cap_disp = format_currency(cap_val) if cap_val > 0 else "Unlimited"
+                await update.message.reply_text(f"✅ Per-transaction cap set to: <b>{cap_disp}</b>", parse_mode='HTML')
+                return
+            except ValueError:
+                await update.message.reply_text("❌ Invalid amount for per-transaction cap.")
+                return
+
+        elif sub in ('cap_month', 'monthly_cap', 'month_cap') and len(context.args) > 1:
+            try:
+                cap_val = float(context.args[1])
+                set_workspace_setting(ws_id, 'monthly_spending_cap', str(cap_val))
+                log_audit_event(workspace_id=ws_id, actor_user_id=user_id, actor_role='owner', action='settings_update', resource='setting:monthly_spending_cap', details={'monthly_spending_cap': cap_val})
+                from utils.formatting import format_currency
+                cap_disp = format_currency(cap_val) if cap_val > 0 else "Unlimited"
+                await update.message.reply_text(f"✅ Monthly spending cap set to: <b>{cap_disp}</b>", parse_mode='HTML')
+                return
+            except ValueError:
+                await update.message.reply_text("❌ Invalid amount for monthly spending cap.")
+                return
+
+        elif sub in ('default_role', 'def_role', 'role') and len(context.args) > 1:
+            role_val = context.args[1].lower()
+            if role_val in ('member', 'viewer'):
+                set_workspace_setting(ws_id, 'default_member_role', role_val)
+                log_audit_event(workspace_id=ws_id, actor_user_id=user_id, actor_role='owner', action='settings_update', resource='setting:default_member_role', details={'default_member_role': role_val})
+                await update.message.reply_text(f"✅ Default member role set to: <b>{role_val.upper()}</b>", parse_mode='HTML')
+                return
+            else:
+                await update.message.reply_text("❌ Role must be 'member' or 'viewer'.")
+                return
+
+        elif sub in ('quota', 'gemini_quota') and len(context.args) > 1:
+            try:
+                q_val = int(context.args[1])
+                set_workspace_setting(ws_id, 'gemini_daily_quota', str(q_val))
+                log_audit_event(workspace_id=ws_id, actor_user_id=user_id, actor_role='owner', action='settings_update', resource='setting:gemini_daily_quota', details={'gemini_daily_quota': q_val})
+                await update.message.reply_text(f"✅ Gemini daily quota set to: <b>{q_val} requests/day</b>", parse_mode='HTML')
+                return
+            except ValueError:
+                await update.message.reply_text("❌ Quota must be a valid integer.")
+                return
+
+        elif sub in ('quick_confirm', 'quick_add') and len(context.args) > 1:
+            b_val = context.args[1].lower() in ('1', 'true', 'yes', 'on')
+            set_workspace_setting(ws_id, 'quick_add_confirmation', "1" if b_val else "0")
+            log_audit_event(workspace_id=ws_id, actor_user_id=user_id, actor_role='owner', action='settings_update', resource='setting:quick_add_confirmation', details={'quick_add_confirmation': b_val})
+            await update.message.reply_text(f"✅ Quick-add confirmation set to: <b>{'ON' if b_val else 'OFF'}</b>", parse_mode='HTML')
+            return
+
+        elif sub in ('restrict', 'add_restricted') and len(context.args) > 1:
+            try:
+                r_uid = int(context.args[1])
+                curr_list = get_restricted_user_ids(workspace_id=ws_id)
+                if r_uid not in curr_list:
+                    curr_list.append(r_uid)
+                    new_val = ",".join(str(x) for x in curr_list)
+                    set_workspace_setting(ws_id, 'restricted_user_ids', new_val)
+                    log_audit_event(workspace_id=ws_id, actor_user_id=user_id, actor_role='owner', action='settings_update', resource=f'user:{r_uid}', details={'action': 'restrict', 'restricted_user_ids': curr_list})
+                await update.message.reply_text(f"✅ User <code>{r_uid}</code> added to restricted users list.", parse_mode='HTML')
+                return
+            except ValueError:
+                await update.message.reply_text("❌ User ID must be a valid integer.")
+                return
+
+        elif sub in ('unrestrict', 'remove_restricted') and len(context.args) > 1:
+            try:
+                r_uid = int(context.args[1])
+                curr_list = get_restricted_user_ids(workspace_id=ws_id)
+                curr_list = [x for x in curr_list if x != r_uid]
+                new_val = ",".join(str(x) for x in curr_list)
+                set_workspace_setting(ws_id, 'restricted_user_ids', new_val)
+                log_audit_event(workspace_id=ws_id, actor_user_id=user_id, actor_role='owner', action='settings_update', resource=f'user:{r_uid}', details={'action': 'unrestrict', 'restricted_user_ids': curr_list})
+                await update.message.reply_text(f"✅ User <code>{r_uid}</code> removed from restricted users list.", parse_mode='HTML')
+                return
+            except ValueError:
+                await update.message.reply_text("❌ User ID must be a valid integer.")
+                return
+
+    text, markup = render_settings_panel(ws_id)
+    await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
 
 
 async def invite_member_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

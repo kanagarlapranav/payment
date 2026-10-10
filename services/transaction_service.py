@@ -88,6 +88,11 @@ def process_transaction(raw_text: str, image_path: str, message_id: str, chat_id
     return transaction, confidence
 
 
+class LimitExceededError(ValueError):
+    """Raised when a transaction violates per-transaction or monthly spending caps."""
+    pass
+
+
 def commit_transaction(transaction: Transaction, allow_duplicate: bool = False) -> bool:
     """
     Saves the transaction to DB and updates balance under LEDGER_LOCK with Decimal precision.
@@ -100,6 +105,41 @@ def commit_transaction(transaction: Transaction, allow_duplicate: bool = False) 
             transaction.amount = float(dec_amt)
             transaction.transaction_type = validate_transaction_type(transaction.transaction_type)
             
+            if not getattr(transaction, 'transaction_date', None):
+                from datetime import date
+                transaction.transaction_date = date.today()
+
+            # Enforce workspace limits (Part 2)
+            ws_id = getattr(transaction, 'workspace_id', None)
+            from config import get_per_transaction_cap, get_monthly_spending_cap
+            from utils.currency import format_currency
+
+            per_tx_cap = get_per_transaction_cap(workspace_id=ws_id)
+            if per_tx_cap is not None and transaction.amount > per_tx_cap:
+                msg = f"⛔ Limit reached: Transaction amount ({format_currency(transaction.amount)}) exceeds per-transaction cap of {format_currency(per_tx_cap)}."
+                logger.warning(msg)
+                raise LimitExceededError(msg)
+
+            monthly_cap = get_monthly_spending_cap(workspace_id=ws_id)
+            if monthly_cap is not None and transaction.transaction_type == 'SENT':
+                from database.queries import get_monthly_summary
+                from datetime import date
+                tx_date = getattr(transaction, 'transaction_date', None)
+                if isinstance(tx_date, date):
+                    y_val, m_val = tx_date.year, tx_date.month
+                elif isinstance(tx_date, str) and len(tx_date) >= 7 and '-' in tx_date:
+                    parts = tx_date.split('-')
+                    y_val, m_val = int(parts[0]), int(parts[1])
+                else:
+                    today = date.today()
+                    y_val, m_val = today.year, today.month
+                m_sum = get_monthly_summary(y_val, m_val, workspace_id=ws_id)
+                current_monthly_spent = float(m_sum.get('total_sent', 0.0) or 0.0)
+                if (current_monthly_spent + transaction.amount) > monthly_cap:
+                    msg = f"⛔ Limit reached: Monthly spending exceeds cap of {format_currency(monthly_cap)}."
+                    logger.warning(msg)
+                    raise LimitExceededError(msg)
+
             transaction.person_name = validate_string_length(transaction.person_name, max_length=120, field_name="Person name")
             transaction.sender_name = validate_string_length(transaction.sender_name, max_length=120, field_name="Sender name")
             transaction.recipient_name = validate_string_length(transaction.recipient_name, max_length=120, field_name="Recipient name")

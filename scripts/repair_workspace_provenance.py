@@ -68,10 +68,28 @@ def repair_provenance(
         # Cache active workspaces by chat_id string
         cursor.execute("SELECT id, chat_id, title FROM workspaces WHERE is_active = 1")
         ws_by_chat: dict[str, list[dict[str, Any]]] = {}
+        ws_id_to_title: dict[str, str] = {}
+        active_ws_ids: set[str] = set()
         for w in cursor.fetchall():
+            w_id = str(w["id"])
+            active_ws_ids.add(w_id)
+            ws_id_to_title[w_id] = str(w["title"] or "")
             c_val = str(w["chat_id"]).strip() if w["chat_id"] is not None else ""
             if c_val:
                 ws_by_chat.setdefault(c_val, []).append(dict(w))
+
+        # Query default_workspace_id from settings
+        default_ws_id = ""
+        if "settings" in existing_tables:
+            cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
+            d_row = cursor.fetchone()
+            default_ws_id = str(d_row[0]).strip() if d_row and d_row[0] else ""
+
+        # Query owner_id from config
+        import config
+        owner_id = int(getattr(config, 'TELEGRAM_USER_ID', 0) or 0)
+
+        touched_workspaces: set[str] = set()
 
         summary: dict[str, Any] = {
             "success": True,
@@ -102,7 +120,14 @@ def repair_provenance(
 
         # 1. Inspect transactions
         if "transactions" in existing_tables:
-            cursor.execute("SELECT id, workspace_id, telegram_chat_id, person_name, amount, transaction_date FROM transactions ORDER BY id ASC")
+            cursor.execute("PRAGMA table_info(transactions)")
+            tx_cols = {r[1] for r in cursor.fetchall()}
+            has_uid_col = "telegram_user_id" in tx_cols
+
+            if has_uid_col:
+                cursor.execute("SELECT id, workspace_id, telegram_chat_id, telegram_user_id FROM transactions ORDER BY id ASC")
+            else:
+                cursor.execute("SELECT id, workspace_id, telegram_chat_id, NULL as telegram_user_id FROM transactions ORDER BY id ASC")
             tx_rows = cursor.fetchall()
             summary["transactions"]["scanned"] = len(tx_rows)
 
@@ -110,95 +135,228 @@ def repair_provenance(
                 tx_id = tx["id"]
                 current_ws = str(tx["workspace_id"]).strip() if tx["workspace_id"] else ""
                 origin_chat = str(tx["telegram_chat_id"]).strip() if tx["telegram_chat_id"] is not None else ""
+                user_id_raw = tx["telegram_user_id"]
+                user_id_str = str(user_id_raw).strip() if user_id_raw is not None else ""
+                user_id_int = None
+                if user_id_str:
+                    try:
+                        user_id_int = int(user_id_str)
+                    except ValueError:
+                        pass
 
-                if not origin_chat:
-                    summary["transactions"]["skipped"]["origin_less"] += 1
-                    continue
+                target_ws = None
+                target_title = ""
+                reason = None
 
-                matching = ws_by_chat.get(origin_chat, [])
-                if len(matching) == 0:
-                    summary["transactions"]["skipped"]["no_matching_workspace"] += 1
-                    summary["transactions"]["details"].append({
-                        "id": tx_id,
-                        "status": "skipped",
-                        "reason": f"no active workspace found for chat_id={origin_chat}",
-                        "current_workspace": current_ws,
-                    })
-                elif len(matching) > 1:
-                    summary["transactions"]["skipped"]["ambiguous_matching_workspaces"] += 1
-                    summary["transactions"]["details"].append({
-                        "id": tx_id,
-                        "status": "skipped",
-                        "reason": f"ambiguous: {len(matching)} active workspaces match chat_id={origin_chat}",
-                        "current_workspace": current_ws,
-                    })
-                else:
-                    target_ws = matching[0]["id"]
+                # Pass 1: telegram_chat_id exact-match against active workspaces
+                if origin_chat:
+                    matching = ws_by_chat.get(origin_chat, [])
+                    if len(matching) == 1:
+                        target_ws = matching[0]["id"]
+                        target_title = matching[0]["title"]
+                        reason = "chat_match"
+                    elif len(matching) > 1:
+                        reason = "skipped:ambiguous_chat_match"
+
+                # Pass 2: Fallback matching for rows still unmatched (stale or missing workspace_id)
+                if target_ws is None and not reason:
+                    if user_id_str:
+                        user_matching = ws_by_chat.get(user_id_str, [])
+                        if len(user_matching) == 1:
+                            target_ws = user_matching[0]["id"]
+                            target_title = user_matching[0]["title"]
+                            reason = "user_match"
+                        elif len(user_matching) > 1:
+                            reason = "skipped:ambiguous_user_match"
+                        elif owner_id and user_id_int == owner_id:
+                            if default_ws_id and default_ws_id in active_ws_ids:
+                                target_ws = default_ws_id
+                                target_title = ws_id_to_title.get(default_ws_id, "Default Workspace")
+                                reason = "owner_default"
+                            else:
+                                reason = "skipped:no_default_workspace"
+
+                if target_ws is None and not reason:
+                    if not origin_chat and not user_id_str:
+                        reason = "skipped:no_chat_or_user_id"
+                    else:
+                        reason = "skipped:no_matching_workspace"
+
+                if target_ws is not None:
                     if current_ws == target_ws:
+                        status = "already_matched"
                         summary["transactions"]["skipped"]["already_matched"] += 1
                     else:
+                        status = "retagged" if apply else "would_retag"
                         summary["transactions"]["retagged"] += 1
-                        summary["transactions"]["details"].append({
-                            "id": tx_id,
-                            "status": "retagged" if apply else "would_retag",
-                            "chat_id": origin_chat,
-                            "from_workspace": current_ws,
-                            "to_workspace": target_ws,
-                            "workspace_title": matching[0]["title"],
-                        })
+                        touched_workspaces.add(target_ws)
+                        if current_ws and current_ws in active_ws_ids:
+                            touched_workspaces.add(current_ws)
                         if apply:
                             cursor.execute("UPDATE transactions SET workspace_id = ? WHERE id = ?", (target_ws, tx_id))
+                else:
+                    status = "skipped"
+                    summary["transactions"]["skipped"].setdefault(reason, 0)
+                    summary["transactions"]["skipped"][reason] += 1
+                    if "ambiguous" in reason:
+                        summary["transactions"]["skipped"]["ambiguous_matching_workspaces"] += 1
+                    elif reason in ("skipped:origin_less", "skipped:no_chat_or_user_id"):
+                        summary["transactions"]["skipped"]["origin_less"] += 1
+                    elif "no_matching" in reason:
+                        summary["transactions"]["skipped"]["no_matching_workspace"] += 1
+
+                summary["transactions"]["details"].append({
+                    "id": tx_id,
+                    "status": status,
+                    "from_workspace": current_ws,
+                    "to_workspace": target_ws,
+                    "workspace_title": target_title,
+                    "reason": reason,
+                })
 
         # 2. Inspect undo_log
         if "undo_log" in existing_tables:
-            cursor.execute("SELECT id, workspace_id, chat_id, action, uid FROM undo_log ORDER BY id ASC")
+            cursor.execute("PRAGMA table_info(undo_log)")
+            undo_cols = {r[1] for r in cursor.fetchall()}
+            has_undo_user = "user_id" in undo_cols
+
+            if has_undo_user:
+                cursor.execute("SELECT id, workspace_id, chat_id, user_id FROM undo_log ORDER BY id ASC")
+            else:
+                cursor.execute("SELECT id, workspace_id, chat_id, NULL as user_id FROM undo_log ORDER BY id ASC")
             undo_rows = cursor.fetchall()
             summary["undo_log"]["scanned"] = len(undo_rows)
 
             for u_rec in undo_rows:
                 u_id = u_rec["id"]
                 current_ws = str(u_rec["workspace_id"]).strip() if u_rec["workspace_id"] else ""
-                u_chat = str(u_rec["chat_id"]).strip() if u_rec["chat_id"] is not None else ""
+                origin_chat = str(u_rec["chat_id"]).strip() if u_rec["chat_id"] is not None else ""
+                user_id_raw = u_rec["user_id"]
+                user_id_str = str(user_id_raw).strip() if user_id_raw is not None else ""
+                user_id_int = None
+                if user_id_str:
+                    try:
+                        user_id_int = int(user_id_str)
+                    except ValueError:
+                        pass
 
-                if not u_chat:
-                    summary["undo_log"]["skipped"]["origin_less"] += 1
-                    continue
+                target_ws = None
+                target_title = ""
+                reason = None
 
-                matching = ws_by_chat.get(u_chat, [])
-                if len(matching) == 0:
-                    summary["undo_log"]["skipped"]["no_matching_workspace"] += 1
-                    summary["undo_log"]["details"].append({
-                        "id": u_id,
-                        "status": "skipped",
-                        "reason": f"no active workspace found for chat_id={u_chat}",
-                        "current_workspace": current_ws,
-                    })
-                elif len(matching) > 1:
-                    summary["undo_log"]["skipped"]["ambiguous_matching_workspaces"] += 1
-                    summary["undo_log"]["details"].append({
-                        "id": u_id,
-                        "status": "skipped",
-                        "reason": f"ambiguous: {len(matching)} active workspaces match chat_id={u_chat}",
-                        "current_workspace": current_ws,
-                    })
-                else:
-                    target_ws = matching[0]["id"]
+                # Pass 1: chat_id exact-match against active workspaces
+                if origin_chat:
+                    matching = ws_by_chat.get(origin_chat, [])
+                    if len(matching) == 1:
+                        target_ws = matching[0]["id"]
+                        target_title = matching[0]["title"]
+                        reason = "chat_match"
+                    elif len(matching) > 1:
+                        reason = "skipped:ambiguous_chat_match"
+
+                # Pass 2: Fallback matching for rows still unmatched (stale or missing workspace_id)
+                if target_ws is None and not reason:
+                    if user_id_str:
+                        user_matching = ws_by_chat.get(user_id_str, [])
+                        if len(user_matching) == 1:
+                            target_ws = user_matching[0]["id"]
+                            target_title = user_matching[0]["title"]
+                            reason = "user_match"
+                        elif len(user_matching) > 1:
+                            reason = "skipped:ambiguous_user_match"
+                        elif owner_id and user_id_int == owner_id:
+                            if default_ws_id and default_ws_id in active_ws_ids:
+                                target_ws = default_ws_id
+                                target_title = ws_id_to_title.get(default_ws_id, "Default Workspace")
+                                reason = "owner_default"
+                            else:
+                                reason = "skipped:no_default_workspace"
+
+                if target_ws is None and not reason:
+                    if not origin_chat and not user_id_str:
+                        reason = "skipped:no_chat_or_user_id"
+                    else:
+                        reason = "skipped:no_matching_workspace"
+
+                if target_ws is not None:
                     if current_ws == target_ws:
+                        status = "already_matched"
                         summary["undo_log"]["skipped"]["already_matched"] += 1
                     else:
+                        status = "retagged" if apply else "would_retag"
                         summary["undo_log"]["retagged"] += 1
-                        summary["undo_log"]["details"].append({
-                            "id": u_id,
-                            "status": "retagged" if apply else "would_retag",
-                            "chat_id": u_chat,
-                            "from_workspace": current_ws,
-                            "to_workspace": target_ws,
-                            "workspace_title": matching[0]["title"],
-                        })
+                        touched_workspaces.add(target_ws)
+                        if current_ws and current_ws in active_ws_ids:
+                            touched_workspaces.add(current_ws)
                         if apply:
                             cursor.execute("UPDATE undo_log SET workspace_id = ? WHERE id = ?", (target_ws, u_id))
+                else:
+                    status = "skipped"
+                    summary["undo_log"]["skipped"].setdefault(reason, 0)
+                    summary["undo_log"]["skipped"][reason] += 1
+                    if "ambiguous" in reason:
+                        summary["undo_log"]["skipped"]["ambiguous_matching_workspaces"] += 1
+                    elif reason in ("skipped:origin_less", "skipped:no_chat_or_user_id"):
+                        summary["undo_log"]["skipped"]["origin_less"] += 1
+                    elif "no_matching" in reason:
+                        summary["undo_log"]["skipped"]["no_matching_workspace"] += 1
+
+                summary["undo_log"]["details"].append({
+                    "id": u_id,
+                    "status": status,
+                    "from_workspace": current_ws,
+                    "to_workspace": target_ws,
+                    "workspace_title": target_title,
+                    "reason": reason,
+                })
+
+        # 3. Inspect obsolete members (Data Note: do NOT auto-delete)
+        summary["obsolete_members"] = {
+            "scanned": 0,
+            "flagged": 0,
+            "details": []
+        }
+        if "workspace_members" in existing_tables and "workspaces" in existing_tables:
+            import config
+            owner_id = int(getattr(config, 'TELEGRAM_USER_ID', 0) or 0)
+            cursor.execute("""
+                SELECT wm.id, wm.workspace_id, wm.telegram_user_id, wm.role, wm.username, wm.display_name,
+                       w.chat_id, w.title as workspace_title, w.chat_type
+                FROM workspace_members wm
+                JOIN workspaces w ON wm.workspace_id = w.id
+                ORDER BY wm.id ASC
+            """)
+            wm_rows = cursor.fetchall()
+            summary["obsolete_members"]["scanned"] = len(wm_rows)
+            for m in wm_rows:
+                m_uid = m["telegram_user_id"]
+                w_chat = str(m["chat_id"]).strip() if m["chat_id"] is not None else ""
+                # Under the one-person model, members rows placing non-owners inside another user's workspace are obsolete
+                if owner_id and m_uid == owner_id:
+                    continue
+                if w_chat and str(m_uid) == w_chat:
+                    continue
+                summary["obsolete_members"]["flagged"] += 1
+                summary["obsolete_members"]["details"].append({
+                    "id": m["id"],
+                    "workspace_id": m["workspace_id"],
+                    "workspace_title": m["workspace_title"],
+                    "telegram_user_id": m_uid,
+                    "username": m["username"],
+                    "display_name": m["display_name"],
+                    "role": m["role"],
+                    "chat_id": w_chat,
+                    "reason": f"Non-owner user {m_uid} present in foreign workspace '{m['workspace_title']}' (chat_id={w_chat})"
+                })
 
         if apply:
+            try:
+                from services.balance_service import recalculate_in_connection
+                for ws_id in touched_workspaces:
+                    if ws_id in active_ws_ids:
+                        recalculate_in_connection(conn, workspace_id=ws_id)
+            except Exception:
+                pass
             conn.commit()
 
         return summary
@@ -237,20 +395,27 @@ def main():
         print(f"[{table.upper()}]")
         print(f"  * Total Scanned: {t_data['scanned']}")
         print(f"  * {retag_label}: {t_data['retagged']}")
-        print(f"  * Skipped:")
-        print(f"      - Already matched: {t_data['skipped']['already_matched']}")
-        print(f"      - Origin-less (no chat id): {t_data['skipped']['origin_less']}")
-        print(f"      - No active workspace match: {t_data['skipped']['no_matching_workspace']}")
-        print(f"      - Ambiguous match (>1 workspace): {t_data['skipped']['ambiguous_matching_workspaces']}")
+        print(f"  * Skipped breakdown: {dict(t_data['skipped'])}")
         if t_data["details"]:
-            print(f"  * Sample items:")
-            for d in t_data["details"][:10]:
-                if d.get("status") in ("retagged", "would_retag"):
-                    print(f"      [#{d['id']}] chat={d['chat_id']} : {d['from_workspace']} -> {d['to_workspace']} ({d['workspace_title']})")
-                else:
-                    print(f"      [#{d['id']}] {d.get('reason')} (current={d.get('current_workspace')})")
-            if len(t_data["details"]) > 10:
-                print(f"      ... and {len(t_data['details']) - 10} more.")
+            print(f"  * Row Details (old workspace_id -> new workspace_id + reason):")
+            for d in t_data["details"]:
+                from_ws = d.get('from_workspace') or '<none>'
+                to_ws = d.get('to_workspace') or '<none>'
+                reason = d.get('reason') or 'unknown'
+                print(f"      [#{d['id']}] {from_ws} -> {to_ws} + {reason}")
+        print()
+
+    if "obsolete_members" in result:
+        m_data = result["obsolete_members"]
+        print(f"[OBSOLETE MEMBERS (REVIEW ONLY - NOT DELETED)]")
+        print(f"  * Total Scanned: {m_data['scanned']}")
+        print(f"  * Foreign/Obsolete Members Flagged: {m_data['flagged']}")
+        if m_data["details"]:
+            print(f"  * Flagged Members for Owner Review:")
+            for d in m_data["details"][:10]:
+                print(f"      [User {d['telegram_user_id']}] role={d['role']} in '{d['workspace_title']}' (ws={d['workspace_id']})")
+            if len(m_data["details"]) > 10:
+                print(f"      ... and {len(m_data['details']) - 10} more.")
         print()
 
     if not args.apply:

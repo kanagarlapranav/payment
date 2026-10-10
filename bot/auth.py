@@ -31,10 +31,10 @@ READ_ONLY_COMMANDS = {
 }
 
 ADMIN_COMMANDS = {
-    "edit", "delete", "setbalance", "export", "report", "statement",
+    "edit", "delete", "setbalance",
     "restore", "importbackup", "backup", "backupnow", "undo", "revert", "setbudget", "addmenu", "delmenu",
     "cafeedit", "editcafe", "dashboard", "setmodel", "model",
-    "gemini", "geministatus", "quota", "ai", "insights"
+    "gemini", "geministatus", "quota", "ai", "insights", "settings", "config"
 }
 
 # Command to Minimum Role Level Policy
@@ -50,13 +50,12 @@ COMMAND_ROLE_POLICY = {
     "status": "viewer", "members": "viewer", "workspace": "viewer", "workspaces": "viewer",
     "join": "viewer",
 
-    # Member & above (Mutation: Logging Payments, Self-Edit/Delete, Self-Undo)
+    # Member & above (Mutation: Logging Payments, Self-Edit/Delete, Self-Undo, Self-Export)
     "quick_add": "member",
     "edit": "member", "delete": "member", "undo": "member", "revert": "member",
-    "dashboard": "member",
+    "dashboard": "member", "export": "member", "report": "member", "statement": "member",
 
     # Admin & above (Management & Mutations, AI Quota, Reports & Exports)
-    "export": "admin", "report": "admin", "statement": "admin",
     "setbudget": "admin", "addmenu": "admin",
     "delmenu": "admin", "cafeedit": "admin", "editcafe": "admin",
     "backup": "admin", "backupnow": "admin",
@@ -66,7 +65,8 @@ COMMAND_ROLE_POLICY = {
 
     # Owner only (Governance, Initial Balance, Permissions & Disaster Recovery)
     "setbalance": "owner", "restore": "owner", "importbackup": "owner",
-    "setrole": "owner", "permissions": "owner", "roles": "owner"
+    "setrole": "owner", "permissions": "owner", "roles": "owner",
+    "settings": "owner", "config": "owner"
 }
 
 # Fine-grained Callback Role Policy — SINGLE SOURCE OF TRUTH (B10 / P1-N3)
@@ -94,10 +94,9 @@ CALLBACK_ROLE_POLICY = {
     "select_delete": "member", "select_delete_cancel": "member",
     "edit_field": "member", "edit_cancel": "member",
     "delete_confirm": "member", "delete_cancel": "member", "correct_amount": "member",
-    "edit_tx": "member", "delete_tx": "member",
+    "edit_tx": "member", "delete_tx": "member", "export_file": "member",
 
     # Admin & above
-    "export_file": "admin",
     "cafe_edit": "admin", "cafe_menu_add_prompt": "admin", "cafe_menu_del_prompt": "admin",
     "cafe_del_item": "admin", "cafe_del_cancel": "admin", "backup_now": "admin",
     "rec_paid": "admin", "rec_skip": "admin", "rec_pause": "admin",
@@ -109,7 +108,11 @@ CALLBACK_ROLE_POLICY = {
     "auth_grant": "owner", "auth_deny": "owner", "perm_set": "owner",
     "perm_view": "owner", "perm_list": "owner",
     "restore_confirm": "owner", "restore_cancel": "owner",
-    "json_import_confirm": "owner", "json_import_cancel": "owner"
+    "json_import_confirm": "owner", "json_import_cancel": "owner",
+    "settings_menu": "owner", "set_def_role": "owner", "set_quick_confirm": "owner",
+    "set_access_users": "owner", "set_access_remove": "owner", "set_access_add_prompt": "owner",
+    "set_cap_tx": "owner", "set_cap_tx_val": "owner", "set_cap_month": "owner",
+    "set_cap_month_val": "owner", "set_gemini_quota": "owner", "set_gemini_quota_val": "owner"
 }
 
 WORKSPACE_CALLBACK_POLICY = CALLBACK_ROLE_POLICY
@@ -811,15 +814,11 @@ async def require_authorized(update: Update, context: Optional[ContextTypes.DEFA
                     f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
                     f"💬 <b>Chat Type:</b> <code>{chat_type}</code>\n"
                     f"📅 <b>Time:</b> {time_str}\n\n"
-                    "<i>Select permission level to grant or deny access:</i>"
+                    "<i>Approving activates the requester's own personal ledger:</i>"
                 )
                 markup = InlineKeyboardMarkup([
                     [
-                        InlineKeyboardButton("👤 Approve Member", callback_data=f"auth_grant:{user_id}:member"),
-                        InlineKeyboardButton("🛡️ Approve Admin", callback_data=f"auth_grant:{user_id}:admin")
-                    ],
-                    [
-                        InlineKeyboardButton("👁️ Approve Viewer", callback_data=f"auth_grant:{user_id}:viewer"),
+                        InlineKeyboardButton("✅ Approve", callback_data=f"auth_grant:{user_id}"),
                         InlineKeyboardButton("❌ Reject / Block", callback_data=f"auth_deny:{user_id}")
                     ]
                 ])

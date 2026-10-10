@@ -32,7 +32,7 @@ from bot.keyboards import (
 from ocr.extractor import perform_ocr, perform_ocr_async
 from ocr.gemini_vision import is_gemini_available, extract_transaction_with_gemini
 from services.gdrive_service import is_gdrive_available, upload_receipt_to_drive, upload_backup_to_drive
-from services.transaction_service import process_transaction, commit_transaction
+from services.transaction_service import process_transaction, commit_transaction, LimitExceededError
 from services.balance_service import recalculate_all_balances, get_today_summary, get_overall_summary
 from services.backup_service import backup_to_telegram
 from database.models import Transaction
@@ -290,13 +290,25 @@ def format_receipt_card(transaction, dup_warning: str = None) -> str:
     bank_name = transaction.bank_name or transaction.payment_app or "UPI"
     ref_suffix = f" · Ref …{str(transaction.reference_number)[-4:]}" if transaction.reference_number and len(str(transaction.reference_number)) >= 4 else ""
     
+    ws_line = None
+    ws_id = getattr(transaction, 'workspace_id', None)
+    if ws_id:
+        from database.queries import get_workspace_by_id
+        ws_obj = get_workspace_by_id(ws_id)
+        if ws_obj and ws_obj.title:
+            ws_line = f"🏢 <b>Ledger:</b> {html.escape(ws_obj.title)}"
+
     lines = [
         "🧾 <b>Payment detected</b>",
         "━━━━━━━━━━━━━━",
+    ]
+    if ws_line:
+        lines.append(ws_line)
+    lines.extend([
         f"💸 <b>{amt_str}</b> {arrow} <b>{html.escape(person)}</b>",
         f"🏷 {html.escape(cat)}   📅 {html.escape(d_str)}",
         f"🏦 {html.escape(bank_name)}{html.escape(ref_suffix)}"
-    ]
+    ])
     if dup_warning:
         lines.append(f"\n{dup_warning}")
     return "\n".join(lines)
@@ -639,12 +651,16 @@ CALLBACK_PARAM_SPECS = {
     "rec_del": [int],
     "rec_cancel": [int],
     "rec_delete": [int],
-    "auth_grant": [int, str],
+    "auth_grant": [int],
     "auth_deny": [int],
     "perm_view": [int],
     "perm_set": [int, str],
     "perm_remove": [int],
     "perm_remove_confirm": [int],
+    "set_access_remove": [int],
+    "set_cap_tx_val": [str],
+    "set_cap_month_val": [str],
+    "set_gemini_quota_val": [int],
     "close_month": [int, int],
     "tx_view": [int],
     "dup_tx": [int],
@@ -1238,7 +1254,15 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         if not getattr(transaction, 'telegram_user_id', None) and query.from_user and getattr(query.from_user, 'id', None):
             transaction.telegram_user_id = int(query.from_user.id)
 
-        success = commit_transaction(transaction, allow_duplicate=is_force)
+        try:
+            success = commit_transaction(transaction, allow_duplicate=is_force)
+        except LimitExceededError as e:
+            try:
+                await query.answer("⛔ Limit reached", show_alert=True)
+            except Exception:
+                pass
+            await safe_edit_callback_message(query, str(e), reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+            return
         if success:
             try:
                 ans = query.answer("✅ Payment Saved!", show_alert=False)
@@ -1292,8 +1316,16 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
                 date_display += f", {transaction.transaction_time}"
             arrow = "←" if transaction.transaction_type == "RECEIVED" else "→"
             
+            ws_line = ""
+            if ws_id:
+                from database.queries import get_workspace_by_id
+                ws_obj = get_workspace_by_id(ws_id)
+                if ws_obj and ws_obj.title:
+                    ws_line = f"🏢 <b>Ledger:</b> {html.escape(ws_obj.title)}\n"
+
             saved_text = (
                 f"✅ <b>Payment Saved! #{transaction.id}</b>\n"
+                f"{ws_line}"
                 "━━━━━━━━━━━━━━\n"
                 f"💸 <b>{format_currency(transaction.amount)}</b> {arrow} <b>{html.escape(transaction.person_name or 'Unknown')}</b>\n"
                 f"🏷 {html.escape(transaction.category or 'General')}   📅 {html.escape(date_display)}\n"
@@ -1537,7 +1569,15 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             if not is_global_owner and not (m and m.is_active and getattr(m, 'status', 'active') == 'active'):
                 await query.answer("⛔ You are not an active member of that workspace.", show_alert=True)
                 return
+
             chat_id = getattr(update.effective_chat, 'id', None)
+            if not is_global_owner:
+                from database.queries import get_workspace_by_chat_id
+                user_dm_ws = get_workspace_by_chat_id(chat_id) if chat_id is not None else None
+                if not user_dm_ws or target_ws.id != user_dm_ws.id:
+                    await query.answer("⛔ That ledger is not available to you.", show_alert=True)
+                    return
+
             default_ws_id = get_default_workspace_id()
             if (chat_id is not None and target_ws.chat_id == chat_id) or target_ws.id == default_ws_id:
                 set_user_active_workspace(user_id, None)
@@ -1603,9 +1643,11 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             await query.answer("⛔ Only the bot owner can approve access.", show_alert=True)
             return
         target_uid = int(parts[1])
-        role = parts[2].lower() if len(parts) > 2 else "member"
-        if role not in ('member', 'admin', 'viewer'):
-            role = 'member'
+        # Under one-person-per-workspace (Part 3), drop the role part from the callback (auth_grant:{user_id}).
+        # Always grant the fixed base role 'member' in the requester's own DM workspace.
+        # Backward compatibility: old notifications carrying auth_grant:{uid}:member|admin|viewer
+        # have their role part ignored, mapping safely to 'member' without crashing.
+        role = "member"
         from database.queries import (
             get_access_request, update_access_request_status, set_user_permission_and_role,
             get_workspace_by_chat_id, get_or_create_workspace, add_workspace_member,
@@ -1633,7 +1675,26 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
                 ws = get_or_create_workspace(
                     chat_id=chat_id,
                     chat_type=chat_type,
-                    title=f"{display_name} (DM)",
+                    title=f"{display_name or 'Personal'} (DM)",
+                    creator_user_id=target_uid,
+                    username=username,
+                    display_name=display_name
+                )
+            target_ws_id = ws.id
+            add_workspace_member(
+                ws.id, target_uid,
+                username=username,
+                display_name=display_name,
+                role=role
+            )
+        else:
+            # Personal DM workspace fallback for requester (chat_id == target_uid)
+            ws = get_workspace_by_chat_id(target_uid)
+            if not ws:
+                ws = get_or_create_workspace(
+                    chat_id=target_uid,
+                    chat_type='private',
+                    title=f"{display_name or 'Personal'} (DM)",
                     creator_user_id=target_uid,
                     username=username,
                     display_name=display_name
@@ -1687,10 +1748,11 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         )
 
         # Notify approved user
-        if chat_id:
+        notify_chat_id = chat_id or target_uid
+        if notify_chat_id:
             try:
                 await context.bot.send_message(
-                    chat_id=int(chat_id),
+                    chat_id=int(notify_chat_id),
                     text=(
                         f"🎉 <b>Access Approved!</b>\n\n"
                         f"The administrator has approved your access with <b>{role.title()}</b> permissions.\n\n"
@@ -1786,7 +1848,6 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             return
         target_uid = int(parts[1])
         setting = parts[2].lower() if len(parts) > 2 else "member"
-        import config
         owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
         if owner_id and target_uid == int(owner_id) and setting in ('viewer', 'revoke'):
             await query.answer("⛔ The workspace owner's access cannot be revoked.", show_alert=True)
@@ -1821,7 +1882,6 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             await query.answer("⛔ Only the owner can remove members.", show_alert=True)
             return
         target_uid = int(parts[1])
-        import config
         owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
         if owner_id and target_uid == int(owner_id):
             await query.answer("⛔ You cannot remove the workspace owner.", show_alert=True)
@@ -1860,6 +1920,193 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
         else:
             await query.answer("❌ Failed to remove member.", show_alert=True)
+        return
+
+    # --- Workspace & Policy Settings Callbacks (Owner Only) ---
+    elif action == "settings_menu":
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage settings.", show_alert=True)
+            return
+        from bot.commands import render_settings_panel
+        text, markup = render_settings_panel(ws_id)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "set_def_role":
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage settings.", show_alert=True)
+            return
+        from config import get_default_member_role
+        from database.queries import set_workspace_setting
+        from services.audit_service import log_audit_event
+        curr_role = get_default_member_role(workspace_id=ws_id)
+        new_role = "viewer" if curr_role == "member" else "member"
+        set_workspace_setting(ws_id, 'default_member_role', new_role)
+        actor_id = getattr(query.from_user, 'id', 0)
+        log_audit_event(workspace_id=ws_id, actor_user_id=actor_id, actor_role='owner', action='settings_update', resource='setting:default_member_role', details={'default_member_role': new_role})
+        try:
+            await query.answer(f"✅ Default role: {new_role.upper()}")
+        except Exception:
+            pass
+        from bot.commands import render_settings_panel
+        text, markup = render_settings_panel(ws_id)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "set_quick_confirm":
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage settings.", show_alert=True)
+            return
+        from config import get_quick_add_confirmation
+        from database.queries import set_workspace_setting
+        from services.audit_service import log_audit_event
+        curr_val = get_quick_add_confirmation(workspace_id=ws_id)
+        new_val = not curr_val
+        set_workspace_setting(ws_id, 'quick_add_confirmation', "1" if new_val else "0")
+        actor_id = getattr(query.from_user, 'id', 0)
+        log_audit_event(workspace_id=ws_id, actor_user_id=actor_id, actor_role='owner', action='settings_update', resource='setting:quick_add_confirmation', details={'quick_add_confirmation': new_val})
+        try:
+            await query.answer(f"⚡ Quick-Add Confirmation: {'ON' if new_val else 'OFF'}")
+        except Exception:
+            pass
+        from bot.commands import render_settings_panel
+        text, markup = render_settings_panel(ws_id)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "set_access_users":
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage settings.", show_alert=True)
+            return
+        from bot.commands import render_restricted_users_panel
+        text, markup = render_restricted_users_panel(ws_id)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "set_access_remove":
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage settings.", show_alert=True)
+            return
+        target_uid = int(parts[1])
+        from config import get_restricted_user_ids
+        from database.queries import set_workspace_setting
+        from services.audit_service import log_audit_event
+        curr_list = get_restricted_user_ids(workspace_id=ws_id)
+        curr_list = [x for x in curr_list if x != target_uid]
+        set_workspace_setting(ws_id, 'restricted_user_ids', ",".join(str(x) for x in curr_list))
+        actor_id = getattr(query.from_user, 'id', 0)
+        log_audit_event(workspace_id=ws_id, actor_user_id=actor_id, actor_role='owner', action='settings_update', resource=f'user:{target_uid}', details={'action': 'unrestrict', 'restricted_user_ids': curr_list})
+        try:
+            await query.answer(f"✅ Removed {target_uid} from restricted list.")
+        except Exception:
+            pass
+        from bot.commands import render_restricted_users_panel
+        text, markup = render_restricted_users_panel(ws_id)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "set_access_add_prompt":
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage settings.", show_alert=True)
+            return
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        prompt_text = (
+            "➕ <b>Add Restricted User</b>\n\n"
+            "Restricted users are strictly prohibited from receiving Owner status.\n\n"
+            "To add a restricted user, type:\n"
+            "<code>/settings restrict &lt;Telegram_User_ID&gt;</code>\n\n"
+            "<i>Example:</i> <code>/settings restrict 8343764796</code>"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Back to Restricted Users", callback_data="set_access_users")]
+        ])
+        await safe_edit_callback_message(query, prompt_text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "set_cap_tx":
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage settings.", show_alert=True)
+            return
+        from bot.commands import render_cap_tx_panel
+        text, markup = render_cap_tx_panel(ws_id)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "set_cap_tx_val":
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage settings.", show_alert=True)
+            return
+        val_str = parts[1]
+        from database.queries import set_workspace_setting
+        from services.audit_service import log_audit_event
+        set_workspace_setting(ws_id, 'per_tx_cap', val_str)
+        actor_id = getattr(query.from_user, 'id', 0)
+        log_audit_event(workspace_id=ws_id, actor_user_id=actor_id, actor_role='owner', action='settings_update', resource='setting:per_tx_cap', details={'per_tx_cap': val_str})
+        f_cap = format_currency(float(val_str)) if float(val_str) > 0 else "Unlimited"
+        try:
+            await query.answer(f"✅ Per-tx cap: {f_cap}")
+        except Exception:
+            pass
+        from bot.commands import render_settings_panel
+        text, markup = render_settings_panel(ws_id)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "set_cap_month":
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage settings.", show_alert=True)
+            return
+        from bot.commands import render_cap_month_panel
+        text, markup = render_cap_month_panel(ws_id)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "set_cap_month_val":
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage settings.", show_alert=True)
+            return
+        val_str = parts[1]
+        from database.queries import set_workspace_setting
+        from services.audit_service import log_audit_event
+        set_workspace_setting(ws_id, 'monthly_spending_cap', val_str)
+        actor_id = getattr(query.from_user, 'id', 0)
+        log_audit_event(workspace_id=ws_id, actor_user_id=actor_id, actor_role='owner', action='settings_update', resource='setting:monthly_spending_cap', details={'monthly_spending_cap': val_str})
+        f_cap = format_currency(float(val_str)) if float(val_str) > 0 else "Unlimited"
+        try:
+            await query.answer(f"✅ Monthly cap: {f_cap}")
+        except Exception:
+            pass
+        from bot.commands import render_settings_panel
+        text, markup = render_settings_panel(ws_id)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "set_gemini_quota":
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage settings.", show_alert=True)
+            return
+        from bot.commands import render_gemini_quota_panel
+        text, markup = render_gemini_quota_panel(ws_id)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        return
+
+    elif action == "set_gemini_quota_val":
+        if not is_owner(update):
+            await query.answer("⛔ Only the bot owner can manage settings.", show_alert=True)
+            return
+        val_str = parts[1]
+        from database.queries import set_workspace_setting
+        from services.audit_service import log_audit_event
+        set_workspace_setting(ws_id, 'gemini_daily_quota', val_str)
+        actor_id = getattr(query.from_user, 'id', 0)
+        log_audit_event(workspace_id=ws_id, actor_user_id=actor_id, actor_role='owner', action='settings_update', resource='setting:gemini_daily_quota', details={'gemini_daily_quota': val_str})
+        try:
+            await query.answer(f"✅ Gemini quota: {val_str} req/day")
+        except Exception:
+            pass
+        from bot.commands import render_settings_panel
+        text, markup = render_settings_panel(ws_id)
+        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
         return
 
     # --- 2. Quick Undo & Quick Add Actions ---
@@ -1921,10 +2168,21 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             workspace_id=ws_id,
             telegram_user_id=int(query.from_user.id) if (query.from_user and getattr(query.from_user, 'id', None)) else None
         )
-        success = commit_transaction(tx)
+        try:
+            success = commit_transaction(tx)
+        except LimitExceededError as e:
+            await query.edit_message_text(str(e), reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+            return
         if success:
+            ws_line = ""
+            if ws_id:
+                from database.queries import get_workspace_by_id
+                ws_obj = get_workspace_by_id(ws_id)
+                if ws_obj and ws_obj.title:
+                    ws_line = f"🏢 <b>Ledger:</b> {html.escape(ws_obj.title)}\n"
             await query.edit_message_text(
                 f"✅ <b>Payment Saved! #{tx.id}</b>\n"
+                f"{ws_line}"
                 "━━━━━━━━━━━━━━\n"
                 f"💸 <b>{format_currency(amt)}</b> → <b>{html.escape(payee)}</b>\n"
                 f"🏷 {html.escape(cat)}   📅 Today, {now_dt.strftime('%I:%M %p')}\n"
@@ -1951,7 +2209,12 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             transaction.telegram_user_id = int(query.from_user.id)
             
         if action == "confirm_tx":
-            success = commit_transaction(transaction)
+            try:
+                success = commit_transaction(transaction)
+            except LimitExceededError as e:
+                await query.edit_message_text(str(e), reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+                pop_pending_transaction(tx_id, workspace_id=ws_id)
+                return
             if success:
                 response = format_success_message(transaction)
                 await query.edit_message_text(response, parse_mode='HTML')
@@ -2275,6 +2538,19 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             except Exception:
                 pass
             return
+        if not is_owner(update):
+            from database.queries import get_workspace_by_chat_id
+            user_dm_ws = get_workspace_by_chat_id(query.message.chat_id)
+            if not user_dm_ws or ws_id != user_dm_ws.id:
+                try:
+                    await query.answer("⛔ That ledger is not available to you.", show_alert=True)
+                except Exception:
+                    pass
+                return
+        try:
+            await context.bot.send_chat_action(chat_id=query.message.chat_id, action="upload_document")
+        except Exception:
+            pass
         fmt = parts[1]
         if fmt == "pdf":
             from bot.commands import send_pdf_report
@@ -2483,8 +2759,16 @@ def format_success_message(t) -> str:
     from services.budget_service import check_budget_alert
     budget_alert = check_budget_alert(t.amount, t.transaction_type)
 
+    ws_part = ""
+    if getattr(t, 'workspace_id', None):
+        from database.queries import get_workspace_by_id
+        ws_obj = get_workspace_by_id(t.workspace_id)
+        if ws_obj and ws_obj.title:
+            ws_part = f"🏢 <b>Ledger:</b> {html.escape(ws_obj.title)}\n"
+
     return (
         f"✅ <b>{icon}</b>\n\n"
+        f"{ws_part}"
         f"👤 <b>{person_label}:</b> {person_name}\n"
         f"💵 <b>Amount:</b> <b>{amt}</b>{app_part}\n"
         f"📅 <b>Date:</b> {date_str}{time_part}"
@@ -3202,11 +3486,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             tx.sender_name = name.title()
 
-        success = commit_transaction(tx)
+        try:
+            success = commit_transaction(tx)
+        except LimitExceededError as e:
+            await update.message.reply_text(str(e), parse_mode='HTML')
+            return
         if success:
             arrow = "←" if tx_type == "RECEIVED" else "→"
+            ws_line = ""
+            if ws_id:
+                from database.queries import get_workspace_by_id
+                ws_obj = get_workspace_by_id(ws_id)
+                if ws_obj and ws_obj.title:
+                    ws_line = f"🏢 <b>Ledger:</b> {html.escape(ws_obj.title)}\n"
             await update.message.reply_text(
                 f"✅ <b>Payment Saved! #{tx.id}</b>\n"
+                f"{ws_line}"
                 "━━━━━━━━━━━━━━\n"
                 f"💸 <b>{format_currency(amt)}</b> {arrow} <b>{html.escape(name.title())}</b>\n"
                 f"🏷 {html.escape(cat)}   📅 Today, {now_dt.strftime('%I:%M %p')}\n"
@@ -3220,6 +3515,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Try parsing text as a transaction
     try:
+        try:
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        except Exception:
+            pass
         transaction, confidence = process_transaction(text, "", message_id, chat_id)
         if transaction.amount and transaction.amount > 0 and transaction.transaction_type:
             if not await require_member(update):
@@ -3234,7 +3533,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if is_cafeteria_payment(transaction.person_name, transaction.upi_id, transaction.ocr_text):
                     transaction.category = "Food & Dining"
 
-                success = commit_transaction(transaction)
+                try:
+                    success = commit_transaction(transaction)
+                except LimitExceededError as e:
+                    await update.message.reply_text(str(e), parse_mode='HTML')
+                    return
                 if success:
                     response = format_success_message(transaction)
                     markup = None
