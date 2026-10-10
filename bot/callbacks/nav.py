@@ -53,7 +53,8 @@ logger = logging.getLogger(__name__)
 async def nav_home(query, context, parts, ws_id, ws_ctx, update=None):
     caller_id = query.from_user.id if query.from_user else None
     view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin')) else caller_id
-    text = render_home_menu_text(workspace_id=ws_id, user_id=view_user_id)
+    is_switched = bool(ws_ctx and ws_ctx.workspace and getattr(ws_ctx.workspace, 'chat_id', None) is not None and ws_ctx.chat_id != ws_ctx.workspace.chat_id)
+    text = render_home_menu_text(workspace_id=ws_id, user_id=view_user_id, switched=is_switched)
     await query.edit_message_text(text, reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
 
 

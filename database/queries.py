@@ -323,14 +323,18 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
                 )
                 effective_default_ws_id = canonical_default_ws_id
 
-            # Adopt all legacy, orphaned, or unassigned transactions into the effective default workspace:
+            # Check for orphaned rows without altering them (fail loud, never re-home silently)
             cursor.execute("""
-                UPDATE OR IGNORE transactions 
-                SET workspace_id = ? 
+                SELECT COUNT(*) FROM transactions 
                 WHERE workspace_id IS NULL 
                    OR workspace_id = '' 
                    OR workspace_id NOT IN (SELECT id FROM workspaces)
-            """, (effective_default_ws_id,))
+            """)
+            orphaned_tx_count = cursor.fetchone()[0]
+            if orphaned_tx_count > 0:
+                logger.warning(
+                    f"orphaned rows detected, left in place for manual repair: {orphaned_tx_count} orphaned rows in transactions"
+                )
 
             for g_row in group_workspaces_list:
                 grp_id = g_row['id']

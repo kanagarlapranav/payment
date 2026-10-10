@@ -641,10 +641,18 @@ def test_authorized_group_member_dm_history_access():
         u_dm.callback_query = None
 
         assert is_authorized_user(u_dm) is True
+        # Under Fix A, unswitched DM resolves to member's own workspace (not the shared group)
         ctx = get_workspace_context(u_dm)
         assert ctx is not None
-        assert ctx.workspace_id == ws_id
-        assert ctx.role == "admin"
+        assert ctx.workspace_id != ws_id
+
+        # When explicitly switched via /workspace, member operates on the group workspace
+        from bot.auth import set_user_active_workspace
+        set_user_active_workspace(member_id, ws_id)
+        ctx_switched = get_workspace_context(u_dm)
+        assert ctx_switched is not None
+        assert ctx_switched.workspace_id == ws_id
+        assert ctx_switched.role == "admin"
 
         cmd_ctx = MagicMock()
         cmd_ctx.args = []

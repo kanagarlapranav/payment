@@ -21,8 +21,8 @@ from bot.keyboards import (
     get_quick_add_keyboard, get_settings_menu_keyboard
 )
 
-def render_home_menu_text(workspace_id: str = None, user_id: int = None) -> str:
-    """Generates the main Home Menu dashboard card with optional per-user scoping."""
+def render_home_menu_text(workspace_id: str = None, user_id: int = None, switched: bool = False) -> str:
+    """Generates the main Home Menu dashboard card with optional per-user scoping and active ledger indicator."""
     now = get_current_time_in_tz()
     overall = get_overall_summary(workspace_id=workspace_id, user_id=user_id)
     balance = overall.current_balance
@@ -32,6 +32,12 @@ def render_home_menu_text(workspace_id: str = None, user_id: int = None) -> str:
     from services.budget_service import get_budget_info
     b_info = get_budget_info(now.year, now.month, workspace_id=workspace_id)
     
+    from database.queries import get_workspace_by_id
+    ws_obj = get_workspace_by_id(workspace_id) if workspace_id else None
+    ws_title = html.escape(ws_obj.title if ws_obj and ws_obj.title else "Workspace")
+    switched_tag = " <i>[Switched]</i>" if switched else ""
+    ledger_line = f"🏢 <b>Ledger:</b> {ws_title}{switched_tag}\n"
+
     month_names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     m_name = month_names[now.month]
     
@@ -43,6 +49,7 @@ def render_home_menu_text(workspace_id: str = None, user_id: int = None) -> str:
     net_sign = "+" if net_today >= 0 else "-"
     
     return (
+        f"{ledger_line}"
         f"⚡ <b>Payment Tracker Dashboard</b>\n"
         f"━━━━━━━━━━━━━━\n"
         f"💰 <b>Balance:</b> <b>{format_currency(balance)}</b>\n"
@@ -345,7 +352,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ws_id = ctx.workspace_id if ctx else None
     caller_id = update.effective_user.id if update.effective_user else None
     view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
-    menu_text = render_home_menu_text(workspace_id=ws_id, user_id=view_user_id)
+    is_switched = bool(ctx and ctx.workspace and getattr(ctx.workspace, 'chat_id', None) is not None and ctx.chat_id != ctx.workspace.chat_id)
+    menu_text = render_home_menu_text(workspace_id=ws_id, user_id=view_user_id, switched=is_switched)
     await update.message.reply_text(menu_text, reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
 
 async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

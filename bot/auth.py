@@ -517,18 +517,12 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
 
         ws = None
         # In private DMs: if caller has not switched workspaces, use the default workspace (e.g. Payment (Group))
-        # if they are global owner or an active admin of it. Non-owner members get their own isolated personal workspace!
+        # strictly for the global bot owner. All other users (members, admins) use their private DM chat's own
+        # workspace unless they have explicitly switched workspaces via /workspace.
         if chat_type == 'private':
             def_ws_id = get_default_workspace_id()
-            if def_ws_id:
-                if is_global_owner:
-                    ws = get_workspace_by_id(def_ws_id)
-                else:
-                    def_rec = get_workspace_member_record(def_ws_id, user_id)
-                    if def_rec and def_rec.is_active and getattr(def_rec, 'status', 'active') == 'active' and def_rec.role == 'admin':
-                        ws = get_workspace_by_id(def_ws_id)
-                    else:
-                        ws = get_workspace_by_chat_id(chat_id)
+            if def_ws_id and is_global_owner:
+                ws = get_workspace_by_id(def_ws_id)
             else:
                 ws = get_workspace_by_chat_id(chat_id)
         else:

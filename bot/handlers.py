@@ -3158,7 +3158,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.strip().lower() in ('menu', 'home', 'start'):
         caller_id = update.effective_user.id if update.effective_user else None
         view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin')) else caller_id
-        await update.message.reply_text(render_home_menu_text(workspace_id=ws_id, user_id=view_user_id), reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
+        is_switched = bool(ws_ctx and ws_ctx.workspace and getattr(ws_ctx.workspace, 'chat_id', None) is not None and ws_ctx.chat_id != ws_ctx.workspace.chat_id)
+        await update.message.reply_text(render_home_menu_text(workspace_id=ws_id, user_id=view_user_id, switched=is_switched), reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
         return
 
     # Check short text entry: e.g. "120 dosa", "+500 salary", "-45 tea", "coffee 15"
