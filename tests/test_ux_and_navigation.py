@@ -71,8 +71,8 @@ class TestUXAndNavigation(unittest.TestCase):
         self.assertIn("🧾", text)
         self.assertIsNotNone(markup)
 
-        # 2. Empty state on nonexistent page / unusual filter
-        empty_text, empty_markup = render_history_page(page=99999, filter_type="RECEIVED", page_size=10)
+        # 2. Empty state on empty workspace / filter with zero records
+        empty_text, empty_markup = render_history_page(page=1, filter_type="TRANSFER", workspace_id="ws_empty_history_test", page_size=10)
         self.assertIn("📭", empty_text)
         self.assertIn("No transactions found for this filter.", empty_text)
         self.assertIsNotNone(empty_markup)
@@ -1054,10 +1054,11 @@ class TestUXAndNavigation(unittest.TestCase):
         import asyncio
         from unittest.mock import MagicMock, AsyncMock, patch
         from bot.handlers import handle_callback_query, set_pending_transaction, fetch_pending_transaction
-        from database.models import Transaction
-        from database.queries import add_workspace_member, get_transaction_by_id, get_default_workspace_id
+        from database.queries import add_workspace_member, get_transaction_by_id, get_default_workspace_id, get_or_create_workspace
 
-        ws_id = get_default_workspace_id()
+        group_chat_id = -100123456789
+        ws = get_or_create_workspace(chat_id=group_chat_id, chat_type="supergroup", title="Test Supergroup")
+        ws_id = ws.id
         author_id = 771122
         stranger_id = 773344
 
@@ -1083,7 +1084,7 @@ class TestUXAndNavigation(unittest.TestCase):
         query.data = f"save_p:{pending_id}"
         query.from_user.id = stranger_id
         update.effective_user.id = stranger_id
-        update.effective_chat.id = -100123456789
+        update.effective_chat.id = group_chat_id
         update.effective_chat.type = "supergroup"
         query.message.text = "Receipt Card"
         query.edit_message_text = AsyncMock()

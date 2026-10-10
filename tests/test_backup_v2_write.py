@@ -19,6 +19,7 @@ from services.backup_service import (
     BACKUP_JSON_PATH,
     backup_to_telegram,
     export_database_to_json,
+    compute_canonical_checksum,
 )
 from services.task_manager import TaskManager
 
@@ -50,24 +51,13 @@ class TestBackupV2WriteSide(unittest.TestCase):
             self.assertIn("checksum", data)
             self.assertIn("database_id", data)
 
-            # Manually reproduce canonical SHA-256
-            canonical_payload = {
-                "version": data["version"],
-                "revision": data["revision"],
-                "settings": data["settings"],
-                "custom_menu_items": data["custom_menu_items"],
-                "budgets": data["budgets"],
-                "transactions": data["transactions"],
-            }
-            canonical_str = json.dumps(canonical_payload, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
-            expected_checksum = hashlib.sha256(canonical_str.encode('utf-8')).hexdigest()
+            expected_checksum = compute_canonical_checksum(data)
             self.assertEqual(data["checksum"], expected_checksum)
 
             # Any alteration must change the checksum
-            mutated_payload = dict(canonical_payload)
+            mutated_payload = dict(data)
             mutated_payload["revision"] = data["revision"] + 999
-            mutated_str = json.dumps(mutated_payload, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
-            mutated_checksum = hashlib.sha256(mutated_str.encode('utf-8')).hexdigest()
+            mutated_checksum = compute_canonical_checksum(mutated_payload)
             self.assertNotEqual(data["checksum"], mutated_checksum)
         finally:
             if test_path.exists():

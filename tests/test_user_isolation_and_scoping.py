@@ -76,6 +76,8 @@ def test_private_dm_routing_isolation():
 
 def test_per_user_scoping_in_shared_workspace():
     """Verifies that transactions and summaries in a shared workspace are cleanly scoped per user."""
+    from utils.dates import get_current_time_in_tz
+    today_str = str(get_current_time_in_tz().date())
     owner_id = 8379948573
     friend_id = 8343764796
     ws = get_or_create_workspace(chat_id=-100999111222, chat_type="group", title="Shared Group Test")
@@ -87,7 +89,7 @@ def test_per_user_scoping_in_shared_workspace():
             transaction_type="SENT",
             person_name="Owner Grocery",
             category="Food & Dining",
-            transaction_date="2026-10-09",
+            transaction_date=today_str,
             workspace_id=ws.id,
             telegram_user_id=owner_id
         )
@@ -99,7 +101,7 @@ def test_per_user_scoping_in_shared_workspace():
             transaction_type="SENT",
             person_name="Friend Dosa",
             category="Food & Dining",
-            transaction_date="2026-10-09",
+            transaction_date=today_str,
             workspace_id=ws.id,
             telegram_user_id=friend_id
         )
