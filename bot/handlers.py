@@ -2,12 +2,14 @@ from telegram import Update
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 import os
+import time
 import uuid
 import json
 import asyncio
 import html
 import re
 from datetime import datetime, timedelta, date
+import config
 from config import TELEGRAM_USER_ID, IMAGE_DIR, logger
 from bot.auth import (
     require_authorized, require_admin, require_owner, require_member, is_owner, is_authorized_user,
@@ -749,7 +751,20 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         except Exception:
             pass
     
-    ws_id = ws_ctx.workspace_id if ws_ctx else get_default_workspace_id()
+    if not ws_ctx:
+        chat_id_val = getattr(update.effective_chat, 'id', None)
+        if not isinstance(chat_id_val, int):
+            from database.queries import get_default_workspace_id
+            ws_id = get_default_workspace_id()
+        else:
+            logger.warning(f"Could not resolve workspace context for action '{action}'. Rejecting callback.")
+            try:
+                await query.answer("❌ Workspace context not found.", show_alert=True)
+            except Exception:
+                pass
+            return
+    else:
+        ws_id = ws_ctx.workspace_id
 
     # Enforce unified undo authorization at dispatch (B9 / P1-N2)
     if action in ("undo_action", "undo_confirm", "undo_cancel"):
@@ -865,17 +880,23 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
 
     elif action == "restore_confirm":
         from services.backup_service import import_database_from_json, backup_to_telegram
-        from database.queries import get_all_transactions
-        await query.edit_message_text("⏳ <b>Restoring ledger from backup...</b>", parse_mode='HTML')
-        result = await asyncio.to_thread(import_database_from_json)
+        from database.queries import get_all_transactions, get_default_workspace_id
+        default_ws = get_default_workspace_id()
+        is_custom_ws = (ws_id and ws_id != default_ws)
+        target_ws_id = ws_id if is_custom_ws else None
+        scope_label = f"Workspace ({ws_id})" if is_custom_ws else "Global Database"
+        await query.edit_message_text(f"⏳ <b>Restoring {html.escape(scope_label)} from backup...</b>", parse_mode='HTML')
+        result = await asyncio.to_thread(import_database_from_json, target_workspace_id=target_ws_id)
         if not result.get('success'):
             await query.edit_message_text(f"❌ <b>Restore Failed:</b> {html.escape(str(result.get('error')))}", parse_mode='HTML')
             return
+        await asyncio.to_thread(recalculate_all_balances, workspace_id=target_ws_id)
         await backup_to_telegram(context.bot)
-        txs = await asyncio.to_thread(get_all_transactions)
-        cur_b = format_currency(get_balance_setting())
+        txs = await asyncio.to_thread(get_all_transactions, workspace_id=target_ws_id)
+        cur_b = format_currency(get_balance_setting(workspace_id=target_ws_id))
         await query.edit_message_text(
             f"✅ <b>Database Restored Successfully!</b>\n\n"
+            f"• <b>Scope:</b> {html.escape(scope_label)}\n"
             f"• <b>{len(txs)}</b> live transactions available.\n"
             f"• <b>Current Balance:</b> {cur_b}\n\n"
             f"Use <code>/balance</code> or <code>/history</code> to view your ledger.",
@@ -1121,9 +1142,19 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             pop_pending_transaction(pending_id, workspace_id=ws_id)
 
         if not transaction:
+            other = get_pending_receipt(pending_id)
+            if other and str(getattr(other, 'workspace_id', '') or '') != str(ws_id):
+                try:
+                    ans = query.answer("⚠️ This receipt belongs to another workspace. Switch back to confirm it.", show_alert=True)
+                    if asyncio.iscoroutine(ans):
+                        await ans
+                except Exception:
+                    pass
+                return
             msg_text = (query.message.text if query.message else "") or (query.message.caption if query.message else "")
             transaction = reconstruct_transaction_from_card(msg_text)
             if transaction:
+                transaction.workspace_id = str(other.workspace_id) if other else ws_id
                 logger.info(f"Reconstructed transaction from receipt card text: {transaction}")
         if not transaction:
             try:
@@ -1239,7 +1270,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
                     user_id = None
             try:
                 from services.undo_service import record_insert_action
-                record_insert_action(transaction.id, chat_id=chat_id, user_id=user_id)
+                record_insert_action(transaction.id, chat_id=chat_id, user_id=user_id, workspace_id=ws_id)
             except Exception as u_err:
                 logger.warning(f"Could not record undo action: {u_err}")
 
@@ -1385,12 +1416,19 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         pending_id = parts[1]
         transaction = fetch_pending_transaction(pending_id, workspace_id=ws_id)
         if not transaction:
+            other = get_pending_receipt(pending_id)
+            if other and str(getattr(other, 'workspace_id', '') or '') != str(ws_id):
+                try:
+                    await query.answer("⚠️ This receipt belongs to another workspace. Switch back to confirm it.", show_alert=True)
+                except Exception:
+                    pass
+                return
             msg_text = (query.message.text if query.message else "") or (query.message.caption if query.message else "")
             transaction = reconstruct_transaction_from_card(msg_text)
             if transaction:
-                if ws_id:
-                    transaction.workspace_id = ws_id
-                set_pending_transaction(pending_id, transaction, workspace_id=ws_id)
+                provenance_ws = str(other.workspace_id) if other else ws_id
+                transaction.workspace_id = provenance_ws
+                set_pending_transaction(pending_id, transaction, workspace_id=provenance_ws)
         if not transaction:
             await safe_edit_callback_message(query, "❌ Transaction expired.", reply_markup=get_back_to_menu_keyboard())
             return
@@ -1430,8 +1468,17 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
 
         transaction = fetch_pending_transaction(pending_id, workspace_id=ws_id)
         if not transaction:
+            other = get_pending_receipt(pending_id)
+            if other and str(getattr(other, 'workspace_id', '') or '') != str(ws_id):
+                try:
+                    await query.answer("⚠️ This receipt belongs to another workspace. Switch back to confirm it.", show_alert=True)
+                except Exception:
+                    pass
+                return
             msg_text = (query.message.text if query.message else "") or (query.message.caption if query.message else "")
             transaction = reconstruct_transaction_from_card(msg_text)
+            if transaction and other:
+                transaction.workspace_id = str(other.workspace_id)
 
         creator_uid = getattr(transaction, 'telegram_user_id', None) if transaction else None
         clicker_uid = query.from_user.id if query.from_user else None
@@ -1496,7 +1543,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         target_ws = get_workspace_by_id(target_ws_id)
         if target_ws and user_id:
             m = get_workspace_member(target_ws.id, user_id)
-            is_global_owner = is_super_admin(user_id) or is_owner(update)
+            is_global_owner = is_super_admin(user_id) or (user_id is not None and str(user_id) == str(getattr(config, 'TELEGRAM_USER_ID', None)))
             if not is_global_owner and not (m and m.is_active and getattr(m, 'status', 'active') == 'active'):
                 await query.answer("⛔ You are not an active member of that workspace.", show_alert=True)
                 return
@@ -2135,7 +2182,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         from services.undo_service import perform_undo
         chat_id = update.effective_chat.id if update.effective_chat else None
         user_id = update.effective_user.id if update.effective_user else None
-        success, msg = perform_undo(chat_id=chat_id, user_id=user_id)
+        success, msg = perform_undo(chat_id=chat_id, user_id=user_id, workspace_id=ws_id)
         if success:
             try:
                 from services.backup_service import export_database_to_json
@@ -2156,7 +2203,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         from services.undo_service import perform_undo
         chat_id = update.effective_chat.id if update.effective_chat else None
         user_id = update.effective_user.id if update.effective_user else None
-        success, msg = await asyncio.to_thread(perform_undo, chat_id=chat_id, user_id=user_id)
+        success, msg = await asyncio.to_thread(perform_undo, chat_id=chat_id, user_id=user_id, workspace_id=ws_id)
         if success:
             bal = get_balance_setting(workspace_id=ws_id)
             try:
@@ -3274,6 +3321,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Prune expired staged imports (older than 10 minutes)
+        now_ts = time.time()
         _prune_pending_json_imports()
 
         from bot.auth import get_workspace_context

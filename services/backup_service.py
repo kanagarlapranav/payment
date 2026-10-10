@@ -914,12 +914,29 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
 
                 # Restore workspaces, members, and workspace_settings if present
                 for w in data_dict.get("workspaces", []):
-                    if target_ws and str(w.get('id')) != str(target_ws):
+                    w_id = w.get('id')
+                    if not w_id:
                         continue
+                    if target_ws and str(w_id) != str(target_ws):
+                        continue
+                    w_chat_id = w.get('chat_id')
+                    if w_chat_id is not None:
+                        cursor.execute("SELECT id FROM workspaces WHERE chat_id = ? AND id != ?", (w_chat_id, w_id))
+                        conflict = cursor.fetchone()
+                        if conflict:
+                            logger.warning(f"Skipping restore for workspace {w_id}: chat_id {w_chat_id} is claimed by workspace {conflict[0]}")
+                            continue
+
                     cursor.execute("""
-                        INSERT OR REPLACE INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
+                        INSERT INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (w.get('id'), w.get('chat_id'), w.get('chat_type', 'group'), w.get('title', 'Workspace'), w.get('is_active', 1), w.get('created_at', now_utc), w.get('updated_at', now_utc)))
+                        ON CONFLICT(id) DO UPDATE SET
+                            chat_id = excluded.chat_id,
+                            chat_type = excluded.chat_type,
+                            title = excluded.title,
+                            is_active = excluded.is_active,
+                            updated_at = excluded.updated_at
+                    """, (w_id, w_chat_id, w.get('chat_type', 'group'), w.get('title', 'Workspace'), w.get('is_active', 1), w.get('created_at', now_utc), w.get('updated_at', now_utc)))
 
                 from config import is_restricted_user
                 for m in data_dict.get("workspace_members", []):

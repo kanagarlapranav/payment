@@ -592,24 +592,37 @@ def setup_database():
 
 def get_custom_menu_items(workspace_id: str = None) -> list:
     """Returns custom cafeteria menu items from the database with dual-read workspace fallback."""
+    from database.queries import get_default_workspace_id
+    default_ws = get_default_workspace_id()
     with get_db_connection() as conn:
         cursor = conn.cursor()
         if workspace_id:
-            cursor.execute(
-                "SELECT id, name, price, category, is_veg, created_at FROM custom_menu_items WHERE (workspace_id = ? OR workspace_id IS NULL) ORDER BY id ASC",
-                (str(workspace_id),)
-            )
+            ws_id = str(workspace_id).strip()
+            if ws_id == default_ws:
+                cursor.execute(
+                    "SELECT id, name, price, category, is_veg, created_at FROM custom_menu_items WHERE (workspace_id = ? OR workspace_id IS NULL) ORDER BY id ASC",
+                    (ws_id,)
+                )
+            else:
+                cursor.execute(
+                    "SELECT id, name, price, category, is_veg, created_at FROM custom_menu_items WHERE workspace_id = ? ORDER BY id ASC",
+                    (ws_id,)
+                )
         else:
             cursor.execute("SELECT id, name, price, category, is_veg, created_at FROM custom_menu_items ORDER BY id ASC")
         return [dict(row) for row in cursor.fetchall()]
 
 def delete_custom_menu_item_by_id(item_id: int, workspace_id: str = None):
     """Deletes a custom cafeteria menu item by its ID with optional workspace scoping. Returns (success, item_name)."""
+    from database.queries import get_default_workspace_id
+    default_ws = get_default_workspace_id()
     with LEDGER_LOCK:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if workspace_id:
-                cursor.execute("SELECT name FROM custom_menu_items WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL)", (item_id, str(workspace_id)))
+                ws_id = str(workspace_id).strip()
+                ws_clause = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+                cursor.execute(f"SELECT name FROM custom_menu_items WHERE id = ? AND {ws_clause}", (item_id, ws_id))
             else:
                 cursor.execute("SELECT name FROM custom_menu_items WHERE id = ?", (item_id,))
             row = cursor.fetchone()
@@ -618,7 +631,9 @@ def delete_custom_menu_item_by_id(item_id: int, workspace_id: str = None):
             name = row['name']
             from database.queries import increment_revision_and_mark_dirty
             if workspace_id:
-                cursor.execute("DELETE FROM custom_menu_items WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL)", (item_id, str(workspace_id)))
+                ws_id = str(workspace_id).strip()
+                ws_clause = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+                cursor.execute(f"DELETE FROM custom_menu_items WHERE id = ? AND {ws_clause}", (item_id, ws_id))
             else:
                 cursor.execute("DELETE FROM custom_menu_items WHERE id = ?", (item_id,))
             increment_revision_and_mark_dirty(conn)

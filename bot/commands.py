@@ -1,6 +1,7 @@
 from typing import Any, Tuple, Optional
 from telegram import Update
 from telegram.ext import ContextTypes
+import config
 from config import TELEGRAM_USER_ID, TELEGRAM_GROUP_ID, DATA_DIR, DAILY_DIGEST_TIME, logger
 from database.queries import (
     get_balance_setting, get_recent_transactions, update_balance_setting,
@@ -613,9 +614,14 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ws_id = ctx.workspace_id if ctx else None
     caller_id = update.effective_user.id if update.effective_user else None
 
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
+    caller_id = update.effective_user.id if update.effective_user else None
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+
     recalculate_all_balances(workspace_id=ws_id)
-    overall = get_overall_summary(workspace_id=ws_id, user_id=caller_id)
-    today = get_today_summary(workspace_id=ws_id, user_id=caller_id)
+    overall = get_overall_summary(workspace_id=ws_id, user_id=view_user_id)
+    today = get_today_summary(workspace_id=ws_id, user_id=view_user_id)
     balance = overall.current_balance
 
     text = (
@@ -645,6 +651,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
     caller_id = update.effective_user.id if update.effective_user else None
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
 
     recalculate_all_balances(workspace_id=ws_id)
 
@@ -664,11 +671,11 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sort_by = "date_desc"
 
     if not context.args or context.args[0].lower() not in ('full', 'all'):
-        text, markup = render_history_page(page=1, filter_type="ALL", page_size=5, sort_by=sort_by, workspace_id=ws_id, user_id=caller_id)
+        text, markup = render_history_page(page=1, filter_type="ALL", page_size=5, sort_by=sort_by, workspace_id=ws_id, user_id=view_user_id)
         await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
         return
 
-    transactions = get_all_transactions_asc(workspace_id=ws_id, user_id=caller_id)
+    transactions = get_all_transactions_asc(workspace_id=ws_id, user_id=view_user_id)
     if not transactions:
 
         await update.message.reply_text("ℹ️ No transactions recorded yet.")
@@ -677,7 +684,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Calculate summary
     total_sent = sum(t['amount'] for t in transactions if t['transaction_type'] == 'SENT')
     total_received = sum(t['amount'] for t in transactions if t['transaction_type'] == 'RECEIVED')
-    overall = get_overall_summary(workspace_id=ws_id, user_id=caller_id)
+    overall = get_overall_summary(workspace_id=ws_id, user_id=view_user_id)
     curr_balance = overall.current_balance
 
     lines_list = ["📜 <b>Payment History</b>\n"]
@@ -805,7 +812,8 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     caller_id = update.effective_user.id if update.effective_user else None
-    txs = search_transactions(target_date=target_d, sort_by="date_desc", workspace_id=ws_id, user_id=caller_id)
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    txs = search_transactions(target_date=target_d, sort_by="date_desc", workspace_id=ws_id, user_id=view_user_id)
     if not txs:
         await update.message.reply_text(f"No transactions found on <b>{html.escape(target_d.strftime('%d %b %Y'))}</b>.", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
         return
@@ -838,6 +846,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
     caller_id = update.effective_user.id if update.effective_user else None
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
     from bot.keyboards import get_standard_nav_keyboard
     
     if not context.args:
@@ -854,7 +863,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     query_text = " ".join(context.args).strip()
-    txs = search_transactions(query_text=query_text, limit=15, workspace_id=ws_id, user_id=caller_id)
+    txs = search_transactions(query_text=query_text, limit=15, workspace_id=ws_id, user_id=view_user_id)
     
     if not txs:
         await update.message.reply_text(f"🔍 No transactions found matching <b>'{html.escape(query_text)}'</b>.", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
@@ -906,7 +915,8 @@ async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     caller_id = update.effective_user.id if update.effective_user else None
-    txs = search_transactions(exact_amount=amt, sort_by="date_desc", workspace_id=ws_id, user_id=caller_id)
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    txs = search_transactions(exact_amount=amt, sort_by="date_desc", workspace_id=ws_id, user_id=view_user_id)
     if not txs:
         await update.message.reply_text(f"💵 No transactions found with amount <b>{html.escape(format_currency(amt))}</b>.", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
         return
@@ -935,6 +945,7 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
     caller_id = update.effective_user.id if update.effective_user else None
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
     
     now = get_current_time_in_tz()
     year = now.year
@@ -948,7 +959,7 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(context.args) > 1 and context.args[1].isdigit():
             year = max(2000, min(2100, int(context.args[1])))
             
-    stats = get_monthly_summary(year, month, workspace_id=ws_id, user_id=caller_id)
+    stats = get_monthly_summary(year, month, workspace_id=ws_id, user_id=view_user_id)
     from datetime import date
     month_name = date(year, month, 1).strftime("%B %Y")
     
@@ -1514,7 +1525,7 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🏢 <b>Active Workspace:</b> <b>{html.escape(ws_title)}</b>\n"
         f"👤 <b>Access Role:</b> <code>{role.title()}</code>\n\n"
         f"Tap <b>Open Dashboard</b> below to view interactive charts, month switcher, category donut breakdowns, top payees, and spending heatmaps!\n\n"
-        f"🔒 <i>Single-use secure link valid for 5 minutes. Sets a 30-minute session. Server restarts require a fresh link with /dashboard.</i>\n\n"
+        f"🔒 <i>Single-use secure link valid for 60 seconds. Sets a 30-minute session. Server restarts require a fresh link with /dashboard.</i>\n\n"
         f"🔗 <code>{auth_url}</code>"
     )
     buttons = [
@@ -1836,7 +1847,8 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• <b>Will Update:</b> {to_upd} records\n"
             f"• <b>Will Skip:</b> {to_skp} records\n"
             f"• <b>Recorded Balance:</b> {format_currency(bal)}\n\n"
-            f"⚠️ <b>Confirm Restore?</b>\n"
+            f"⚠️ <b>Confirm Global Restore?</b>\n"
+            f"<i>This restores the full database across all workspaces.</i>\n\n"
             f"Tap <b>Confirm Restore</b> below or type <code>/restore confirm</code> to apply."
         )
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode='HTML')
@@ -1898,12 +1910,15 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from services.undo_service import get_last_action
     from database.db import get_db_connection
     from bot.keyboards import get_back_to_menu_keyboard
+    from bot.auth import get_workspace_context
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     chat_id = update.effective_chat.id if update.effective_chat else None
     user_id = update.effective_user.id if update.effective_user else None
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
 
-    last_action = get_last_action(chat_id=chat_id, user_id=user_id)
+    last_action = get_last_action(chat_id=chat_id, user_id=user_id, workspace_id=ws_id)
     if not last_action:
         await update.message.reply_text(
             "ℹ️ <b>Nothing to Undo</b>\n━━━━━━━━━━━━━━\nThere are no recent actions available to revert.",
@@ -1979,7 +1994,7 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
 
     ctx = get_workspace_context(update)
     user_id = get_effective_user_id(update)
-    is_admin_mode = is_owner(update) or is_super_admin(user_id)
+    is_admin_mode = is_super_admin(user_id) or (user_id is not None and str(user_id) == str(getattr(config, 'TELEGRAM_USER_ID', None)))
 
     if is_admin_mode:
         available_workspaces = get_all_active_workspaces()
@@ -2031,7 +2046,10 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
             lines.append(f"{check}<b>{html.escape(ws.title or 'Personal Ledger')}</b>{badge}")
         lines.append("")
 
-    lines.append("<i>Tap any ledger below to switch your active view:</i>")
+    if chat and getattr(chat, 'type', 'private') in ('group', 'supergroup'):
+        lines.append("<i>Note: Switching affects your Direct Messages (DM) only. This group chat always records to its own shared ledger.</i>")
+    else:
+        lines.append("<i>Tap any ledger below to switch your active view:</i>")
 
     keyboard_rows = []
     for ws in group_workspaces:
@@ -2105,12 +2123,22 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             display_name=dname
         )
         set_user_active_workspace(user_id, new_ws.id)
+        is_group = bool(chat and getattr(chat, 'type', 'private') in ('group', 'supergroup'))
+        if is_group:
+            dm_notice = (
+                f"🎯 Active workspace switched to <b>{html.escape(new_ws.title)}</b> for your <b>Direct Messages (DM)</b>.\n"
+                f"<i>Note: Group chat commands will continue to use this group's shared ledger. Your new workspace is active when messaging the bot directly in DM.</i>\n\n"
+            )
+        else:
+            dm_notice = (
+                f"🎯 Active workspace automatically switched to <b>{html.escape(new_ws.title)}</b>.\n"
+                f"Commands (/balance, /history, /last5, /report) will now log and track here.\n\n"
+            )
         await update.message.reply_text(
             f"✨ <b>New Workspace Created!</b>\n\n"
             f"📁 <b>Title:</b> <b>{html.escape(new_ws.title)}</b>\n"
             f"👑 <b>Owner:</b> <b>{html.escape(dname)}</b>\n\n"
-            f"🎯 Active workspace automatically switched to <b>{html.escape(new_ws.title)}</b>.\n"
-            f"Commands (/balance, /history, /last5, /report) will now log and track here.\n\n"
+            f"{dm_notice}"
             f"Type /workspaces to switch or reset anytime.",
             parse_mode='HTML'
         )
@@ -2134,7 +2162,7 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from database.queries import get_workspace_member
             from bot.auth import is_super_admin, is_owner
             m = get_workspace_member(target_ws.id, user_id)
-            is_global_owner = is_super_admin(user_id) or is_owner(update)
+            is_global_owner = is_super_admin(user_id) or (user_id is not None and str(user_id) == str(getattr(config, 'TELEGRAM_USER_ID', None)))
             if not is_global_owner and not (m and m.is_active and getattr(m, 'status', 'active') == 'active'):
                 await update.message.reply_text("⛔ <b>Access Denied:</b> You are not an active member of that workspace.", parse_mode='HTML')
                 return

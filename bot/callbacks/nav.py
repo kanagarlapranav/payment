@@ -58,8 +58,9 @@ async def nav_home(query, context, parts, ws_id, ws_ctx, update=None):
 
 async def nav_balance(query, context, parts, ws_id, ws_ctx, update=None):
     caller_id = query.from_user.id if query.from_user else None
-    overall = get_overall_summary(workspace_id=ws_id, user_id=caller_id)
-    today_stats = get_today_summary(workspace_id=ws_id, user_id=caller_id)
+    view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin')) else caller_id
+    overall = get_overall_summary(workspace_id=ws_id, user_id=view_user_id)
+    today_stats = get_today_summary(workspace_id=ws_id, user_id=view_user_id)
     balance = overall.current_balance
     text = (
         "💰 <b>Live Account Balance</b>\n"
@@ -80,9 +81,10 @@ async def nav_balance(query, context, parts, ws_id, ws_ctx, update=None):
 
 async def nav_today(query, context, parts, ws_id, ws_ctx, update=None):
     caller_id = query.from_user.id if query.from_user else None
-    today_stats = get_today_summary(workspace_id=ws_id, user_id=caller_id)
+    view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin')) else caller_id
+    today_stats = get_today_summary(workspace_id=ws_id, user_id=view_user_id)
     today_date = get_current_time_in_tz().date()
-    txs = get_transactions_by_date(today_date, workspace_id=ws_id, user_id=caller_id)
+    txs = get_transactions_by_date(today_date, workspace_id=ws_id, user_id=view_user_id)
     lines = [
         "📅 <b>Today's Transactions</b>",
         "━━━━━━━━━━━━━━"
@@ -105,10 +107,11 @@ async def nav_today(query, context, parts, ws_id, ws_ctx, update=None):
 async def nav_history(query, context, parts, ws_id, ws_ctx, update=None):
     from bot.commands import render_history_page
     caller_id = query.from_user.id if query.from_user else None
+    view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin')) else caller_id
     page = int(parts[2]) if len(parts) > 2 else 1
     ft = parts[3] if len(parts) > 3 else "ALL"
     sb = parts[4] if len(parts) > 4 else "date_desc"
-    text, markup = render_history_page(page=page, filter_type=ft, page_size=5, sort_by=sb, workspace_id=ws_id, user_id=caller_id)
+    text, markup = render_history_page(page=page, filter_type=ft, page_size=5, sort_by=sb, workspace_id=ws_id, user_id=view_user_id)
     await query.edit_message_text(text, reply_markup=markup, parse_mode='HTML')
 
 
@@ -261,12 +264,18 @@ async def nav_contacts(query, context, parts, ws_id, ws_ctx, update=None):
 
 
 async def nav_dash_info(query, context, parts, ws_id, ws_ctx, update=None):
-    from config import RENDER_EXTERNAL_URL
+    from config import RENDER_EXTERNAL_URL, TELEGRAM_USER_ID
     from services.dashboard_auth import create_one_time_code
+    from bot.auth import is_super_admin
     base_url = RENDER_EXTERNAL_URL
-    user_is_owner = is_owner(update) if update else False
+    user_id = query.from_user.id if query.from_user else None
+    user_is_owner = bool(ws_ctx and ws_ctx.role == 'owner') or is_super_admin(user_id) or (user_id is not None and str(user_id) == str(TELEGRAM_USER_ID))
     if user_is_owner:
-        code = create_one_time_code()
+        code = create_one_time_code(
+            user_id=user_id,
+            workspace_id=ws_id,
+            role=(ws_ctx.role if ws_ctx else 'owner')
+        )
         dash_link = f"{base_url}/auth?code={code}"
         note = "🔒 <i>Single-use login link generated (valid 60 seconds).</i>\n\n"
     else:

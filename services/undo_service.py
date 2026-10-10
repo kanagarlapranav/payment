@@ -93,26 +93,32 @@ def record_insert_action(
     Scoped by (workspace_id, chat_id, user_id).
     """
     uid = None
-    tx_ws_id = workspace_id or get_default_workspace_id()
-    if isinstance(inserted_tx_uid_or_id, int) or (isinstance(inserted_tx_uid_or_id, str) and inserted_tx_uid_or_id.isdigit()):
-        row = get_transaction_by_id(int(inserted_tx_uid_or_id), workspace_id=tx_ws_id)
-        if row:
-            uid = row.get('uid')
-            tx_ws_id = row.get('workspace_id') or tx_ws_id
-    elif inserted_tx_uid_or_id:
-        uid = str(inserted_tx_uid_or_id).strip()
+    tx_ws_id = workspace_id
+    if not tx_ws_id:
+        with get_db_connection() as conn_lookup:
+            cur = conn_lookup.cursor()
+            if isinstance(inserted_tx_uid_or_id, int) or (isinstance(inserted_tx_uid_or_id, str) and str(inserted_tx_uid_or_id).isdigit()):
+                cur.execute("SELECT uid, workspace_id FROM transactions WHERE id = ?", (int(inserted_tx_uid_or_id),))
+            else:
+                cur.execute("SELECT uid, workspace_id FROM transactions WHERE uid = ?", (str(inserted_tx_uid_or_id),))
+            t_row = cur.fetchone()
+            if t_row:
+                uid = t_row['uid']
+                tx_ws_id = t_row['workspace_id']
+
+    if not uid and tx_ws_id:
+        if isinstance(inserted_tx_uid_or_id, int) or (isinstance(inserted_tx_uid_or_id, str) and str(inserted_tx_uid_or_id).isdigit()):
+            row = get_transaction_by_id(int(inserted_tx_uid_or_id), workspace_id=tx_ws_id)
+            if row:
+                uid = row.get('uid')
+        elif inserted_tx_uid_or_id:
+            uid = str(inserted_tx_uid_or_id).strip()
 
     if not uid:
         return False
 
     valid_uid = validate_uid(uid)
-    if not tx_ws_id:
-        with get_db_connection() as conn_lookup:
-            cur = conn_lookup.cursor()
-            cur.execute("SELECT workspace_id FROM transactions WHERE uid = ?", (valid_uid,))
-            t_row = cur.fetchone()
-            if t_row and t_row['workspace_id']:
-                tx_ws_id = t_row['workspace_id']
+    tx_ws_id = tx_ws_id or get_default_workspace_id()
 
     c_id, u_id, resolved_ws_id = _resolve_scope(chat_id, user_id, tx_ws_id)
     now_utc = utc_now_iso()
@@ -197,11 +203,14 @@ def get_last_action(
     with get_db_connection() as conn:
         cursor = conn.cursor()
         if ws_id:
+            from database.queries import get_default_workspace_id
+            default_ws = get_default_workspace_id()
+            ws_clause = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
             cursor.execute(
-                """
+                f"""
                 SELECT id, workspace_id, chat_id, user_id, action, uid, snapshot_json, created_at
                 FROM undo_log
-                WHERE (workspace_id = ? OR workspace_id IS NULL) AND user_id = ? AND used_at IS NULL
+                WHERE {ws_clause} AND user_id = ? AND used_at IS NULL
                 ORDER BY id DESC
                 LIMIT 1
                 """,
@@ -237,11 +246,14 @@ def perform_undo(
         with get_db_connection() as conn:
             cursor = conn.cursor()
             if ws_id:
+                from database.queries import get_default_workspace_id
+                default_ws = get_default_workspace_id()
+                ws_clause = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
                 cursor.execute(
-                    """
+                    f"""
                     SELECT id, workspace_id, chat_id, user_id, action, uid, snapshot_json, created_at
                     FROM undo_log
-                    WHERE (workspace_id = ? OR workspace_id IS NULL) AND user_id = ? AND used_at IS NULL
+                    WHERE {ws_clause} AND user_id = ? AND used_at IS NULL
                     ORDER BY id DESC
                     LIMIT 1
                     """,

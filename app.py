@@ -328,8 +328,22 @@ class WebAppAndHealthHandler(BaseHTTPRequestHandler):
         session_from_param = query_params.get("session", [""])[0].strip()
         session_info = get_session_info_from_cookie(cookie_header, session_from_param)
         has_session = (session_info is not None) or validate_session(cookie_header) or (bool(session_from_param) and validate_session_id(session_from_param))
-        from database.queries import get_default_workspace_id
+        from database.queries import get_default_workspace_id, get_workspace_member
+        from bot.auth import get_user_active_workspace
         ws_id = (session_info.get("workspace_id") if session_info else None) or get_default_workspace_id()
+        if session_info and session_info.get("user_id"):
+            uid = session_info.get("user_id")
+            active_ws = get_user_active_workspace(uid)
+            if active_ws and active_ws != ws_id:
+                from bot.auth import is_super_admin
+                from config import TELEGRAM_USER_ID
+                is_global = is_super_admin(uid) or (str(uid) == str(TELEGRAM_USER_ID))
+                mem = get_workspace_member(active_ws, uid)
+                if (mem and mem.get('is_active', 1)) or is_global:
+                    ws_id = active_ws
+                    session_info["workspace_id"] = active_ws
+                    if mem and mem.get("role"):
+                        session_info["role"] = mem["role"]
 
         # 3. Web dashboard frontend UI (P2-au: both /dashboard and / strictly enforce session authentication)
         if path in ('/dashboard', '/'):

@@ -208,7 +208,9 @@ def is_owner(update: Update, workspace_id: Optional[str] = None) -> bool:
 
     from database.queries import get_workspace_member, get_workspace_by_chat_id, get_default_workspace_id
     chat_id = get_effective_chat_id(update)
-    ws_id = workspace_id or get_user_active_workspace(user_id)
+    chat = getattr(update, 'effective_chat', None)
+    chat_type = getattr(chat, 'type', 'private') if chat else 'private'
+    ws_id = workspace_id or (get_user_active_workspace(user_id) if chat_type == 'private' else None)
     if not ws_id and chat_id is not None:
         ws = get_workspace_by_chat_id(chat_id)
         if ws:

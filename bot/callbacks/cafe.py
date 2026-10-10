@@ -48,6 +48,13 @@ async def handle_cafe_pick(query, context, parts, ws_id, ws_ctx, update=None):
         return
     item_name = parts[2]
     tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
+    clicker = query.from_user.id if query.from_user else None
+    creator = tx.get('telegram_user_id') if tx else None
+    if creator and clicker and int(creator) != int(clicker):
+        from bot.auth import is_admin_or_owner
+        if not is_admin_or_owner(update, workspace_id=ws_id):
+            await query.answer("⛔ Only the person who recorded this payment can tag it.", show_alert=True)
+            return
     if tx:
         new_name = f"VIKRAMAN NAIR K (Cafeteria: {item_name})"
         update_transaction(tx_id, {'person_name': new_name, 'category': 'Food & Dining'}, workspace_id=ws_id)
@@ -140,6 +147,13 @@ async def handle_cafe_cart_add(query, context, parts, ws_id, ws_ctx, update=None
         return
     item_name = parts[2]
     tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
+    clicker = query.from_user.id if query.from_user else None
+    creator = tx.get('telegram_user_id') if tx else None
+    if creator and clicker and int(creator) != int(clicker):
+        from bot.auth import is_admin_or_owner
+        if not is_admin_or_owner(update, workspace_id=ws_id):
+            await query.answer("⛔ Only the person who recorded this payment can tag it.", show_alert=True)
+            return
     amt = float(tx['amount']) if tx else 0.0
 
     cart_key = f'cafe_cart_{tx_id}'
@@ -186,6 +200,13 @@ async def handle_cafe_cart_done(query, context, parts, ws_id, ws_ctx, update=Non
         return
     cart = context.user_data.pop(f'cafe_cart_{tx_id}', [])
     tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
+    clicker = query.from_user.id if query.from_user else None
+    creator = tx.get('telegram_user_id') if tx else None
+    if creator and clicker and int(creator) != int(clicker):
+        from bot.auth import is_admin_or_owner
+        if not is_admin_or_owner(update, workspace_id=ws_id):
+            await query.answer("⛔ Only the person who recorded this payment can tag it.", show_alert=True)
+            return
     if tx and cart:
         item_names = " + ".join([it['name'] for it in cart])
         new_name = f"VIKRAMAN NAIR K (Cafeteria: {item_names})"
@@ -253,6 +274,13 @@ async def handle_cafe_addon(query, context, parts, ws_id, ws_ctx, update=None):
         return
     addon = parts[2]
     tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
+    clicker = query.from_user.id if query.from_user else None
+    creator = tx.get('telegram_user_id') if tx else None
+    if creator and clicker and int(creator) != int(clicker):
+        from bot.auth import is_admin_or_owner
+        if not is_admin_or_owner(update, workspace_id=ws_id):
+            await query.answer("⛔ Only the person who recorded this payment can tag it.", show_alert=True)
+            return
     if tx:
         current_name = tx['person_name'] or "VIKRAMAN NAIR K (Cafeteria)"
         updated_name = f"{current_name} + {addon}"
@@ -273,6 +301,13 @@ async def handle_cafe_edit(query, context, parts, ws_id, ws_ctx, update=None):
         await query.answer("❌ Invalid button data.", show_alert=True)
         return
     tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
+    clicker = query.from_user.id if query.from_user else None
+    creator = tx.get('telegram_user_id') if tx else None
+    if creator and clicker and int(creator) != int(clicker):
+        from bot.auth import is_admin_or_owner
+        if not is_admin_or_owner(update, workspace_id=ws_id):
+            await query.answer("⛔ Only the person who recorded this payment can tag it.", show_alert=True)
+            return
     if tx:
         amt = float(tx['amount'])
         await query.edit_message_text(
