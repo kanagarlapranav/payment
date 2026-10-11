@@ -210,9 +210,6 @@ def is_owner(update: Update, workspace_id: Optional[str] = None) -> bool:
         return False
     if is_global_owner(user_id):
         return True
-    # Restricted users are strictly member only, never owner
-    if is_restricted_user(user_id):
-        return False
     if is_super_admin(user_id):
         return True
 
@@ -227,6 +224,9 @@ def is_owner(update: Update, workspace_id: Optional[str] = None) -> bool:
             ws_id = ws.id
         else:
             ws_id = get_default_workspace_id()
+    # Restricted users are strictly member only, never owner in this workspace
+    if is_restricted_user(user_id, workspace_id=ws_id):
+        return False
     if ws_id:
         member = get_workspace_member(ws_id, user_id)
         if member and member.role == 'owner' and member.is_active and getattr(member, 'status', 'active') == 'active':
@@ -510,7 +510,7 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
                         if not member or not member.is_active or getattr(member, 'status', 'active') in ('suspended', 'removed'):
                             return None
                         caller_role = member.role
-                    if is_restricted_user(user_id) and caller_role == 'owner':
+                    if is_restricted_user(user_id, workspace_id=switched_ws.id) and caller_role == 'owner':
                         caller_role = 'member'
                     return RequestContext(
                         workspace_id=switched_ws.id,
@@ -593,7 +593,7 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
                 )
                 caller_role = member.role if member else default_role
             elif chat_type == 'private':
-                role = 'member' if is_restricted_user(user_id) else 'owner'
+                role = 'member' if is_restricted_user(user_id, workspace_id=ws.id) else 'owner'
                 member = add_workspace_member(
                     ws.id, user_id,
                     username=username,
@@ -604,7 +604,7 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
             else:
                 return None
 
-        if is_restricted_user(user_id) and caller_role == 'owner':
+        if is_restricted_user(user_id, workspace_id=ws.id) and caller_role == 'owner':
             caller_role = 'member'
 
 

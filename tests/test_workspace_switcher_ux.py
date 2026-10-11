@@ -98,6 +98,7 @@ def test_auto_provisioning_and_friend_workspace_discovery():
         username="owner",
         display_name="Owner"
     )
+    add_workspace_member(ws_group.id, friend_id, username="nagendra", display_name="Nagendra", role="member")
 
     # Run auto-provisioning
     with patch("config.TELEGRAM_USER_ID", owner_id):
@@ -244,11 +245,12 @@ def test_restricted_member_is_strictly_member_and_cannot_be_owner():
     from bot.auth import is_owner
     from database.queries import (
         update_workspace_member_role, get_workspace_member,
-        add_workspace_member, get_default_workspace_id
+        add_workspace_member, get_default_workspace_id, set_workspace_setting
     )
 
     restricted_id = SYNTHETIC_FRIEND_ID
     ws_id = get_default_workspace_id()
+    set_workspace_setting(ws_id, 'restricted_user_ids', str(restricted_id))
 
     # Seed member
     add_workspace_member(ws_id, restricted_id, role="member")

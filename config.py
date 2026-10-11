@@ -145,7 +145,7 @@ SUPER_ADMIN_USER_IDS = [
 SUPER_ADMIN_IDS = SUPER_ADMIN_USER_IDS
 
 # Restricted users (strictly members only, never permitted owner privileges)
-raw_restricted_users = os.getenv('RESTRICTED_USER_IDS', '8343764796')
+raw_restricted_users = os.getenv('RESTRICTED_USER_IDS', '')
 RESTRICTED_USER_IDS = [
     int(uid.strip())
     for uid in raw_restricted_users.split(',')
@@ -255,10 +255,6 @@ def get_quick_add_confirmation(workspace_id=None) -> bool:
         pass
     return os.getenv('QUICK_ADD_CONFIRMATION', 'true').strip().lower() in ('1', 'true', 'yes', 'on')
 
-# Mapping of restricted user IDs to default (display_name, username)
-RESTRICTED_USER_NAMES = {
-    8343764796: ("Nagendra", "nagendra")
-}
 
 
 # OCR Configuration: avoid Windows path default on Linux/Render

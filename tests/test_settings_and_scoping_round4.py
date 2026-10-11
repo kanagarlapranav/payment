@@ -271,22 +271,27 @@ def test_part2_settings_restrict_and_unrestrict_roundtrip():
         from bot.commands import settings_command
         from config import get_restricted_user_ids, is_restricted_user
 
+        from bot.auth import set_user_active_workspace
         ws = get_or_create_workspace(chat_id=SYNTHETIC_OWNER_ID, chat_type="private", title="Owner Ledger")
-        update = make_update(user_id=SYNTHETIC_OWNER_ID, chat_id=SYNTHETIC_OWNER_ID, chat_type="private")
+        set_user_active_workspace(SYNTHETIC_OWNER_ID, ws.id)
+        try:
+            update = make_update(user_id=SYNTHETIC_OWNER_ID, chat_id=SYNTHETIC_OWNER_ID, chat_type="private")
 
-        # Restrict user
-        ctx_restrict = MagicMock()
-        ctx_restrict.args = ["restrict", "987654321"]
-        await settings_command(update, ctx_restrict)
-        assert 987654321 in get_restricted_user_ids(ws.id)
-        assert is_restricted_user(987654321, ws.id) is True
+            # Restrict user
+            ctx_restrict = MagicMock()
+            ctx_restrict.args = ["restrict", "987654321"]
+            await settings_command(update, ctx_restrict)
+            assert 987654321 in get_restricted_user_ids(ws.id)
+            assert is_restricted_user(987654321, ws.id) is True
 
-        # Unrestrict user
-        ctx_unrestrict = MagicMock()
-        ctx_unrestrict.args = ["unrestrict", "987654321"]
-        await settings_command(update, ctx_unrestrict)
-        assert 987654321 not in get_restricted_user_ids(ws.id)
-        assert is_restricted_user(987654321, ws.id) is False
+            # Unrestrict user
+            ctx_unrestrict = MagicMock()
+            ctx_unrestrict.args = ["unrestrict", "987654321"]
+            await settings_command(update, ctx_unrestrict)
+            assert 987654321 not in get_restricted_user_ids(ws.id)
+            assert is_restricted_user(987654321, ws.id) is False
+        finally:
+            set_user_active_workspace(SYNTHETIC_OWNER_ID, None)
 
     asyncio.run(_test())
 

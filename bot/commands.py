@@ -2480,18 +2480,13 @@ async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         target_uid = m.telegram_user_id
                         target_display = m.display_name
                         break
-            # Special check for Nagendra / restricted users
-            from config import RESTRICTED_USER_IDS, is_restricted_user
-            if not target_uid and 'nagendra' in uname and RESTRICTED_USER_IDS:
-                target_uid = RESTRICTED_USER_IDS[0]
-                target_display = "Nagendra"
 
     if not target_uid:
         await update.message.reply_text(f"❌ Member '{context.args[0]}' not found in this workspace.")
         return
 
     from config import is_restricted_user
-    if is_restricted_user(target_uid) and new_role == 'owner':
+    if is_restricted_user(target_uid, workspace_id=ctx.workspace_id) and new_role == 'owner':
         await update.message.reply_text("⛔ This user is restricted and cannot be assigned the owner role.")
         return
 
@@ -2550,10 +2545,6 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     target_uid = m.telegram_user_id
                     target_display = f"@{m.username}" if m.username else m.display_name
                     break
-            from config import RESTRICTED_USER_IDS
-            if not target_uid and 'nagendra' in uname and RESTRICTED_USER_IDS:
-                target_uid = RESTRICTED_USER_IDS[0]
-                target_display = "Nagendra"
 
     if not target_uid:
         # Show list of current admins and usage instructions
@@ -2748,8 +2739,7 @@ def render_settings_panel(workspace_id: Optional[str] = None) -> tuple[str, Inli
     from config import (
         get_restricted_user_ids, get_default_member_role,
         get_per_transaction_cap, get_monthly_spending_cap,
-        get_gemini_daily_quota, get_quick_add_confirmation,
-        RESTRICTED_USER_NAMES
+        get_gemini_daily_quota, get_quick_add_confirmation
     )
     from database.queries import get_workspace_by_id, get_default_workspace_id
 
@@ -2758,10 +2748,7 @@ def render_settings_panel(workspace_id: Optional[str] = None) -> tuple[str, Inli
     ws_title = ws_obj.title if ws_obj and ws_obj.title else "Personal Ledger"
 
     restricted_uids = get_restricted_user_ids(workspace_id=ws_id)
-    r_users_str = ", ".join(
-        f"{uid} ({RESTRICTED_USER_NAMES.get(uid, ('User', ''))[0]})"
-        for uid in restricted_uids
-    ) if restricted_uids else "None"
+    r_users_str = ", ".join(str(uid) for uid in restricted_uids) if restricted_uids else "None"
 
     def_role = get_default_member_role(workspace_id=ws_id).upper()
     per_tx_cap = get_per_transaction_cap(workspace_id=ws_id)
@@ -2887,8 +2874,8 @@ def render_feature_detail_panel(workspace_id: str, feature_key: str) -> tuple[st
 
 def render_restricted_users_panel(workspace_id: Optional[str] = None) -> tuple[str, InlineKeyboardMarkup]:
     """Sub-panel for adding or removing restricted users."""
-    from config import get_restricted_user_ids, RESTRICTED_USER_NAMES
-    from database.queries import get_default_workspace_id
+    from config import get_restricted_user_ids
+    from database.queries import get_default_workspace_id, get_workspace_member
     ws_id = workspace_id or get_default_workspace_id()
     uids = get_restricted_user_ids(workspace_id=ws_id)
 
@@ -2901,7 +2888,8 @@ def render_restricted_users_panel(workspace_id: Optional[str] = None) -> tuple[s
     ]
     if uids:
         for uid in uids:
-            name = RESTRICTED_USER_NAMES.get(uid, ("User", ""))[0]
+            mem = get_workspace_member(ws_id, uid)
+            name = mem.display_name if mem and mem.display_name else f"User {uid}"
             lines.append(f"• <code>{uid}</code> — <b>{html.escape(name)}</b>")
     else:
         lines.append("<i>None configured.</i>")
@@ -2911,7 +2899,8 @@ def render_restricted_users_panel(workspace_id: Optional[str] = None) -> tuple[s
 
     buttons = []
     for uid in uids:
-        name = RESTRICTED_USER_NAMES.get(uid, (str(uid), ""))[0]
+        mem = get_workspace_member(ws_id, uid)
+        name = mem.display_name if mem and mem.display_name else str(uid)
         buttons.append([InlineKeyboardButton(f"❌ Remove {name} ({uid})", callback_data=f"set_access_remove:{uid}")])
 
     buttons.append([

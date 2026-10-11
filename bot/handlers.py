@@ -2029,20 +2029,48 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             return
         target_uid = int(parts[1])
         from config import get_restricted_user_ids
-        from database.queries import set_workspace_setting
+        from database.queries import set_workspace_setting, get_all_active_workspaces, get_workspace_member
         from services.audit_service import log_audit_event
         curr_list = get_restricted_user_ids(workspace_id=ws_id)
         curr_list = [x for x in curr_list if x != target_uid]
         set_workspace_setting(ws_id, 'restricted_user_ids', ",".join(str(x) for x in curr_list))
+
+        # Look up the target's current role in every workspace
+        all_workspaces = get_all_active_workspaces()
+        roles_found = {}
+        role_desc = []
+        for w in all_workspaces:
+            m = get_workspace_member(w['id'], target_uid)
+            if m and getattr(m, 'role', None):
+                r_title = m['role'].capitalize()
+                w_title = w.get('title') or f"Workspace {w['id']}"
+                roles_found[w['id']] = {'title': w_title, 'role': m['role']}
+                role_desc.append(f"{r_title} in: {w_title}")
+
         actor_id = getattr(query.from_user, 'id', 0)
-        log_audit_event(workspace_id=ws_id, actor_user_id=actor_id, actor_role='owner', action='settings_update', resource=f'user:{target_uid}', details={'action': 'unrestrict', 'restricted_user_ids': curr_list})
+        log_audit_event(
+            workspace_id=ws_id,
+            actor_user_id=actor_id,
+            actor_role='owner',
+            action='settings_update',
+            resource=f'user:{target_uid}',
+            details={'action': 'unrestrict', 'restricted_user_ids': curr_list, 'roles_found': roles_found}
+        )
         try:
             await query.answer(f"✅ Removed {target_uid} from restricted list.")
         except Exception:
             pass
+
+        role_summary = "; ".join(role_desc) if role_desc else "No active memberships"
+        confirm_banner = (
+            f"ℹ️ Removed {target_uid} from restricted list. Their current role is unchanged "
+            f"({role_summary}). Use the Permissions panel to promote them if needed."
+        )
+
         from bot.commands import render_restricted_users_panel
-        text, markup = render_restricted_users_panel(ws_id)
-        await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
+        panel_text, markup = render_restricted_users_panel(ws_id)
+        full_text = f"<b>{html.escape(confirm_banner)}</b>\n\n{panel_text}"
+        await safe_edit_callback_message(query, full_text, reply_markup=markup, parse_mode='HTML')
         return
 
     elif action == "set_access_add_prompt":
@@ -2055,7 +2083,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             "Restricted users are strictly prohibited from receiving Owner status.\n\n"
             "To add a restricted user, type:\n"
             "<code>/settings restrict &lt;Telegram_User_ID&gt;</code>\n\n"
-            "<i>Example:</i> <code>/settings restrict 8343764796</code>"
+            "<i>Example:</i> <code>/settings restrict 123456789</code>"
         )
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("⬅️ Back to Restricted Users", callback_data="set_access_users")]
