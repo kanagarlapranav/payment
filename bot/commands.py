@@ -419,7 +419,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• /delete — Interactive menu to delete transactions\n"
             "• /undo — Instantly revert the last action\n"
             "• /setbudget &lt;amt&gt; — Set monthly spending limit\n"
+            "• /recurring — Manage recurring bills & subscriptions\n"
             "• /addmenu & /delmenu — Add or remove custom cafeteria items\n"
+            "• /backup (or /backupnow) — Dual Telegram & Google Drive backup status\n"
             "• /gemini (or /quota) — Inspect Gemini AI OCR status\n"
             "• /setmodel — Switch active Gemini AI model\n"
         )
@@ -428,16 +430,20 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if caller_is_owner:
         sections.append(
             "👑 <b>5. Owner Controls & Governance (Owner Only)</b>\n"
-            "• /permissions (or /roles) — Manage user permissions & access levels\n"
-            "• /workspaces — Switch and manage multi-tenant workspaces\n"
-            "• /setbalance &lt;amt&gt; — Set starting balance (e.g. <code>/setbalance 50000</code>)\n"
-            "• /setrole &lt;user&gt; &lt;role&gt; — Set member role in workspace\n"
-            "• /restore — Restore from cloud/JSON backup on demand\n"
+            "• /settings (or /config) — Interactive workspace settings & spend caps\n"
+            "• /permissions (or /roles) — Granular 15-feature role matrix & member list\n"
+            "• /setrole &lt;user&gt; &lt;role&gt; — Assign workspace role (admin, member, viewer)\n"
+            "• /workspaces — Switch ledgers or create new (<code>/workspace create &lt;name&gt;</code>)\n"
+            "• /setbalance &lt;amt&gt; — Set or override initial ledger balance\n"
+            "• /restore — Cloud & JSON disaster recovery restore\n"
+            "• /importbackup — Import JSON backup archive on demand\n"
+            "• <b>Access Control:</b> Real-time join requests with inline [Approve] / [Reject]\n"
+            "• <b>Spend Policies:</b> Configure per-transaction & monthly spend caps\n"
         )
         
     help_text = "\n".join(sections)
     from bot.keyboards import get_help_keyboard
-    await update.message.reply_text(help_text, reply_markup=get_help_keyboard(), parse_mode='HTML')
+    await update.message.reply_text(help_text, reply_markup=get_help_keyboard(is_owner=caller_is_owner), parse_mode='HTML')
 
 async def render_gemini_status_payload(force_refresh: bool = False, role: str = "admin") -> tuple:
     """Computes and formats the Gemini AI engine status, pool status, and selection keyboard."""

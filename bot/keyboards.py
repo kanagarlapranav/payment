@@ -674,7 +674,7 @@ def get_model_selection_keyboard(current_model: str = "AUTO", role: str = "admin
     return InlineKeyboardMarkup(keyboard)
 
 
-def get_help_keyboard() -> InlineKeyboardMarkup:
+def get_help_keyboard(is_owner: bool = False) -> InlineKeyboardMarkup:
     """Returns interactive navigation buttons for /help command."""
     keyboard = [
         [
@@ -694,6 +694,11 @@ def get_help_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🌐 Web Dashboard", callback_data="nav:dash_info")
         ]
     ]
+    if is_owner:
+        keyboard.append([
+            InlineKeyboardButton("⚙️ Workspace Settings", callback_data="settings_menu"),
+            InlineKeyboardButton("🔐 Permission Matrix", callback_data="perm_matrix_menu")
+        ])
     return InlineKeyboardMarkup(keyboard)
 
 
