@@ -137,16 +137,32 @@ def commit_transaction(transaction: Transaction, allow_duplicate: bool = False) 
             monthly_cap = get_monthly_spending_cap(workspace_id=ws_id)
             if monthly_cap is not None and transaction.transaction_type == 'SENT':
                 from database.queries import get_monthly_summary
+                from utils.dates import parse_date, build_occurred_at
                 from datetime import date
                 tx_date = getattr(transaction, 'transaction_date', None)
+                tx_time = getattr(transaction, 'transaction_time', None)
+                parsed_d = None
                 if isinstance(tx_date, date):
-                    y_val, m_val = tx_date.year, tx_date.month
-                elif isinstance(tx_date, str) and len(tx_date) >= 7 and '-' in tx_date:
-                    parts = tx_date.split('-')
-                    y_val, m_val = int(parts[0]), int(parts[1])
+                    parsed_d = tx_date
+                elif tx_date:
+                    parsed_d = parse_date(str(tx_date).strip())
+
+                if not parsed_d:
+                    occ = build_occurred_at(tx_date, tx_time)
+                    if occ and len(occ) >= 7:
+                        try:
+                            parts = occ[:10].split('-')
+                            y_val, m_val = int(parts[0]), int(parts[1])
+                        except Exception:
+                            today = date.today()
+                            y_val, m_val = today.year, today.month
+                    else:
+                        today = date.today()
+                        y_val, m_val = today.year, today.month
                 else:
-                    today = date.today()
-                    y_val, m_val = today.year, today.month
+                    y_val, m_val = parsed_d.year, parsed_d.month
+                    transaction.transaction_date = parsed_d.strftime("%Y-%m-%d")
+
                 m_sum = get_monthly_summary(y_val, m_val, workspace_id=ws_id)
                 current_monthly_spent = float(m_sum.get('total_sent', 0.0) or 0.0)
                 if (current_monthly_spent + transaction.amount) > monthly_cap:

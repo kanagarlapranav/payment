@@ -592,6 +592,15 @@ def setup_database():
 
                 # Idempotent Schema Migration v5: Status columns, Access Requests scoping, & persistent auth
                 if current_schema_ver < 5:
+                    try:
+                        import shutil
+                        from config import DATABASE_PATH
+                        if DATABASE_PATH.exists():
+                            shutil.copy2(DATABASE_PATH, f"{DATABASE_PATH}.backup-v4")
+                            logger.info(f"Created pre-v5 database snapshot at {DATABASE_PATH}.backup-v4")
+                    except Exception as snap_err:
+                        logger.warning(f"Failed to create pre-v5 database snapshot: {snap_err}")
+
                     cursor.execute("PRAGMA table_info(workspaces)")
                     ws_cols = [c['name'] for c in cursor.fetchall()]
                     if "status" not in ws_cols:

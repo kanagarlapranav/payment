@@ -793,6 +793,10 @@ def import_database_from_json(input_path: Path = None, data_dict: dict = None, a
                             local_row = existing_by_uid[tx_uid]
                             if local_row.get('workspace_id') and str(local_row['workspace_id']) != str(row_ws):
                                 # Never overwrite or adopt another tenant's row on UID collision
+                                logger.warning(
+                                    f"Cross-workspace UID collision skipped: UID {tx_uid} belongs to workspace "
+                                    f"{local_row.get('workspace_id')}, incoming record target is {row_ws}."
+                                )
                                 skipped_count += 1
                                 continue
                             dt_inc = parse_utc_iso(incoming_updated)

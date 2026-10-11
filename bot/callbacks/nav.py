@@ -34,7 +34,6 @@ from bot.keyboards import (
     get_recurring_menu_keyboard,
     get_monthly_closing_keyboard,
 )
-from bot.auth import is_owner
 from database.queries import (
     get_top_payees,
     get_transactions_by_date,

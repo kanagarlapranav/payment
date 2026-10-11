@@ -826,6 +826,11 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         if not (2000 <= y <= 2100 and 1 <= m <= 12):
             await query.answer("❌ Invalid month or year range.", show_alert=True)
             return
+        u_id = getattr(query.from_user, 'id', None)
+        from bot.feature_registry import feature_allowed
+        if not feature_allowed(ws_id, u_id, "month_close"):
+            await query.answer("⛔ Month closing is restricted for your role in this workspace.", show_alert=True)
+            return
         from services.monthly_review_service import close_and_record_monthly_review
         from bot.commands import render_monthly_closing_summary_text
         from bot.keyboards import get_monthly_closing_keyboard
@@ -837,6 +842,11 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
 
     elif action == "rec_paid":
         rec_id = int(parts[1])
+        u_id = getattr(query.from_user, 'id', None)
+        from bot.feature_registry import feature_allowed
+        if not feature_allowed(ws_id, u_id, "recurring"):
+            await query.answer("⛔ Recurring payments are restricted for your role in this workspace.", show_alert=True)
+            return
         from services.recurring_service import mark_recurring_paid, get_recurring_by_id
         try:
             tx_id, next_due = await asyncio.to_thread(mark_recurring_paid, rec_id, None, ws_id)
@@ -2156,6 +2166,14 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             curr = role in (feat[2] if feat else set())
         new_val = not curr
         set_feature_permission(ws_id, feat_key, role, new_val)
+        from services.audit_service import log_audit_event
+        log_audit_event(
+            workspace_id=ws_id,
+            actor_user_id=u_id,
+            action="feature_permission_update",
+            resource=f"feature:{feat_key}:{role}",
+            details={"feature_key": feat_key, "role": role, "allowed": new_val}
+        )
         status_txt = "Granted" if new_val else "Revoked"
         await query.answer(f"✅ {role.title()} {status_txt} for {feat_key}")
         from bot.commands import render_feature_detail_panel
@@ -2171,6 +2189,14 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         feat_key = parts[1]
         from bot.feature_registry import reset_feature_permissions
         reset_feature_permissions(ws_id, feat_key)
+        from services.audit_service import log_audit_event
+        log_audit_event(
+            workspace_id=ws_id,
+            actor_user_id=u_id,
+            action="feature_permission_reset",
+            resource=f"feature:{feat_key}",
+            details={"feature_key": feat_key}
+        )
         await query.answer(f"✅ Reset {feat_key} to default permissions.")
         from bot.commands import render_feature_detail_panel
         text, markup = render_feature_detail_panel(ws_id, feat_key)
@@ -2184,6 +2210,14 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             return
         from bot.feature_registry import reset_feature_permissions
         reset_feature_permissions(ws_id)
+        from services.audit_service import log_audit_event
+        log_audit_event(
+            workspace_id=ws_id,
+            actor_user_id=u_id,
+            action="feature_permission_reset_all",
+            resource="feature_permissions",
+            details={}
+        )
         await query.answer("✅ Reset all features to default permissions.")
         from bot.commands import render_feature_matrix_panel
         text, markup = render_feature_matrix_panel(ws_id)
@@ -2260,6 +2294,11 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             await query.edit_message_text("I couldn't tell which ledger this belongs to — try again")
             return
         ws_id = ws_ctx.workspace_id
+        u_id = getattr(query.from_user, 'id', None)
+        from bot.feature_registry import feature_allowed
+        if not feature_allowed(ws_id, u_id, "record"):
+            await query.answer("⛔ Recording transactions is restricted for your role in this workspace.", show_alert=True)
+            return
         try:
             amt = float(parse_decimal_amount(parts[1], allow_zero=False))
             payee = validate_name(parts[2], max_length=120)
@@ -2349,8 +2388,12 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         if tx_id is None:
             await query.answer("❌ Invalid button data.", show_alert=True)
             return
-        from database.queries import can_user_modify_transaction
         caller_id = update.effective_user.id if update.effective_user else None
+        from bot.feature_registry import feature_allowed
+        if not feature_allowed(ws_id, caller_id, "edit_own"):
+            await query.answer("⛔ Edit is restricted for your role in this workspace.", show_alert=True)
+            return
+        from database.queries import can_user_modify_transaction
         caller_role = ws_ctx.role if ws_ctx else 'member'
         if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
             await query.answer("⛔ You can only edit payments that you recorded.", show_alert=True)
@@ -2376,8 +2419,12 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         if tx_id is None:
             await query.answer("❌ Invalid button data.", show_alert=True)
             return
-        from database.queries import can_user_modify_transaction
         caller_id = update.effective_user.id if update.effective_user else None
+        from bot.feature_registry import feature_allowed
+        if not feature_allowed(ws_id, caller_id, "delete_own"):
+            await query.answer("⛔ Delete is restricted for your role in this workspace.", show_alert=True)
+            return
+        from database.queries import can_user_modify_transaction
         caller_role = ws_ctx.role if ws_ctx else 'member'
         if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
             await query.answer("⛔ You can only delete payments that you recorded.", show_alert=True)
@@ -2667,11 +2714,19 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         except Exception:
             pass
         fmt = parts[1]
+        caller_uid = getattr(query.from_user, 'id', None)
+        from bot.feature_registry import feature_allowed
         if fmt == "pdf":
+            if not feature_allowed(ws_id, caller_uid, "statement"):
+                await query.answer("⛔ Statement feature is restricted for your role in this workspace.", show_alert=True)
+                return
             from bot.commands import send_pdf_report
             await query.edit_message_text("⏳ Generating official PDF statement...")
             await send_pdf_report(query.message.chat, context.bot, workspace_id=ws_id)
         elif fmt == "excel":
+            if not feature_allowed(ws_id, caller_uid, "report"):
+                await query.answer("⛔ Report feature is restricted for your role in this workspace.", show_alert=True)
+                return
             from bot.commands import send_excel_report
             await query.edit_message_text("⏳ Generating Excel spreadsheet...")
             await send_excel_report(query.message.chat, context.bot, workspace_id=ws_id)

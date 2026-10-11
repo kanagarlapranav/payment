@@ -47,6 +47,8 @@ The bot operates on a **workspace-scoped multi-tenant architecture**:
 
 ### Database Schema (SQLite3, 5 migrations)
 
+All 5 schema migrations (v1 through v5) are executed idempotently at startup inside `database/db.py`. Legacy standalone migration scripts (`migrate_v2.py`, `utils/migrate_v5.py`) have been retired and deleted; pre-migration snapshots (e.g. `*.backup-v4`) safeguard production state before schema upgrades.
+
 | Table | Purpose |
 | :--- | :--- |
 | `transactions` | Immutable ledger with soft-delete (`deleted_at`), balance snapshots (`balance_before`, `balance_after`), workspace scoping, and global UID uniqueness |
@@ -61,6 +63,9 @@ The bot operates on a **workspace-scoped multi-tenant architecture**:
 | `monthly_reviews` | Monthly closing summary snapshots |
 | `access_requests` | Pending workspace join requests |
 | `audit_log` | Immutable security audit trail |
+
+### Deferred Architectural Items (Intent Statement)
+- **Gemini Daily Quota Enforcement**: The configuration interface and per-workspace persistence for `gemini_daily_quota` are fully implemented in `workspace_settings` and `/settings` panels. Runtime throttling against Google Gemini API calls is explicitly deferred to future releases, pending integration of an upstream token-bucket rate limiter; production continues to rely safely on Gemini multi-model fallback cascade and offline RapidOCR backup.
 
 ---
 
@@ -233,7 +238,6 @@ payment_tracker/
 │   ├── validation.py         # Input validation, UID generation
 │   ├── html_safety.py        # HTML injection prevention
 │   ├── dates.py              # Date parsing and timezone handling
-│   ├── migrate_v5.py         # Schema migration v5
 │   └── ...                   # currency, cleanup, hashing, workspace_storage
 ├── scripts/
 │   └── repair_workspace_provenance.py  # One-time stranded row repair with 3-pass fallback

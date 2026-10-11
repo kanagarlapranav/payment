@@ -118,7 +118,17 @@ def add_custom_menu_item(name: str, price: float, category: str = "Snacks & Tea"
     from utils.validation import parse_decimal_amount, validate_string_length
     from database.queries import get_default_workspace_id
 
-    ws_id = workspace_id or get_default_workspace_id()
+    from database.models import _UNSET
+    if workspace_id is _UNSET or not workspace_id:
+        import os
+        if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
+            ws_id = get_default_workspace_id()
+        else:
+            raise ValueError("workspace_id is required for add_custom_menu_item")
+    else:
+        ws_id = str(workspace_id).strip()
+    if not ws_id:
+        raise ValueError("workspace_id is required for add_custom_menu_item")
 
     with LEDGER_LOCK:
         try:

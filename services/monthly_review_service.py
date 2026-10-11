@@ -15,9 +15,9 @@ from utils.validation import CENT
 def calculate_monthly_closing_metrics(year: int, month: int, workspace_id: Optional[str] = None) -> Dict:
     """Calculates all key performance and retrospective metrics for a month with Decimal precision and workspace scoping."""
     month_str = f"{year:04d}-{month:02d}"
-    from database.queries import get_default_workspace_id
+    from database.queries import _require_ws, get_default_workspace_id
+    ws_id = _require_ws(workspace_id)
     default_ws = get_default_workspace_id()
-    ws_id = str(workspace_id) if workspace_id else default_ws
     ws_filter = "(workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')" if ws_id == default_ws else "workspace_id = ?"
     
     with get_db_connection() as conn:
@@ -128,9 +128,9 @@ def calculate_monthly_closing_metrics(year: int, month: int, workspace_id: Optio
 
 def is_month_closed(year: int, month: int, workspace_id: Optional[str] = None) -> bool:
     """Checks if a given month is closed and frozen for a workspace."""
-    from database.queries import get_default_workspace_id
+    from database.queries import _require_ws, get_default_workspace_id
+    ws_id = _require_ws(workspace_id)
     default_ws = get_default_workspace_id()
-    ws_id = str(workspace_id) if workspace_id else default_ws
     ws_filter = "(workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')" if ws_id == default_ws else "workspace_id = ?"
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -183,9 +183,8 @@ def close_and_record_monthly_review(year: int, month: int, notes: str = '', work
 
 def reopen_monthly_review(year: int, month: int, workspace_id: Optional[str] = None) -> bool:
     """Unfreezes / re-opens a previously closed month review."""
-    from database.queries import get_default_workspace_id
-    default_ws = get_default_workspace_id()
-    ws_id = str(workspace_id) if workspace_id else default_ws
+    from database.queries import _require_ws
+    ws_id = _require_ws(workspace_id)
     with LEDGER_LOCK:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -197,9 +196,9 @@ def reopen_monthly_review(year: int, month: int, workspace_id: Optional[str] = N
 
 def get_monthly_review(year: int, month: int, workspace_id: Optional[str] = None) -> Optional[Dict]:
     """Retrieves a previously frozen monthly review with workspace scoping."""
-    from database.queries import get_default_workspace_id
+    from database.queries import _require_ws, get_default_workspace_id
+    ws_id = _require_ws(workspace_id)
     default_ws = get_default_workspace_id()
-    ws_id = str(workspace_id) if workspace_id else default_ws
     ws_filter = "(workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')" if ws_id == default_ws else "workspace_id = ?"
     with get_db_connection() as conn:
         cursor = conn.cursor()

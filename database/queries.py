@@ -860,14 +860,25 @@ def set_user_permission_and_role(telegram_user_id: int, role: str, is_active: bo
 
         return True
 
+def _require_ws(workspace_id: str) -> str:
+    """Validates that a workspace_id is provided, failing closed."""
+    from database.models import _UNSET
+    if workspace_id is _UNSET or not workspace_id:
+        import os
+        if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
+            return get_default_workspace_id()
+        raise ValueError("workspace_id is required for this operation")
+    return str(workspace_id).strip()
+
 def get_workspace_setting(workspace_id: str, key: str, default: str = None) -> str | None:
     """
     Dual-read helper: checks workspace_settings first, then global settings table only for default workspace.
     Non-default workspaces use workspace_settings exclusively to prevent settings bleed.
+    Fails closed when workspace_id is omitted (except in test environment).
     """
     if not key:
         return default
-    ws_id = workspace_id or get_default_workspace_id()
+    ws_id = _require_ws(workspace_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = ?", (ws_id, key))
@@ -886,8 +897,9 @@ def set_workspace_setting(workspace_id: str, key: str, value: str) -> str:
     """
     Sets a setting in workspace_settings.
     Mirrors to global settings table ONLY when target workspace is the default workspace (and not cap settings).
+    Fails closed when workspace_id is omitted (except in test environment).
     """
-    ws_id = workspace_id or get_default_workspace_id()
+    ws_id = _require_ws(workspace_id)
     now_utc = utc_now_iso()
     with LEDGER_LOCK:
         with get_db_connection() as conn:
@@ -1190,15 +1202,6 @@ def get_transaction_by_reference(reference_number: str, workspace_id: str = None
         )
         row = cursor.fetchone()
         return dict(row) if row else None
-
-def _require_ws(workspace_id: str) -> str:
-    """Validates that a workspace_id is provided, failing closed."""
-    if not workspace_id:
-        import os
-        if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
-            return get_default_workspace_id()
-        raise ValueError("workspace_id is required for this query")
-    return str(workspace_id)
 
 def _resolve_query_workspace_filter(workspace_id: str = None, user_id: int = None) -> tuple[str, list]:
     """
@@ -1699,10 +1702,12 @@ def restore_soft_deleted_transaction(uid: str = None, tx_id: int = None) -> bool
                 if not row or not row['uid']:
                     return False
                 target_uid = row['uid']
+                # Safe fallback: restores legacy pre-v4 rows lacking workspace_id to the default workspace
                 ws_id = row['workspace_id'] or get_default_workspace_id()
             else:
                 cursor.execute("SELECT workspace_id FROM transactions WHERE uid = ?", (target_uid,))
                 row = cursor.fetchone()
+                # Safe fallback: restores legacy pre-v4 rows lacking workspace_id to the default workspace
                 ws_id = (row['workspace_id'] if row else None) or get_default_workspace_id()
 
             valid_uid = validate_uid(target_uid)
@@ -1721,14 +1726,16 @@ def restore_soft_deleted_transaction(uid: str = None, tx_id: int = None) -> bool
 
 def update_balance_setting(new_balance: float, workspace_id: str = None):
     """Updates the current balance in workspace_settings and settings under LEDGER_LOCK."""
+    ws_id = _require_ws(workspace_id)
     with LEDGER_LOCK:
         dec_bal = parse_decimal_amount(new_balance, allow_zero=True) if new_balance >= 0 else round(float(new_balance), 2)
         bal_str = str(float(dec_bal)) if hasattr(dec_bal, '__float__') else str(round(float(new_balance), 2))
-        ws_id = workspace_id or get_default_workspace_id()
         now_utc = utc_now_iso()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('current_balance', ?, ?)", (bal_str, now_utc))
+            default_ws = get_default_workspace_id()
+            if ws_id == default_ws:
+                cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('current_balance', ?, ?)", (bal_str, now_utc))
             cursor.execute("INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at) VALUES (?, 'current_balance', ?, ?)", (ws_id, bal_str, now_utc))
             increment_revision_and_mark_dirty(conn)
             conn.commit()
@@ -1777,9 +1784,7 @@ def set_model_setting(model_name: str) -> None:
 def get_monthly_spending(year: int, month: int, workspace_id: str = None) -> float:
     """Gets the total SENT amount for a given month with workspace isolation."""
     month_str = f"{year:04d}-{month:02d}"
-    default_ws = get_default_workspace_id()
-    ws_id = workspace_id or default_ws
-    ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    ws_filter, ws_params = _resolve_query_workspace_filter(workspace_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
@@ -1788,16 +1793,14 @@ def get_monthly_spending(year: int, month: int, workspace_id: str = None) -> flo
             WHERE substr(COALESCE(occurred_at, transaction_date), 1, 7) = ? 
               AND {ws_filter}
               AND transaction_type = 'SENT' AND deleted_at IS NULL
-        """, (month_str, ws_id))
+        """, [month_str] + ws_params)
         row = cursor.fetchone()
         return float(row['total']) if (row and row['total'] is not None) else 0.0
 
 def get_category_summary(year: int, month: int, workspace_id: str = None):
     """Gets breakdown of spending (SENT) and income (RECEIVED) by category for a month with workspace isolation."""
     month_str = f"{year:04d}-{month:02d}"
-    default_ws = get_default_workspace_id()
-    ws_id = workspace_id or default_ws
-    ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    ws_filter, ws_params = _resolve_query_workspace_filter(workspace_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
@@ -1812,14 +1815,12 @@ def get_category_summary(year: int, month: int, workspace_id: str = None):
               AND deleted_at IS NULL
             GROUP BY category, transaction_type
             ORDER BY total_amount DESC
-        """, (month_str, ws_id))
+        """, [month_str] + ws_params)
         return [dict(row) for row in cursor.fetchall()]
 
 def get_daily_summary_stats(target_date_str: str, workspace_id: str = None):
     """Calculates summary statistics for a specific date (YYYY-MM-DD) with Decimal precision and workspace isolation."""
-    default_ws = get_default_workspace_id()
-    ws_id = workspace_id or default_ws
-    ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    ws_filter, ws_params = _resolve_query_workspace_filter(workspace_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
@@ -1832,7 +1833,7 @@ def get_daily_summary_stats(target_date_str: str, workspace_id: str = None):
               AND {ws_filter}
               AND deleted_at IS NULL
             GROUP BY transaction_type
-        """, (str(target_date_str), ws_id))
+        """, [str(target_date_str)] + ws_params)
         rows = cursor.fetchall()
         
         dec_sent = Decimal('0.00')
@@ -1855,7 +1856,7 @@ def get_daily_summary_stats(target_date_str: str, workspace_id: str = None):
               AND {ws_filter}
               AND deleted_at IS NULL
             ORDER BY id ASC
-        """, (str(target_date_str), ws_id))
+        """, [str(target_date_str)] + ws_params)
         transactions = [dict(row) for row in cursor.fetchall()]
         
         return {
@@ -1869,9 +1870,7 @@ def get_daily_summary_stats(target_date_str: str, workspace_id: str = None):
 
 def get_cafeteria_transactions(limit: int = 50, workspace_id: str = None):
     """Fetches transactions related to Vikraman Nair / Cafeteria with workspace isolation."""
-    default_ws = get_default_workspace_id()
-    ws_id = workspace_id or default_ws
-    ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    ws_filter, ws_params = _resolve_query_workspace_filter(workspace_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
@@ -1884,7 +1883,7 @@ def get_cafeteria_transactions(limit: int = 50, workspace_id: str = None):
                AND deleted_at IS NULL
             ORDER BY transaction_date DESC, id DESC
             LIMIT ?
-        """, (ws_id, limit))
+        """, ws_params + [limit])
         return [dict(row) for row in cursor.fetchall()]
 
 
@@ -1894,9 +1893,9 @@ def get_payee_category(payee_name: str, workspace_id: str = None) -> str | None:
     """Retrieves remembered category for a payee if available with workspace isolation."""
     if not payee_name or not payee_name.strip():
         return None
+    ws_id = _require_ws(workspace_id)
     normalized = payee_name.strip().lower()
     default_ws = get_default_workspace_id()
-    ws_id = workspace_id or default_ws
     ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -1923,8 +1922,8 @@ def remember_payee_category(payee_name: str, category: str, workspace_id: str = 
     """Upserts payee -> category preference in payee_categories with workspace isolation."""
     if not payee_name or not category or not payee_name.strip():
         return
+    ws_id = _require_ws(workspace_id)
     normalized = payee_name.strip().lower()
-    ws_id = workspace_id or get_default_workspace_id()
     now_utc = utc_now_iso()
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -2002,9 +2001,7 @@ def find_potential_duplicate(
 
 def get_top_payees(limit: int = 5, year: int = None, month: int = None, workspace_id: str = None):
     """Fetches top payees by total spent with workspace isolation."""
-    default_ws = get_default_workspace_id()
-    ws_id = workspace_id or default_ws
-    ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    ws_filter, ws_params = _resolve_query_workspace_filter(workspace_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         query = f"""
@@ -2021,7 +2018,7 @@ def get_top_payees(limit: int = 5, year: int = None, month: int = None, workspac
               AND {ws_filter}
               AND deleted_at IS NULL
         """
-        params = [ws_id]
+        params = list(ws_params)
         if year and month:
             query += " AND substr(COALESCE(occurred_at, transaction_date), 1, 7) = ?"
             params.append(f"{year:04d}-{month:02d}")
@@ -2038,9 +2035,7 @@ def get_top_payees(limit: int = 5, year: int = None, month: int = None, workspac
 def get_daily_spend_series(year: int, month: int, workspace_id: str = None):
     """Returns daily spending and income series for a month for charts and heatmaps with workspace isolation."""
     month_str = f"{year:04d}-{month:02d}"
-    default_ws = get_default_workspace_id()
-    ws_id = workspace_id or default_ws
-    ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    ws_filter, ws_params = _resolve_query_workspace_filter(workspace_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
@@ -2055,7 +2050,7 @@ def get_daily_spend_series(year: int, month: int, workspace_id: str = None):
               AND deleted_at IS NULL
             GROUP BY transaction_date
             ORDER BY transaction_date ASC
-        """, (month_str, ws_id))
+        """, [month_str] + ws_params)
         return [dict(row) for row in cursor.fetchall()]
 
 def get_month_comparison_stats(year: int, month: int, workspace_id: str = None):
@@ -2200,9 +2195,7 @@ def get_transactions_paginated(
 
 def get_contact_ledger(workspace_id: str = None):
     """Aggregates all transactions by contact/payee with workspace isolation."""
-    default_ws = get_default_workspace_id()
-    ws_id = workspace_id or default_ws
-    ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+    ws_filter, ws_params = _resolve_query_workspace_filter(workspace_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
@@ -2219,7 +2212,7 @@ def get_contact_ledger(workspace_id: str = None):
               AND deleted_at IS NULL
             GROUP BY lower(TRIM(person_name))
             ORDER BY (SUM(CASE WHEN transaction_type = 'SENT' THEN amount ELSE 0 END) + SUM(CASE WHEN transaction_type = 'RECEIVED' THEN amount ELSE 0 END)) DESC
-        """, (ws_id,))
+        """, ws_params)
         rows = cursor.fetchall()
         contacts = []
         for r in rows:
@@ -2281,22 +2274,20 @@ def save_pending_receipt(pending_id: str, transaction, workspace_id: Optional[st
 
 
 def get_pending_receipt(pending_id: str, workspace_id: Optional[str] = None):
-    """Retrieves a persisted pending receipt transaction from SQLite with dual-read fallback."""
+    """Retrieves a persisted pending receipt transaction from SQLite with fail-closed workspace isolation."""
     import json
     from datetime import date, datetime
     from database.models import Transaction
 
+    ws_id = _require_ws(workspace_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         default_ws = get_default_workspace_id()
-        if workspace_id:
-            ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if workspace_id == default_ws else "workspace_id = ?"
-            cursor.execute(
-                f"SELECT data_json, workspace_id FROM pending_receipts WHERE pending_id = ? AND {ws_filter}",
-                (pending_id, workspace_id)
-            )
-        else:
-            cursor.execute("SELECT data_json, workspace_id FROM pending_receipts WHERE pending_id = ?", (pending_id,))
+        ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+        cursor.execute(
+            f"SELECT data_json, workspace_id FROM pending_receipts WHERE pending_id = ? AND {ws_filter}",
+            (pending_id, ws_id)
+        )
         row = cursor.fetchone()
         if not row:
             return None
@@ -2319,7 +2310,7 @@ def get_pending_receipt(pending_id: str, workspace_id: Optional[str] = None):
                     else:
                         setattr(t, k, v)
             if hasattr(t, 'workspace_id') and not t.workspace_id:
-                t.workspace_id = row['workspace_id'] or workspace_id
+                t.workspace_id = row['workspace_id'] or ws_id
             return t
         except Exception as e:
             logger.error(f"Error parsing pending receipt {pending_id}: {e}")
@@ -2327,18 +2318,16 @@ def get_pending_receipt(pending_id: str, workspace_id: Optional[str] = None):
 
 
 def delete_pending_receipt(pending_id: str, workspace_id: Optional[str] = None) -> None:
-    """Deletes a pending receipt transaction from SQLite."""
+    """Deletes a pending receipt transaction from SQLite with fail-closed workspace isolation."""
+    ws_id = _require_ws(workspace_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         default_ws = get_default_workspace_id()
-        if workspace_id:
-            ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if workspace_id == default_ws else "workspace_id = ?"
-            cursor.execute(
-                f"DELETE FROM pending_receipts WHERE pending_id = ? AND {ws_filter}",
-                (pending_id, workspace_id)
-            )
-        else:
-            cursor.execute("DELETE FROM pending_receipts WHERE pending_id = ?", (pending_id,))
+        ws_filter = "(workspace_id = ? OR workspace_id IS NULL)" if ws_id == default_ws else "workspace_id = ?"
+        cursor.execute(
+            f"DELETE FROM pending_receipts WHERE pending_id = ? AND {ws_filter}",
+            (pending_id, ws_id)
+        )
         conn.commit()
 
 

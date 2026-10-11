@@ -74,6 +74,7 @@ if not IS_TEST_ENV and (DATA_DIR == BASE_DIR or BASE_DIR in DATA_DIR.parents or 
 IMAGE_DIR = DATA_DIR / 'images'
 LOG_DIR = Path(os.getenv('LOG_DIR', str(DATA_DIR / 'logs'))).resolve()
 DB_PATH = Path(os.getenv('DATABASE_PATH', str(DATA_DIR / 'database.sqlite3'))).resolve()
+DATABASE_PATH = DB_PATH
 BACKUP_JSON_PATH = Path(os.getenv('BACKUP_JSON_PATH', str(DATA_DIR / 'backup_transactions.json'))).resolve()
 
 if IS_TEST_ENV:

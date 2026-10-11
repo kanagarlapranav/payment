@@ -667,6 +667,10 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     ws_id = ctx.workspace_id
     caller_id = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_id, "history"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
     view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
 
     recalculate_all_balances(workspace_id=ws_id)
@@ -759,6 +763,11 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
+    caller_id = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_id, "details"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> Transaction details feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
     
     from bot.keyboards import get_standard_nav_keyboard
     transactions = get_all_transactions_asc(workspace_id=ws_id)
@@ -986,6 +995,10 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     ws_id = ctx.workspace_id
     caller_id = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_id, "monthly"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> Monthly view feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
     view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
     
     now = get_current_time_in_tz()
@@ -1088,6 +1101,10 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ws_id = ctx.workspace_id if ctx else None
     user_id = ctx.user_id if ctx else None
     role = ctx.role if ctx else 'member'
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, user_id, "edit_own"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> Edit feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
 
     # 1. No arguments: show list of recent transactions to tap on
     if not context.args:
@@ -1265,6 +1282,10 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ws_id = ctx.workspace_id if ctx else None
     user_id = ctx.user_id if ctx else None
     role = ctx.role if ctx else 'member'
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, user_id, "delete_own"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> Delete feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
 
     # 1. No arguments: show list of recent transactions to tap on
     if not context.args:
@@ -1444,10 +1465,16 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     arg = (context.args[0].lower() if context.args else "")
 
     if arg in ('pdf', 'statement', 'doc'):
+        if not feature_allowed(ws_id, caller_uid, "statement"):
+            await update.message.reply_text("⛔ <b>Access Denied:</b> Statement feature is restricted for your role in this workspace.", parse_mode='HTML')
+            return
         await update.message.reply_text("⏳ Generating PDF statement...")
         await send_pdf_report(update.effective_chat, context.bot, workspace_id=ws_id)
         return
     elif arg in ('excel', 'xlsx', 'sheet'):
+        if not feature_allowed(ws_id, caller_uid, "report"):
+            await update.message.reply_text("⛔ <b>Access Denied:</b> Report feature is restricted for your role in this workspace.", parse_mode='HTML')
+            return
         await update.message.reply_text("⏳ Generating Excel spreadsheet...")
         await send_excel_report(update.effective_chat, context.bot, workspace_id=ws_id)
         return
@@ -1475,6 +1502,11 @@ async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
+    caller_uid = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_uid, "report"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> Reports feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
     from services.category_service import format_spending_insights
     from bot.keyboards import get_insights_keyboard
     
@@ -1521,6 +1553,11 @@ async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
+    caller_uid = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_uid, "budget"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> Budget feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
     from services.budget_service import set_budget
     from services.backup_service import backup_to_telegram
     from bot.keyboards import get_budget_keyboard
@@ -1786,6 +1823,11 @@ async def addmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
+    caller_uid = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_uid, "cafe"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> Cafeteria menu management is restricted for your role in this workspace.", parse_mode='HTML')
+        return
 
     success, msg = add_custom_menu_item(name, price, category, is_veg=True, workspace_id=ws_id)
     if success:
@@ -1990,6 +2032,14 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays backup status and options to backup or restore."""
     if not await require_admin(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
+    caller_uid = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_uid, "backup"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> Backup feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
     from bot.keyboards import get_backup_status_keyboard
     text = render_backup_status_text()
     await update.message.reply_text(
@@ -3094,6 +3144,10 @@ async def invite_member_command(update: Update, context: ContextTypes.DEFAULT_TY
     ctx = get_workspace_context(update)
     if not ctx:
         await update.message.reply_text("❌ Current workspace context could not be determined.")
+        return
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ctx.workspace_id, ctx.user_id, "invite"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> Invite feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
 
     role = "member"
