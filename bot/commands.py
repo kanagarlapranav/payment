@@ -145,7 +145,7 @@ def render_history_page(page: int = 1, filter_type: str = "ALL", page_size: int 
 
 def render_transaction_detail(tx_id: int, workspace_id: str = None, role: str = "member"):
     """Renders the detailed view of a single transaction."""
-    from database.queries import get_transaction_by_id, get_default_workspace_id
+    from database.queries import get_default_workspace_id
     from bot.keyboards import get_transaction_detail_keyboard
     target_ws = workspace_id or get_default_workspace_id()
     tx = get_transaction_by_id(tx_id, workspace_id=target_ws)
@@ -341,9 +341,14 @@ def render_contacts_ledger_text(workspace_id: str = None) -> str:
     return "\n".join(lines)
 
 from bot.auth import (
-    require_authorized, require_admin, is_owner, is_authorized_user,
+    require_authorized, require_admin as _base_require_admin, is_owner, is_authorized_user,
     require_member, is_global_owner, get_effective_user_id
 )
+
+async def require_admin(update: Update, *args, **kwargs) -> bool:
+    import bot.auth
+    target = getattr(bot.auth, 'require_admin', _base_require_admin)
+    return await target(update, *args, **kwargs)
 
 def is_admin_user(update: Update) -> bool:
     """Checks if the user is the true global bot owner (TELEGRAM_USER_ID) or super admin."""
@@ -373,7 +378,7 @@ async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the role-tailored guide of commands and bot capabilities."""
     if not await require_authorized(update): return
-    from bot.auth import get_workspace_context, is_owner
+    from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
     caller_is_owner = is_owner(update)
     caller_is_admin = caller_is_owner or (ctx and ctx.has_role('admin'))
@@ -552,7 +557,6 @@ async def render_gemini_status_payload(force_refresh: bool = False, role: str = 
 
 async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Checks and reports the live Google Gemini Vision AI status and quota in Telegram chat (Admin only)."""
-    from bot.auth import require_admin
     if not await require_admin(update):
         return
 
@@ -565,7 +569,6 @@ async def geministatus_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def setmodel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Allows admin to set or inspect the active Gemini model preference."""
-    from bot.auth import require_admin
     if not await require_admin(update):
         return
 
@@ -1101,10 +1104,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await require_member(update):
             return
     from bot.keyboards import get_edit_fields_keyboard, get_transaction_selection_keyboard
-    from database.queries import (
-        get_recent_transactions, get_user_recent_transactions,
-        get_transaction_by_id, can_user_modify_transaction
-    )
+    from database.queries import get_user_recent_transactions, can_user_modify_transaction
 
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
@@ -1154,7 +1154,6 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid ID format. Example: <code>/edit 3</code> or <code>/edit 1</code>", parse_mode='HTML')
         return
 
-    import asyncio
     from services.backup_service import backup_to_telegram
 
     tx = get_transaction_by_id(raw_num, workspace_id=ws_id)
@@ -1282,10 +1281,7 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await require_member(update):
             return
     from bot.keyboards import get_delete_confirm_keyboard, get_transaction_selection_keyboard
-    from database.queries import (
-        get_recent_transactions, get_user_recent_transactions,
-        get_transaction_by_id, can_user_modify_transaction
-    )
+    from database.queries import get_user_recent_transactions, can_user_modify_transaction
 
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
@@ -1365,7 +1361,6 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.auth import require_owner
     if not await require_owner(update): return
-    import asyncio
     from services.balance_service import set_explicit_balance
     from services.backup_service import backup_to_telegram
     from bot.auth import get_workspace_context
@@ -1418,7 +1413,6 @@ async def send_pdf_report(chat, bot, workspace_id: str = None):
 
 async def send_excel_report(chat, bot, workspace_id: str = None):
     import uuid
-    from services.export_service import generate_excel_report
     from services.gdrive_service import is_gdrive_available, upload_statement_to_drive
     export_path = DATA_DIR / f"transactions_export_{chat.id}_{uuid.uuid4().hex[:8]}.xlsx"
     try:
@@ -1443,11 +1437,10 @@ async def send_excel_report(chat, bot, workspace_id: str = None):
 
 async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Exports transactions as a PDF Statement or Excel spreadsheet."""
-    from bot.auth import require_authorized, is_owner, get_workspace_context
+    from bot.auth import get_workspace_context
     from database.queries import get_workspace_by_chat_id
     from bot.feature_registry import feature_allowed
     if not await require_authorized(update): return
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     ctx = get_workspace_context(update)
     if not ctx or not ctx.workspace_id:
         await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
@@ -1506,7 +1499,7 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates AI spending insights and category analytics (Admin only)."""
-    from bot.auth import require_admin, get_workspace_context
+    from bot.auth import get_workspace_context
     if not await require_admin(update): return
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
@@ -1573,7 +1566,6 @@ async def setbudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from services.budget_service import set_budget
     from services.backup_service import backup_to_telegram
     from bot.keyboards import get_budget_keyboard
-    import asyncio
     
     if not context.args:
         await update.message.reply_text(
@@ -1613,7 +1605,6 @@ async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     target_date = None
     if context.args:
-        from utils.dates import parse_date
         raw_d = " ".join(context.args).strip()
         parsed = parse_date(raw_d)
         if parsed:
@@ -1624,11 +1615,9 @@ async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Provides a live link to the interactive web dashboard & visual charts with a single-use login code."""
-    from bot.auth import require_member, get_workspace_context, get_user_active_workspace
+    from bot.auth import get_workspace_context, get_user_active_workspace
     if not await require_member(update): return
-    import os
     from services.dashboard_auth import create_one_time_code
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     
     from config import RENDER_EXTERNAL_URL
     render_url = RENDER_EXTERNAL_URL
@@ -1734,12 +1723,11 @@ async def cafestats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cafeedit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Opens the interactive cafeteria item selector for the most recent or specified cafeteria payment."""
     if not await require_admin(update): return
-    from database.queries import get_cafeteria_transactions, get_transaction_by_id
+    from database.queries import get_cafeteria_transactions
     from bot.auth import get_workspace_context
     ws_ctx = get_workspace_context(update)
     ws_id = ws_ctx.workspace_id
     from bot.keyboards import get_cafeteria_selection_keyboard
-    import html
     
     target_tx = None
     if context.args:
@@ -1770,7 +1758,6 @@ async def addmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Adds a custom item to the cafeteria menu."""
     if not await require_admin(update): return
     from services.cafeteria_service import add_custom_menu_item
-    import html
 
     args = context.args
     if not args:
@@ -1861,9 +1848,7 @@ async def delmenu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update): return
     from services.cafeteria_service import delete_custom_menu_item
     from database.db import get_custom_menu_items
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     from bot.auth import get_workspace_context
-    import html
 
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
@@ -1900,9 +1885,7 @@ async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_owner(update): return
 
     from services.backup_service import import_database_from_json, preview_database_import, BACKUP_JSON_PATH, backup_to_telegram, restore_from_telegram
-    from database.queries import get_all_transactions, get_balance_setting
-    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-    import html
+    from database.queries import get_all_transactions
 
     # 1. If replying to a document attachment, download to temporary file and validate preview before overwrite
     if update.message and update.message.reply_to_message and update.message.reply_to_message.document:
@@ -2067,9 +2050,7 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     from services.undo_service import get_last_action
     from database.db import get_db_connection
-    from bot.keyboards import get_back_to_menu_keyboard
     from bot.auth import get_workspace_context
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     chat_id = update.effective_chat.id if update.effective_chat else None
     user_id = update.effective_user.id if update.effective_user else None
@@ -2136,12 +2117,11 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def render_workspaces_view(update: Update) -> tuple[str, Any]:
     """Helper that computes the text and inline markup for the workspace switcher view."""
-    from bot.auth import get_workspace_context, is_super_admin, get_effective_user_id
+    from bot.auth import get_workspace_context, is_super_admin
     from database.queries import (
         ensure_all_user_workspaces, get_all_active_workspaces,
         get_user_workspaces
     )
-    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
     chat = update.effective_chat
     chat_title = getattr(chat, 'title', None) or getattr(chat, 'first_name', None) or "This Chat"
@@ -2178,7 +2158,11 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
         group_workspaces = [w for w in unique_workspaces if w.chat_type != 'dm']
         if is_group and chat and getattr(chat, 'type', None) == 'group':
             # In group chats, isolate foreign personal DM workspaces (only surface caller's own personal DM ledgers)
-            dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm' and str(w.get('chat_id', '')) == str(user_id)]
+            dm_workspaces = [
+                w for w in unique_workspaces
+                if (getattr(w, 'chat_type', None) or (w['chat_type'] if hasattr(w, '__getitem__') else '')) == 'dm'
+                and str(getattr(w, 'chat_id', None) if getattr(w, 'chat_id', None) is not None else (w['chat_id'] if hasattr(w, '__getitem__') else '')) == str(user_id)
+            ]
         else:
             dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm']
     else:
@@ -2261,7 +2245,7 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
 async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays information about the current chat's workspace and allows switching active workspace."""
     if not await require_authorized(update): return
-    from bot.auth import get_workspace_context, get_effective_user_id, set_user_active_workspace, is_super_admin
+    from bot.auth import get_workspace_context, set_user_active_workspace, is_super_admin
     from database.queries import (
         get_workspace_by_id, create_custom_workspace, ensure_all_user_workspaces, get_workspace_by_chat_id
     )
@@ -2295,7 +2279,6 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Subcommand: /workspace create <name> or /workspace new <name>
     if context.args and context.args[0].lower() in ('create', 'new', 'add'):
-        from bot.auth import require_member
         if not await require_member(update):
             return
         new_title = " ".join(context.args[1:]).strip()
@@ -2403,8 +2386,6 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     lines.append(f"<i>Total: {len(members)} active members</i>")
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    from bot.auth import is_owner
     markup = None
     if ctx.role == 'owner' or is_owner(update):
         markup = InlineKeyboardMarkup([
@@ -2415,7 +2396,7 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sets a workspace member's role (Owner only). Usage: /setrole <user_id_or_name> <role> or reply to message with /setrole <role>"""
-    from bot.auth import require_admin, get_workspace_context, is_owner
+    from bot.auth import get_workspace_context
     from database.queries import get_all_workspace_members, update_workspace_member_role, set_user_permission_and_role
     if not await require_admin(update): return
     ctx = get_workspace_context(update)
@@ -2533,7 +2514,7 @@ async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Quickly promotes a user to Admin in the group or DM (Owner only). Usage: /admin <name_or_@username> or reply /admin"""
-    from bot.auth import require_admin, get_workspace_context, is_owner
+    from bot.auth import get_workspace_context
     from database.queries import get_all_workspace_members, update_workspace_member_role, set_user_permission_and_role
     if not await require_admin(update): return
     ctx = get_workspace_context(update)
@@ -2615,9 +2596,8 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def removemember_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Removes a member from the current workspace (Admin/Owner only). Usage: /removemember <user_id_or_@username>"""
-    from bot.auth import require_admin, get_workspace_context, is_owner
+    from bot.auth import get_workspace_context
     from database.queries import get_all_workspace_members, remove_workspace_member
-    import config
 
     if not await require_admin(update): return
     ctx = get_workspace_context(update)
@@ -2679,7 +2659,6 @@ async def removemember_command(update: Update, context: ContextTypes.DEFAULT_TYP
 def render_permissions_list_payload() -> tuple[str, Any]:
     """Renders interactive user permissions and role manager card with inline buttons."""
     from database.queries import get_all_users_for_permissions
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     users = get_all_users_for_permissions()
     
     role_icons = {'owner': '👑', 'admin': '🛡️', 'member': '👤', 'viewer': '👁️'}
@@ -2712,7 +2691,6 @@ def render_permissions_list_payload() -> tuple[str, Any]:
 def render_user_permission_card(target_uid: int) -> tuple[str, Any]:
     """Renders detailed card and action buttons for a single user."""
     from database.queries import get_all_users_for_permissions
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     users = get_all_users_for_permissions()
     target_user = next((u for u in users if u['telegram_user_id'] == int(target_uid)), None)
     
@@ -2773,7 +2751,6 @@ def render_settings_panel(workspace_id: Optional[str] = None) -> tuple[str, Inli
         get_gemini_daily_quota, get_quick_add_confirmation,
         RESTRICTED_USER_NAMES
     )
-    from utils.currency import format_currency
     from database.queries import get_workspace_by_id, get_default_workspace_id
 
     ws_id = workspace_id or get_default_workspace_id()
@@ -2947,7 +2924,6 @@ def render_restricted_users_panel(workspace_id: Optional[str] = None) -> tuple[s
 def render_cap_tx_panel(workspace_id: Optional[str] = None) -> tuple[str, InlineKeyboardMarkup]:
     """Sub-panel for setting per-transaction cap."""
     from config import get_per_transaction_cap
-    from utils.formatting import format_currency
     from database.queries import get_default_workspace_id
     ws_id = workspace_id or get_default_workspace_id()
     cap = get_per_transaction_cap(workspace_id=ws_id)
@@ -2984,7 +2960,6 @@ def render_cap_tx_panel(workspace_id: Optional[str] = None) -> tuple[str, Inline
 def render_cap_month_panel(workspace_id: Optional[str] = None) -> tuple[str, InlineKeyboardMarkup]:
     """Sub-panel for setting monthly spending cap."""
     from config import get_monthly_spending_cap
-    from utils.formatting import format_currency
     from database.queries import get_default_workspace_id
     ws_id = workspace_id or get_default_workspace_id()
     cap = get_monthly_spending_cap(workspace_id=ws_id)
@@ -3064,7 +3039,6 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cap_val = float(context.args[1])
                 set_workspace_setting(ws_id, 'per_tx_cap', str(cap_val))
                 log_audit_event(workspace_id=ws_id, actor_user_id=user_id, actor_role='owner', action='settings_update', resource='setting:per_tx_cap', details={'per_tx_cap': cap_val})
-                from utils.formatting import format_currency
                 cap_disp = format_currency(cap_val) if cap_val > 0 else "Unlimited"
                 await update.message.reply_text(f"✅ Per-transaction cap set to: <b>{cap_disp}</b>", parse_mode='HTML')
                 return
@@ -3077,7 +3051,6 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cap_val = float(context.args[1])
                 set_workspace_setting(ws_id, 'monthly_spending_cap', str(cap_val))
                 log_audit_event(workspace_id=ws_id, actor_user_id=user_id, actor_role='owner', action='settings_update', resource='setting:monthly_spending_cap', details={'monthly_spending_cap': cap_val})
-                from utils.formatting import format_currency
                 cap_disp = format_currency(cap_val) if cap_val > 0 else "Unlimited"
                 await update.message.reply_text(f"✅ Monthly spending cap set to: <b>{cap_disp}</b>", parse_mode='HTML')
                 return
@@ -3117,7 +3090,6 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif sub in ('restrict', 'add_restricted') and len(context.args) > 1:
             try:
                 r_uid = int(context.args[1])
-                from bot.auth import is_global_owner
                 if is_global_owner(r_uid):
                     await update.message.reply_text("❌ You cannot restrict yourself.")
                     return
@@ -3153,7 +3125,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def invite_member_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates a secure hashed workspace invite link (Admin/Owner only). Usage: /invite_member [member|admin|viewer] [max_uses] [expiry_hours]"""
-    from bot.auth import require_admin, get_workspace_context
+    from bot.auth import get_workspace_context
     from services.invite_service import create_workspace_invite
 
     if not await require_admin(update): return
@@ -3242,7 +3214,7 @@ async def invite_member_command(update: Update, context: ContextTypes.DEFAULT_TY
 async def join_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Redeems an invitation token to join a workspace. Usage: /join <invite_token>"""
     from services.invite_service import validate_and_redeem_invite
-    from bot.auth import get_effective_user_id, set_user_active_workspace
+    from bot.auth import set_user_active_workspace
 
     user_id = get_effective_user_id(update)
     if not user_id:
@@ -3278,7 +3250,7 @@ async def join_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def audit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the recent audit events for the current workspace (Admin/Owner only)."""
-    from bot.auth import require_admin, get_workspace_context
+    from bot.auth import get_workspace_context
     from services.audit_service import get_workspace_audit_logs
 
     if not await require_admin(update): return

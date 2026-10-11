@@ -87,9 +87,7 @@ def set_pending_transaction(pending_id: str, transaction, workspace_id: str = No
     from database.models import _UNSET
     ws_id = workspace_id or getattr(transaction, 'workspace_id', None)
     if ws_id is _UNSET:
-        import os
         if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
-            from database.queries import get_default_workspace_id
             ws_id = get_default_workspace_id()
         else:
             ws_id = None
@@ -319,7 +317,6 @@ def format_receipt_card(transaction, dup_warning: str = None) -> str:
 
 def parse_short_entry(text: str):
     """Parses short quick entries like '120 dosa', '+500 salary', '-25 snacks', 'coffee 15'."""
-    from utils.validation import parse_decimal_amount
     text = text.strip()
     # Patterns like "+500 salary", "500 salary", "120 dosa", "-20 tea"
     m = re.match(r'^([+-]?)\s*(?:₹|rs\.?)?\s*(\d+(?:\.\d+)?)\s+(?:for\s+|to\s+|from\s+)?(.+)$', text, re.IGNORECASE)
@@ -917,7 +914,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
 
     elif action == "restore_confirm":
         from services.backup_service import import_database_from_json, backup_to_telegram
-        from database.queries import get_all_transactions, get_default_workspace_id
+        from database.queries import get_all_transactions
         default_ws = get_default_workspace_id()
         is_custom_ws = (ws_id and ws_id != default_ws)
         target_ws_id = ws_id if is_custom_ws else None
@@ -1070,7 +1067,6 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             await query.edit_message_text("❌ Transaction not found.", reply_markup=get_back_to_menu_keyboard())
             return
         
-        from database.models import Transaction
         dup_pending_id = uuid.uuid4().hex
         dup_tx = Transaction(
             amount=orig_tx['amount'],
@@ -2310,7 +2306,6 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             await query.edit_message_text(f"❌ Invalid quick entry: {err}")
             return
         cat = parts[3] if len(parts) > 3 else "Food & Dining"
-        from database.models import Transaction
         now_dt = get_current_time_in_tz()
         tx = Transaction(
             transaction_type="SENT",
@@ -3240,7 +3235,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if field == 'amount':
             try:
-                from utils.validation import parse_decimal_amount
                 new_amt = float(parse_decimal_amount(text, allow_zero=False))
             except ValueError as err:
                 await update.message.reply_text(f"❌ Invalid amount: {err}. Please enter a valid positive number:")
@@ -3248,7 +3242,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             updates['amount'] = new_amt
             needs_recalc = True
         elif field == 'person':
-            from utils.validation import validate_name
             try:
                 clean_name = validate_name(text.title(), max_length=120, field_name="Person name", required=True)
             except ValueError as err:
@@ -3335,7 +3328,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop('action', None)
         
         try:
-            from utils.validation import parse_decimal_amount
             parsed_amt = float(parse_decimal_amount(text, allow_zero=False))
         except ValueError:
             parsed_amt = 0.0
@@ -3380,7 +3372,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif pending_action == 'waiting_add_menu_item':
         context.user_data.pop('action', None)
         from services.cafeteria_service import add_custom_menu_item
-        from utils.validation import parse_decimal_amount
         full_arg = text.strip()
         name, price, category = None, None, "Custom"
         if "," in full_arg:
@@ -3463,7 +3454,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if field == 'amount':
             try:
-                from utils.validation import parse_decimal_amount
                 val = float(parse_decimal_amount(text, allow_zero=False))
                 transaction.amount = val
             except ValueError as err:
@@ -3473,7 +3463,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data['action'] = 'waiting_edit_pending_value'
                 return
         elif field == 'person':
-            from utils.validation import validate_name
             try:
                 p_name = validate_name(text.strip(), max_length=120, field_name="Person name", required=True)
                 transaction.person_name = p_name
@@ -3539,14 +3528,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tt = context.user_data.pop('quick_type', 'SENT')
         context.user_data.pop('action', None)
         try:
-            from utils.validation import parse_decimal_amount
             val = float(parse_decimal_amount(text.strip(), allow_zero=False))
         except Exception as err:
             await update.message.reply_text(f"❌ Invalid amount: {err}. Please try again:")
             return
 
         cat = get_payee_category(payee, ws_id) or "General"
-        from database.models import Transaction
         t = Transaction(
             amount=val,
             transaction_type=tt,
@@ -3595,7 +3582,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         payee = raw_parts[0]
         try:
-            from utils.validation import parse_decimal_amount
             amt = float(parse_decimal_amount(raw_parts[1], allow_zero=False))
         except Exception as err:
             await update.message.reply_text(f"❌ Invalid amount: {err}")
@@ -3636,7 +3622,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await require_member(update):
             return
         amt, tx_type, name = short_parsed
-        from database.models import Transaction
         now_dt = get_current_time_in_tz()
         
         # Category heuristics & payee memory
@@ -3772,7 +3757,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not fn.endswith('.json'):
         return
 
-    from bot.auth import require_owner
     if not await require_owner(update):
         return
 
@@ -3806,7 +3790,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         now_ts = time.time()
         _prune_pending_json_imports()
 
-        from bot.auth import get_workspace_context
         ws_ctx = get_workspace_context(update)
         ws_id = ws_ctx.workspace_id if ws_ctx else get_default_workspace_id()
         uploader_id = update.effective_user.id if update.effective_user else None

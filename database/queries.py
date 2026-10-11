@@ -303,7 +303,7 @@ def ensure_all_user_workspaces(current_chat_title: Optional[str] = None, current
 
             if not canonical_default_ws_id:
                 for g_row in group_workspaces_list:
-                    if g_row.get('title') and 'Payment' in g_row['title']:
+                    if g_row['title'] and 'Payment' in g_row['title']:
                         canonical_default_ws_id = g_row['id']
                         break
 
