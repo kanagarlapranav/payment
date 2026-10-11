@@ -4,52 +4,46 @@ from telegram.ext import ContextTypes
 import os
 import time
 import uuid
-import json
 import asyncio
 import html
 import re
-from datetime import datetime, timedelta, date
+from datetime import timedelta
 import config
-from config import TELEGRAM_USER_ID, IMAGE_DIR, logger
+from config import IMAGE_DIR, logger
 from bot.auth import (
-    require_authorized, require_admin, require_owner, require_member, is_owner, is_authorized_user,
+    require_authorized, require_admin, require_owner, require_member, is_owner,
     is_global_owner, get_callback_policy,
     get_workspace_context, resolve_workspace_context, WORKSPACE_CALLBACK_POLICY,
     get_effective_user_id
 )
 from bot.commands import (
-    is_admin_user, render_home_menu_text, render_history_page,
-    render_contacts_ledger_text, render_transaction_detail, render_backup_status_text
+    is_admin_user, render_home_menu_text,
+    render_transaction_detail, render_backup_status_text
 )
 from bot.keyboards import (
     get_edit_fields_keyboard, get_delete_confirm_keyboard,
     get_filter_keyboard, get_sort_keyboard, get_home_menu_keyboard, get_back_to_menu_keyboard,
     get_confirmation_card_keyboard, get_edit_pending_fields_keyboard, get_category_picker_keyboard,
-    get_quick_undo_keyboard, get_quick_add_keyboard, get_history_paginated_keyboard,
-    get_add_menu_keyboard, get_more_menu_keyboard, get_transaction_detail_keyboard,
+    get_quick_undo_keyboard,
     get_backup_status_keyboard, get_json_import_confirm_keyboard, get_delete_confirmed_keyboard
 )
-from ocr.extractor import perform_ocr, perform_ocr_async
+from ocr.extractor import perform_ocr_async
 from ocr.gemini_vision import is_gemini_available, extract_transaction_with_gemini
-from services.gdrive_service import is_gdrive_available, upload_receipt_to_drive, upload_backup_to_drive
+from services.gdrive_service import is_gdrive_available, upload_backup_to_drive
 from services.transaction_service import process_transaction, commit_transaction, LimitExceededError
-from services.balance_service import recalculate_all_balances, get_today_summary, get_overall_summary
-from services.backup_service import backup_to_telegram
+from services.balance_service import recalculate_all_balances
 from database.models import Transaction
 from database.queries import (
     get_transaction_by_id, get_transaction_by_reference, update_transaction, delete_transaction,
     search_transactions, get_monthly_summary, get_recent_transactions, get_balance_setting,
-    get_payee_category, remember_payee_category, find_potential_duplicate, get_top_payees,
-    get_daily_spend_series, get_month_comparison_stats, get_transactions_paginated, get_contact_ledger,
-    get_category_summary, save_pending_receipt, get_pending_receipt, delete_pending_receipt,
-    get_default_workspace_id, can_user_modify_transaction
+    get_payee_category, remember_payee_category, find_potential_duplicate,
+    save_pending_receipt, get_pending_receipt, delete_pending_receipt,
+    get_default_workspace_id
 )
-from utils.currency import parse_amount, format_currency, normalize_amount_string
+from utils.currency import format_currency, normalize_amount_string
 from utils.dates import parse_date, get_current_time_in_tz, format_display_date
 from utils.validation import parse_decimal_amount, validate_name
-from bot.callbacks import handle_nav_callback, NAV_DISPATCH_TABLE, handle_cafe_callback, CAFE_DISPATCH_TABLE
-
-import time
+from bot.callbacks import CAFE_DISPATCH_TABLE
 
 # In-memory store for pending transactions awaiting confirmation
 pending_transactions = {}
@@ -816,6 +810,14 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
     if action == "nav":
         from bot.callbacks import handle_nav_callback
         await handle_nav_callback(query, context, parts, ws_id, ws_ctx, update)
+        return
+
+    elif action == "menu_main":
+        caller_id = query.from_user.id if query.from_user else None
+        view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin')) else caller_id
+        is_switched = bool(ws_ctx and ws_ctx.workspace and getattr(ws_ctx.workspace, 'chat_id', None) is not None and ws_ctx.chat_id != ws_ctx.workspace.chat_id)
+        text = render_home_menu_text(workspace_id=ws_id, user_id=view_user_id, switched=is_switched)
+        await query.edit_message_text(text, reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
         return
 
 
@@ -1600,7 +1602,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
     # --- Workspace Switcher Actions ---
     elif action == "ws_switch":
         target_ws_id = parts[1]
-        from bot.auth import set_user_active_workspace, is_super_admin
+        from bot.auth import set_user_active_workspace
         from database.queries import get_workspace_by_id, get_workspace_member
         user_id = get_effective_user_id(update)
         target_ws = get_workspace_by_id(target_ws_id)
@@ -1949,10 +1951,12 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         if not is_owner(update):
             await query.answer("⛔ Only the owner can remove members.", show_alert=True)
             return
+        if not ws_id:
+            await query.answer("⚠️ Could not determine workspace.", show_alert=True)
+            return
         target_uid = int(parts[1])
         from database.queries import remove_workspace_member
-        target_ws_id = ws_id or get_default_workspace_id()
-        success = remove_workspace_member(target_ws_id, target_uid)
+        success = remove_workspace_member(ws_id, target_uid)
         if success:
             await query.answer("✅ Member removed from workspace!", show_alert=True)
             from bot.commands import render_permissions_list_payload

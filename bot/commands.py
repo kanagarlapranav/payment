@@ -1362,6 +1362,9 @@ async def setbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
+    if not ws_id:
+        await update.message.reply_text("⚠️ Could not determine workspace context.")
+        return
     
     if not context.args:
         await update.message.reply_text("Usage: /setbalance <amount>")

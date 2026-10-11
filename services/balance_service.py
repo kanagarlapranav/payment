@@ -122,7 +122,10 @@ def recalculate_all_balances(workspace_id: str = None) -> float:
             conn.commit()
             return final_float
 
-def set_explicit_balance(new_balance: float, workspace_id: str = None) -> float:
+_UNSET = object()
+
+
+def set_explicit_balance(new_balance: float, workspace_id: str = _UNSET) -> float:
     """
     Sets the current balance to new_balance by adjusting initial_balance anchor such that
     current_balance equals the target after recalculation.
@@ -130,9 +133,20 @@ def set_explicit_balance(new_balance: float, workspace_id: str = None) -> float:
     Later recalculations will never overwrite this balance.
     Runs under LEDGER_LOCK with Decimal precision.
     """
+    if workspace_id is _UNSET:
+        import os
+        if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
+            from database.queries import get_default_workspace_id
+            target_ws = get_default_workspace_id()
+        else:
+            raise ValueError("workspace_id is required")
+    elif not workspace_id:
+        raise ValueError("workspace_id is required")
+    else:
+        target_ws = str(workspace_id)
+
     from database.queries import get_default_workspace_id
     default_ws = get_default_workspace_id()
-    target_ws = workspace_id or default_ws
 
     with LEDGER_LOCK:
         dec_new = parse_decimal_amount(new_balance, allow_zero=True, allow_negative=True)

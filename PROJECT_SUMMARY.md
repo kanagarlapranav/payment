@@ -190,7 +190,7 @@ Customized specifically for your college cafeteria (**VIKRAMAN NAIR K**):
 | :--- | :--- |
 | **Interactive Settings Panel** | `/settings` command with inline keyboard sub-panels for per-transaction cap, monthly cap, default member role, restricted users, Gemini quota, and quick-add confirmation |
 | **DB-Backed Settings** | `workspace_settings` table with per-workspace key-value pairs; `config.py` helper functions (`get_per_transaction_cap`, `get_monthly_spending_cap`, `get_default_member_role`, etc.) query DB with env-var fallback |
-| **Workspace Status & Migration v5** | `workspace_status` and `member_status` columns; `utils/migrate_v5.py` handles schema upgrades |
+| **Workspace Status & Migration v5** | `workspace_status` and `member_status` columns; migration lives idempotently in `database/db.py` startup (standalone `utils/migrate_v5.py` retired and deleted) |
 
 ### Earlier Rounds (Sep–Oct 2026)
 

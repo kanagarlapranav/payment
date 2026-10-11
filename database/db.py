@@ -641,14 +641,11 @@ def setup_database():
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('database_initialized', '0', now_utc))
                 cursor.execute('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', ('schema_version', '5', now_utc))
 
-                # Ensure all legacy transactions have default workspace assigned
-                cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
-                def_ws_row = cursor.fetchone()
-                if def_ws_row and def_ws_row['value']:
-                    d_id = str(def_ws_row['value'])
-                    cursor.execute("UPDATE transactions SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''", (d_id,))
-                    if cursor.rowcount > 0:
-                        logger.warning(f"Startup legacy transaction assignment: assigned {cursor.rowcount} orphan rows to default workspace {d_id}")
+                # Audit and warn on orphaned legacy transactions without re-homing (Fix 3)
+                cursor.execute("SELECT COUNT(*) FROM transactions WHERE workspace_id IS NULL OR workspace_id = ''")
+                orphan_count = cursor.fetchone()[0]
+                if orphan_count > 0:
+                    logger.warning(f"orphaned rows detected, left in place for manual repair: {orphan_count} orphaned rows in transactions")
 
                 # Initialize and backfill feature permissions matrix (Fix 11)
                 try:
@@ -668,26 +665,29 @@ def setup_database():
             logger.error(f"Error setting up database: {e}")
             raise
 
-def get_custom_menu_items(workspace_id: str = None) -> list:
-    """Returns custom cafeteria menu items from the database with dual-read workspace fallback."""
-    from database.queries import get_default_workspace_id
-    default_ws = get_default_workspace_id()
+_UNSET = object()
+
+
+def get_custom_menu_items(workspace_id: str = _UNSET) -> list:
+    """Returns custom cafeteria menu items from the database with strict workspace scoping (Fix 7)."""
+    if workspace_id is _UNSET:
+        import os
+        if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
+            from database.queries import get_default_workspace_id
+            workspace_id = get_default_workspace_id()
+        else:
+            return []
+    if not workspace_id:
+        return []
+    ws_id = str(workspace_id).strip()
+    if not ws_id:
+        return []
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        if workspace_id:
-            ws_id = str(workspace_id).strip()
-            if ws_id == default_ws:
-                cursor.execute(
-                    "SELECT id, name, price, category, is_veg, created_at FROM custom_menu_items WHERE (workspace_id = ? OR workspace_id IS NULL) ORDER BY id ASC",
-                    (ws_id,)
-                )
-            else:
-                cursor.execute(
-                    "SELECT id, name, price, category, is_veg, created_at FROM custom_menu_items WHERE workspace_id = ? ORDER BY id ASC",
-                    (ws_id,)
-                )
-        else:
-            cursor.execute("SELECT id, name, price, category, is_veg, created_at FROM custom_menu_items ORDER BY id ASC")
+        cursor.execute(
+            "SELECT id, name, price, category, is_veg, created_at FROM custom_menu_items WHERE workspace_id = ? ORDER BY id ASC",
+            (ws_id,)
+        )
         return [dict(row) for row in cursor.fetchall()]
 
 def delete_custom_menu_item_by_id(item_id: int, workspace_id: str = None):

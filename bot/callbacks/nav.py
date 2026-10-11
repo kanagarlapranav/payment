@@ -45,6 +45,7 @@ from services.balance_service import (
 )
 from utils.currency import format_currency
 from utils.dates import get_current_time_in_tz
+from bot.feature_registry import feature_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +107,11 @@ async def nav_today(query, context, parts, ws_id, ws_ctx, update=None):
 
 
 async def nav_history(query, context, parts, ws_id, ws_ctx, update=None):
-    from bot.commands import render_history_page
     caller_id = query.from_user.id if query.from_user else None
+    if not feature_allowed(ws_id, caller_id, "history"):
+        await query.answer("⛔ This feature is disabled for your role.", show_alert=True)
+        return
+    from bot.commands import render_history_page
     view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin')) else caller_id
     page = int(parts[2]) if len(parts) > 2 else 1
     ft = parts[3] if len(parts) > 3 else "ALL"
@@ -306,6 +310,10 @@ async def nav_digest_info(query, context, parts, ws_id, ws_ctx, update=None):
 
 
 async def nav_recurring(query, context, parts, ws_id, ws_ctx, update=None):
+    caller_id = query.from_user.id if query.from_user else None
+    if not feature_allowed(ws_id, caller_id, "recurring"):
+        await query.answer("⛔ This feature is disabled for your role.", show_alert=True)
+        return
     from services.recurring_service import get_upcoming_recurring
     upcoming = await asyncio.to_thread(get_upcoming_recurring, 30, workspace_id=ws_id)
     text = render_recurring_overview_text(workspace_id=ws_id)
@@ -314,11 +322,19 @@ async def nav_recurring(query, context, parts, ws_id, ws_ctx, update=None):
 
 
 async def nav_rec_all(query, context, parts, ws_id, ws_ctx, update=None):
+    caller_id = query.from_user.id if query.from_user else None
+    if not feature_allowed(ws_id, caller_id, "recurring"):
+        await query.answer("⛔ This feature is disabled for your role.", show_alert=True)
+        return
     text = render_all_recurring_text(workspace_id=ws_id)
     await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
 
 
 async def nav_rec_add(query, context, parts, ws_id, ws_ctx, update=None):
+    caller_id = query.from_user.id if query.from_user else None
+    if not feature_allowed(ws_id, caller_id, "recurring"):
+        await query.answer("⛔ This feature is disabled for your role.", show_alert=True)
+        return
     caller_role = ws_ctx.role if ws_ctx else 'viewer'
     if caller_role not in ('admin', 'owner'):
         await query.answer("⛔ Access Restricted: Admin role required to add recurring payments.", show_alert=True)
@@ -340,6 +356,10 @@ async def nav_rec_add(query, context, parts, ws_id, ws_ctx, update=None):
 
 
 async def nav_month_close(query, context, parts, ws_id, ws_ctx, update=None):
+    caller_id = query.from_user.id if query.from_user else None
+    if not feature_allowed(ws_id, caller_id, "month_close"):
+        await query.answer("⛔ This feature is disabled for your role.", show_alert=True)
+        return
     from services.monthly_review_service import get_monthly_review
     now_dt = get_current_time_in_tz()
     y = max(2000, min(2100, int(parts[2]))) if len(parts) > 2 and parts[2].isdigit() else now_dt.year
@@ -351,6 +371,10 @@ async def nav_month_close(query, context, parts, ws_id, ws_ctx, update=None):
 
 
 async def nav_stats(query, context, parts, ws_id, ws_ctx, update=None):
+    caller_id = query.from_user.id if query.from_user else None
+    if not feature_allowed(ws_id, caller_id, "report"):
+        await query.answer("⛔ This feature is disabled for your role.", show_alert=True)
+        return
     now_dt = get_current_time_in_tz()
     stats = get_monthly_summary(now_dt.year, now_dt.month, workspace_id=ws_id)
     month_name = date(now_dt.year, now_dt.month, 1).strftime("%B %Y")
@@ -369,6 +393,10 @@ async def nav_stats(query, context, parts, ws_id, ws_ctx, update=None):
 
 
 async def nav_budget(query, context, parts, ws_id, ws_ctx, update=None):
+    caller_id = query.from_user.id if query.from_user else None
+    if not feature_allowed(ws_id, caller_id, "budget"):
+        await query.answer("⛔ This feature is disabled for your role.", show_alert=True)
+        return
     from services.budget_service import format_budget_status
     now_dt = get_current_time_in_tz()
     text = format_budget_status(now_dt.year, now_dt.month, workspace_id=ws_id)
@@ -376,6 +404,10 @@ async def nav_budget(query, context, parts, ws_id, ws_ctx, update=None):
 
 
 async def nav_insights(query, context, parts, ws_id, ws_ctx, update=None):
+    caller_id = query.from_user.id if query.from_user else None
+    if not feature_allowed(ws_id, caller_id, "report"):
+        await query.answer("⛔ This feature is disabled for your role.", show_alert=True)
+        return
     from services.category_service import format_spending_insights
     now_dt = get_current_time_in_tz()
     text = format_spending_insights(now_dt.year, now_dt.month, workspace_id=ws_id)
@@ -389,6 +421,10 @@ async def nav_digest(query, context, parts, ws_id, ws_ctx, update=None):
 
 
 async def nav_cafe(query, context, parts, ws_id, ws_ctx, update=None):
+    caller_id = query.from_user.id if query.from_user else None
+    if not feature_allowed(ws_id, caller_id, "cafe"):
+        await query.answer("⛔ This feature is disabled for your role.", show_alert=True)
+        return
     from services.cafeteria_service import format_cafeteria_stats
     text = format_cafeteria_stats(workspace_id=ws_id)
     await query.edit_message_text(text, reply_markup=get_cafestats_keyboard(), parse_mode='HTML')

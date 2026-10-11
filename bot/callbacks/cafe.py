@@ -450,6 +450,11 @@ async def handle_cafe_callback(query, context, action, parts, ws_id, ws_ctx, upd
     """Dispatches cafeteria callback queries via the dispatch table."""
     handler = CAFE_DISPATCH_TABLE.get(action)
     if handler:
+        from bot.feature_registry import feature_allowed
+        caller_id = query.from_user.id if query.from_user else None
+        if not feature_allowed(ws_id, caller_id, "cafe"):
+            await query.answer("⛔ This feature is disabled for your role.", show_alert=True)
+            return True
         await handler(query, context, parts, ws_id, ws_ctx, update)
         return True
     return False

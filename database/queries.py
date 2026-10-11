@@ -1699,16 +1699,16 @@ def restore_soft_deleted_transaction(uid: str = None, tx_id: int = None) -> bool
             if not target_uid and tx_id:
                 cursor.execute("SELECT uid, workspace_id FROM transactions WHERE id = ?", (tx_id,))
                 row = cursor.fetchone()
-                if not row or not row['uid']:
+                if not row or not row['uid'] or not row['workspace_id']:
                     return False
                 target_uid = row['uid']
-                # Safe fallback: restores legacy pre-v4 rows lacking workspace_id to the default workspace
-                ws_id = row['workspace_id'] or get_default_workspace_id()
+                ws_id = str(row['workspace_id'])
             else:
                 cursor.execute("SELECT workspace_id FROM transactions WHERE uid = ?", (target_uid,))
                 row = cursor.fetchone()
-                # Safe fallback: restores legacy pre-v4 rows lacking workspace_id to the default workspace
-                ws_id = (row['workspace_id'] if row else None) or get_default_workspace_id()
+                if not row or not row['workspace_id']:
+                    return False
+                ws_id = str(row['workspace_id'])
 
             valid_uid = validate_uid(target_uid)
             cursor.execute(

@@ -172,12 +172,6 @@ def feature_allowed(workspace_id: str, user_id: int, feature_key: str) -> bool:
     from bot.auth import is_global_owner
     if is_global_owner(user_id):
         return True
-    try:
-        from unittest.mock import Mock
-        if isinstance(user_id, Mock) or isinstance(workspace_id, Mock):
-            return True
-    except Exception:
-        pass
     if not workspace_id or user_id is None:
         return False
     try:

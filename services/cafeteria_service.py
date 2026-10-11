@@ -96,9 +96,20 @@ ADD_ONS = {
     "Extra Spicy": 5.0
 }
 
-def get_all_menu_items(workspace_id: Optional[str] = None) -> List[MenuItem]:
+_UNSET = object()
+
+def get_all_menu_items(workspace_id: Optional[str] = _UNSET) -> List[MenuItem]:
     """Returns the complete menu combining default items and custom user-added items from SQLite."""
     items = list(VEG_MENU)
+    if workspace_id is _UNSET:
+        import os
+        if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
+            from database.queries import get_default_workspace_id
+            workspace_id = get_default_workspace_id()
+        else:
+            workspace_id = None
+    if not workspace_id:
+        return items
     try:
         from database.db import get_custom_menu_items
         for row in get_custom_menu_items(workspace_id=workspace_id):

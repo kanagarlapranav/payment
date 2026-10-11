@@ -489,7 +489,8 @@ class TestUXAndNavigation(unittest.TestCase):
         update.message.reply_text = AsyncMock()
         context = MagicMock()
 
-        with patch('bot.commands.require_admin', AsyncMock(return_value=True)):
+        with patch('bot.commands.require_admin', AsyncMock(return_value=True)), \
+             patch('bot.feature_registry.feature_allowed', return_value=True):
             asyncio.run(backup_command(update, context))
 
         update.message.reply_text.assert_called_once()

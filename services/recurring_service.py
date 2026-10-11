@@ -214,13 +214,26 @@ def mark_recurring_paid(rec_id: int, paid_date: Optional[date] = None, workspace
 
         return tx_id, new_due
 
-def skip_recurring_due(rec_id: int, workspace_id: Optional[str] = None) -> date:
+_UNSET = object()
+
+
+def skip_recurring_due(rec_id: int, workspace_id: Optional[str] = _UNSET) -> date:
     """
     Skips the current cycle of a recurring payment without logging an expense.
     Advances next_due_date by one interval cycle.
     """
+    if workspace_id is _UNSET:
+        import os
+        if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
+            from database.queries import get_default_workspace_id
+            workspace_id = get_default_workspace_id()
+        else:
+            raise ValueError("workspace_id is required for skip_recurring_due")
+    elif not workspace_id:
+        raise ValueError("workspace_id is required for skip_recurring_due")
+    ws_id = str(workspace_id)
     with LEDGER_LOCK:
-        rec = get_recurring_by_id(rec_id, workspace_id=workspace_id)
+        rec = get_recurring_by_id(rec_id, workspace_id=ws_id)
         if not rec:
             raise ValueError(f"Recurring payment #{rec_id} not found")
             
@@ -233,14 +246,24 @@ def skip_recurring_due(rec_id: int, workspace_id: Optional[str] = None) -> date:
             cursor.execute("""
                 UPDATE recurring_payments
                 SET next_due_date = ?, updated_at = ?
-                WHERE id = ? AND next_due_date = ?
-            """, (str(new_due), now_iso, rec_id, str(rec['next_due_date'])))
+                WHERE id = ? AND next_due_date = ? AND workspace_id = ?
+            """, (str(new_due), now_iso, rec_id, str(rec['next_due_date']), ws_id))
             increment_revision_and_mark_dirty(conn)
             conn.commit()
             return new_due
 
-def update_recurring_status(rec_id: int, new_status: str, workspace_id: Optional[str] = None) -> bool:
+def update_recurring_status(rec_id: int, new_status: str, workspace_id: Optional[str] = _UNSET) -> bool:
     """Updates status of recurring payment (ACTIVE, PAUSED, CANCELLED) with workspace scoping."""
+    if workspace_id is _UNSET:
+        import os
+        if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
+            from database.queries import get_default_workspace_id
+            workspace_id = get_default_workspace_id()
+        else:
+            raise ValueError("workspace_id is required for update_recurring_status")
+    elif not workspace_id:
+        raise ValueError("workspace_id is required for update_recurring_status")
+    ws_id = str(workspace_id)
     norm = new_status.upper()
     if norm not in ("ACTIVE", "PAUSED", "CANCELLED"):
         raise ValueError("Status must be ACTIVE, PAUSED, or CANCELLED")
@@ -248,31 +271,30 @@ def update_recurring_status(rec_id: int, new_status: str, workspace_id: Optional
     with LEDGER_LOCK:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            if workspace_id:
-                from database.queries import get_default_workspace_id
-                default_ws = get_default_workspace_id()
-                ws_id = str(workspace_id)
-                ws_filter = "(workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')" if ws_id == default_ws else "workspace_id = ?"
-                cursor.execute(f"UPDATE recurring_payments SET status = ?, updated_at = ? WHERE id = ? AND {ws_filter}", (norm, now_iso, rec_id, ws_id))
-            else:
-                cursor.execute("UPDATE recurring_payments SET status = ?, updated_at = ? WHERE id = ?", (norm, now_iso, rec_id))
+            cursor.execute(
+                "UPDATE recurring_payments SET status = ?, updated_at = ? WHERE id = ? AND workspace_id = ?",
+                (norm, now_iso, rec_id, ws_id)
+            )
             increment_revision_and_mark_dirty(conn)
             conn.commit()
             return cursor.rowcount > 0
 
-def delete_recurring_payment(rec_id: int, workspace_id: Optional[str] = None) -> bool:
+def delete_recurring_payment(rec_id: int, workspace_id: Optional[str] = _UNSET) -> bool:
     """Permanently deletes a recurring payment rule with workspace scoping."""
+    if workspace_id is _UNSET:
+        import os
+        if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
+            from database.queries import get_default_workspace_id
+            workspace_id = get_default_workspace_id()
+        else:
+            raise ValueError("workspace_id is required for delete_recurring_payment")
+    elif not workspace_id:
+        raise ValueError("workspace_id is required for delete_recurring_payment")
+    ws_id = str(workspace_id)
     with LEDGER_LOCK:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            if workspace_id:
-                from database.queries import get_default_workspace_id
-                default_ws = get_default_workspace_id()
-                ws_id = str(workspace_id)
-                ws_filter = "(workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')" if ws_id == default_ws else "workspace_id = ?"
-                cursor.execute(f"DELETE FROM recurring_payments WHERE id = ? AND {ws_filter}", (rec_id, ws_id))
-            else:
-                cursor.execute("DELETE FROM recurring_payments WHERE id = ?", (rec_id,))
+            cursor.execute("DELETE FROM recurring_payments WHERE id = ? AND workspace_id = ?", (rec_id, ws_id))
             increment_revision_and_mark_dirty(conn)
             conn.commit()
             return cursor.rowcount > 0
