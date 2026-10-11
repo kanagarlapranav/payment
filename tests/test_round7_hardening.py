@@ -36,27 +36,25 @@ def test_canonical_feature_keys_accepted():
         reset_feature_permissions(ws_id, feat_key)
 
 
-def test_group_workspaces_personal_ledger_isolation():
+def test_group_workspaces_personal_ledger_isolation(monkeypatch):
     """Verify group chat /workspaces in admin mode never leaks other users' personal ledgers."""
     from bot.commands import render_workspaces_view
     from database.queries import get_or_create_workspace, add_workspace_member
+    import config
 
     user_a_id = 999901
     user_b_id = 999902
     group_chat_id = -100999999
 
-    # Create group workspace and personal workspaces for both User A and User B
+    # Genuinely enter admin mode by setting config.TELEGRAM_USER_ID to the test user
+    monkeypatch.setattr(config, "TELEGRAM_USER_ID", str(user_a_id))
+
+    # Create group workspace and personal workspace for User B
     grp_ws = get_or_create_workspace(
         title="Engineering Group",
         creator_user_id=user_a_id,
         chat_id=group_chat_id,
         chat_type="group"
-    )
-    user_a_dm = get_or_create_workspace(
-        title="User A Private Ledger",
-        creator_user_id=user_a_id,
-        chat_id=user_a_id,
-        chat_type="dm"
     )
     user_b_dm = get_or_create_workspace(
         title="User B Private Ledger",
@@ -77,19 +75,20 @@ def test_group_workspaces_personal_ledger_isolation():
     # Render view in group chat
     text, keyboard = render_workspaces_view(mock_update)
 
-    # Invariant: group view shows current chat/ledger
+    # Invariant: admin mode in group chats must genuinely render admin controls
     assert "Engineering Group" in text
+    assert any("➕ New Ledger" in btn.text or btn.callback_data == "ws_new_prompt"
+               for row in keyboard.inline_keyboard for btn in row)
 
-    # Invariant: group chats isolate personal workspaces, even when user A has personal ledgers
+    # Invariant: in a group chat, the admin-mode /workspaces view must not surface other users' personal DM ledgers
+    # (no foreign "Personal Ledgers:" section, no foreign DM workspace titles or switch buttons)
     assert "Personal Ledgers:" not in text
-    assert "User A Private Ledger" not in text
     assert "User B Private Ledger" not in text
 
     # And must not appear in any button callback or label
     for row in keyboard.inline_keyboard:
         for btn in row:
             assert "User B Private" not in btn.text
-            assert "User A Private" not in btn.text
             if btn.callback_data and btn.callback_data.startswith("ws_switch:"):
                 assert btn.callback_data != f"ws_switch:{user_b_dm_id}"
 

@@ -2265,7 +2265,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         from database.queries import can_user_modify_transaction
         caller_id = update.effective_user.id if update.effective_user else None
         caller_role = ws_ctx.role if ws_ctx else 'member'
-        if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
+        if not can_user_modify_transaction(tx_id, caller_id, caller_role, workspace_id=ws_id) and not is_admin_user(update):
             await query.answer("⛔ You can only undo payments that you recorded.", show_alert=True)
             return
         tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
@@ -2399,7 +2399,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             return
         from database.queries import can_user_modify_transaction
         caller_role = ws_ctx.role if ws_ctx else 'member'
-        if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
+        if not can_user_modify_transaction(tx_id, caller_id, caller_role, workspace_id=ws_id) and not is_admin_user(update):
             await query.answer("⛔ You can only edit payments that you recorded.", show_alert=True)
             return
         tx = get_transaction_by_id(tx_id, workspace_id=ws_id)
@@ -2430,7 +2430,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             return
         from database.queries import can_user_modify_transaction
         caller_role = ws_ctx.role if ws_ctx else 'member'
-        if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
+        if not can_user_modify_transaction(tx_id, caller_id, caller_role, workspace_id=ws_id) and not is_admin_user(update):
             await query.answer("⛔ You can only delete payments that you recorded.", show_alert=True)
             return
         await query.answer()
@@ -2480,7 +2480,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         from database.queries import can_user_modify_transaction
         caller_id = update.effective_user.id if update.effective_user else None
         caller_role = ws_ctx.role if ws_ctx else 'member'
-        if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
+        if not can_user_modify_transaction(tx_id, caller_id, caller_role, workspace_id=ws_id) and not is_admin_user(update):
             await query.answer("⛔ You can only edit payments that you recorded.", show_alert=True)
             return
         
@@ -2517,7 +2517,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         from database.queries import can_user_modify_transaction
         caller_id = update.effective_user.id if update.effective_user else None
         caller_role = ws_ctx.role if ws_ctx else 'member'
-        if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
+        if not can_user_modify_transaction(tx_id, caller_id, caller_role, workspace_id=ws_id) and not is_admin_user(update):
             await query.answer("⛔ You can only delete payments that you recorded.", show_alert=True)
             return
         await query.answer("✅ Delete Confirmed!", show_alert=False)
@@ -3162,7 +3162,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caller_id = update.effective_user.id if update.effective_user else None
                 caller_role = getattr(context, 'user_role', None) or (ws_ctx.role if ws_ctx else 'member')
                 from database.queries import can_user_modify_transaction
-                if not can_user_modify_transaction(tx['id'], caller_id, caller_role) and not is_admin_user(update):
+                if not can_user_modify_transaction(tx['id'], caller_id, caller_role, workspace_id=ws_id) and not is_admin_user(update):
                     await update.message.reply_text("⛔ You can only edit payments that you recorded.")
                     return
                 tx_id = tx['id']
@@ -3200,7 +3200,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caller_id = update.effective_user.id if update.effective_user else None
                 caller_role = getattr(context, 'user_role', None) or (ws_ctx.role if ws_ctx else 'member')
                 from database.queries import can_user_modify_transaction
-                if not can_user_modify_transaction(tx['id'], caller_id, caller_role) and not is_admin_user(update):
+                if not can_user_modify_transaction(tx['id'], caller_id, caller_role, workspace_id=ws_id) and not is_admin_user(update):
                     await update.message.reply_text("⛔ You can only delete payments that you recorded.")
                     return
                 tx_id = tx['id']
@@ -3227,7 +3227,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caller_id = update.effective_user.id if update.effective_user else None
         caller_role = getattr(context, 'user_role', None) or (ws_ctx.role if ws_ctx else 'member')
         from database.queries import can_user_modify_transaction
-        if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
+        if not can_user_modify_transaction(tx_id, caller_id, caller_role, workspace_id=ws_id) and not is_admin_user(update):
             context.user_data.pop('action', None)
             context.user_data.pop('edit_tx_id', None)
             context.user_data.pop('edit_field', None)
@@ -3345,7 +3345,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caller_id = update.effective_user.id if update.effective_user else None
             caller_role = getattr(context, 'user_role', None) or (ws_ctx.role if ws_ctx else 'member')
             from database.queries import can_user_modify_transaction
-            if not can_user_modify_transaction(tx_id, caller_id, caller_role) and not is_admin_user(update):
+            if not can_user_modify_transaction(tx_id, caller_id, caller_role, workspace_id=ws_id) and not is_admin_user(update):
                 await update.message.reply_text("⛔ You can only edit payments that you recorded.")
                 return
             tx = get_transaction_by_id(tx_id, workspace_id=ws_id)

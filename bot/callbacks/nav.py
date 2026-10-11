@@ -45,9 +45,19 @@ from services.balance_service import (
 )
 from utils.currency import format_currency
 from utils.dates import get_current_time_in_tz
+import inspect
 from bot.feature_registry import feature_allowed
 
 logger = logging.getLogger(__name__)
+
+
+async def _safe_answer_alert(query, text: str = "⛔ This feature is disabled for your role.") -> None:
+    try:
+        ans = query.answer(text, show_alert=True)
+        if inspect.isawaitable(ans):
+            await ans
+    except Exception:
+        pass
 
 
 async def nav_home(query, context, parts, ws_id, ws_ctx, update=None):
@@ -82,7 +92,10 @@ async def nav_balance(query, context, parts, ws_id, ws_ctx, update=None):
 
 
 async def nav_today(query, context, parts, ws_id, ws_ctx, update=None):
-    caller_id = query.from_user.id if query.from_user else None
+    caller_id = (ws_ctx.user_id if ws_ctx else None) or (query.from_user.id if getattr(query, 'from_user', None) else None)
+    if not feature_allowed(ws_id, caller_id, "history"):
+        await _safe_answer_alert(query)
+        return
     view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin')) else caller_id
     today_stats = get_today_summary(workspace_id=ws_id, user_id=view_user_id)
     today_date = get_current_time_in_tz().date()
@@ -107,9 +120,9 @@ async def nav_today(query, context, parts, ws_id, ws_ctx, update=None):
 
 
 async def nav_history(query, context, parts, ws_id, ws_ctx, update=None):
-    caller_id = query.from_user.id if query.from_user else None
+    caller_id = (ws_ctx.user_id if ws_ctx else None) or (query.from_user.id if getattr(query, 'from_user', None) else None)
     if not feature_allowed(ws_id, caller_id, "history"):
-        await query.answer("⛔ This feature is disabled for your role.", show_alert=True)
+        await _safe_answer_alert(query)
         return
     from bot.commands import render_history_page
     view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin')) else caller_id
@@ -209,6 +222,10 @@ async def nav_quickadd(query, context, parts, ws_id, ws_ctx, update=None):
 
 
 async def nav_backup_status(query, context, parts, ws_id, ws_ctx, update=None):
+    caller_id = (ws_ctx.user_id if ws_ctx else None) or (query.from_user.id if getattr(query, 'from_user', None) else None)
+    if not feature_allowed(ws_id, caller_id, "backup"):
+        await _safe_answer_alert(query)
+        return
     text = render_backup_status_text()
     await query.edit_message_text(text, reply_markup=get_backup_status_keyboard(), parse_mode='HTML')
 
@@ -264,6 +281,10 @@ async def nav_settings(query, context, parts, ws_id, ws_ctx, update=None):
 
 
 async def nav_contacts(query, context, parts, ws_id, ws_ctx, update=None):
+    caller_id = (ws_ctx.user_id if ws_ctx else None) or (query.from_user.id if getattr(query, 'from_user', None) else None)
+    if not feature_allowed(ws_id, caller_id, "details"):
+        await _safe_answer_alert(query)
+        return
     text = render_contacts_ledger_text(workspace_id=ws_id)
     await query.edit_message_text(text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
 
@@ -415,15 +436,19 @@ async def nav_insights(query, context, parts, ws_id, ws_ctx, update=None):
 
 
 async def nav_digest(query, context, parts, ws_id, ws_ctx, update=None):
+    caller_id = (ws_ctx.user_id if ws_ctx else None) or (query.from_user.id if getattr(query, 'from_user', None) else None)
+    if not feature_allowed(ws_id, caller_id, "report"):
+        await _safe_answer_alert(query)
+        return
     from services.scheduler_service import format_daily_digest
     text = format_daily_digest(None, workspace_id=ws_id)
     await query.edit_message_text(text, reply_markup=get_digest_keyboard(), parse_mode='HTML')
 
 
 async def nav_cafe(query, context, parts, ws_id, ws_ctx, update=None):
-    caller_id = query.from_user.id if query.from_user else None
+    caller_id = (ws_ctx.user_id if ws_ctx else None) or (query.from_user.id if getattr(query, 'from_user', None) else None)
     if not feature_allowed(ws_id, caller_id, "cafe"):
-        await query.answer("⛔ This feature is disabled for your role.", show_alert=True)
+        await _safe_answer_alert(query)
         return
     from services.cafeteria_service import format_cafeteria_stats
     text = format_cafeteria_stats(workspace_id=ws_id)

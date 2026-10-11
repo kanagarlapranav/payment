@@ -340,7 +340,10 @@ def render_contacts_ledger_text(workspace_id: str = None) -> str:
     lines.append("━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
-from bot.auth import require_authorized, require_admin, is_owner, is_authorized_user, require_member, is_global_owner
+from bot.auth import (
+    require_authorized, require_admin, is_owner, is_authorized_user,
+    require_member, is_global_owner, get_effective_user_id
+)
 
 def is_admin_user(update: Update) -> bool:
     """Checks if the user is the true global bot owner (TELEGRAM_USER_ID) or super admin."""
@@ -1161,7 +1164,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tx_id = tx['id']
 
     # Role & Ownership check
-    if not can_user_modify_transaction(tx_id, user_id=user_id, user_role=role):
+    if not can_user_modify_transaction(tx_id, user_id=user_id, user_role=role, workspace_id=ws_id):
         await update.message.reply_text(
             "⛔ <b>Permission Denied:</b> You can only edit payments that you recorded. "
             "Admin role is required to edit other members' payments.",
@@ -1338,7 +1341,7 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tx_id = tx['id']
 
     # Role & Ownership check
-    if not can_user_modify_transaction(tx_id, user_id=user_id, user_role=role):
+    if not can_user_modify_transaction(tx_id, user_id=user_id, user_role=role, workspace_id=ws_id):
         await update.message.reply_text(
             "⛔ <b>Permission Denied:</b> You can only delete payments that you recorded. "
             "Admin role is required to delete other members' payments.",
@@ -2173,7 +2176,11 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
 
     if is_admin_mode:
         group_workspaces = [w for w in unique_workspaces if w.chat_type != 'dm']
-        dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm']
+        if is_group and chat and getattr(chat, 'type', None) == 'group':
+            # In group chats, isolate foreign personal DM workspaces (only surface caller's own personal DM ledgers)
+            dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm' and str(w.get('chat_id', '')) == str(user_id)]
+        else:
+            dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm']
     else:
         group_workspaces = []
         dm_workspaces = [] if is_group else ([w for w in unique_workspaces if w.chat_type == 'dm'] or unique_workspaces)
