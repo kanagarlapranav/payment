@@ -74,7 +74,7 @@ CALLBACK_ROLE_POLICY = {
     # Viewer & above (Read-Only)
     "nav": "viewer", "filter": "viewer", "sort": "viewer",
     "cafe_stats": "viewer", "cafe_view_menu": "viewer", "tx_view": "viewer",
-    "ws_switch": "viewer", "ws_reset": "viewer", "ws_reset_menu": "viewer",
+    "ws_switch": "viewer", "ws_reset": "viewer", "ws_reset_menu": "viewer", "menu_main": "viewer",
 
     # Member & above
     "ws_new_prompt": "member",
@@ -109,7 +109,9 @@ CALLBACK_ROLE_POLICY = {
     "perm_view": "owner", "perm_list": "owner",
     "restore_confirm": "owner", "restore_cancel": "owner",
     "json_import_confirm": "owner", "json_import_cancel": "owner",
-    "settings_menu": "owner", "set_def_role": "owner", "set_quick_confirm": "owner",
+    "settings_menu": "owner", "perm_matrix_menu": "owner", "perm_mat_view": "owner",
+    "perm_mat_toggle": "owner", "perm_mat_reset": "owner", "perm_mat_reset_all": "owner",
+    "set_def_role": "owner", "set_quick_confirm": "owner",
     "set_access_users": "owner", "set_access_remove": "owner", "set_access_add_prompt": "owner",
     "set_cap_tx": "owner", "set_cap_tx_val": "owner", "set_cap_month": "owner",
     "set_cap_month_val": "owner", "set_gemini_quota": "owner", "set_gemini_quota_val": "owner"
