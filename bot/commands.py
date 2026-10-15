@@ -667,6 +667,14 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
+    caller_id = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_id, "history"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
     await balance_command(update, context)
 
 
@@ -765,8 +773,14 @@ async def last5_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
+    caller_id = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_id, "history"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
     recalculate_all_balances(workspace_id=ws_id)
-    text, markup = render_history_page(page=1, filter_type="ALL", page_size=5, workspace_id=ws_id)
+    text, markup = render_history_page(page=1, filter_type="ALL", page_size=5, workspace_id=ws_id, user_id=view_user_id)
     await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
 
 async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -781,8 +795,9 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ <b>Access Denied:</b> Transaction details feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
     
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
     from bot.keyboards import get_standard_nav_keyboard
-    transactions = get_all_transactions_asc(workspace_id=ws_id)
+    transactions = get_all_transactions_asc(workspace_id=ws_id, user_id=view_user_id)
     if not transactions:
         await update.message.reply_text(
             "No recent transactions found.\n\n💡 Send your first entry, e.g. <code>paid 200 for chai</code>",
@@ -837,6 +852,11 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
         return
     ws_id = ctx.workspace_id
+    caller_id = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_id, "history"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
     from bot.keyboards import get_standard_nav_keyboard
     
     if not context.args:
@@ -897,6 +917,10 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     ws_id = ctx.workspace_id
     caller_id = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_id, "history"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
     view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
     from bot.keyboards import get_standard_nav_keyboard
     
@@ -950,6 +974,11 @@ async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
         return
     ws_id = ctx.workspace_id
+    caller_id = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_id, "history"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
     from bot.keyboards import get_standard_nav_keyboard
     
     if not context.args:
@@ -1047,6 +1076,14 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def filter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Opens the interactive filter menu."""
     if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
+    caller_id = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_id, "history"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
     from bot.keyboards import get_filter_keyboard
     await update.message.reply_text("🎛️ <b>Filter & Sort Transactions:</b>\n\nChoose an option below:", reply_markup=get_filter_keyboard(), parse_mode='HTML')
 
@@ -1056,6 +1093,12 @@ async def sort_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.auth import get_workspace_context
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
+    caller_id = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_id, "history"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
     from bot.keyboards import get_sort_keyboard
     
     # If user provided argument e.g. /sort high, /sort low, /sort amount, /sort money
@@ -1074,7 +1117,7 @@ async def sort_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sort_by = 'date_desc'
             title = "🗓️ Date (Newest First)"
             
-        txs = search_transactions(sort_by=sort_by, limit=10, workspace_id=ws_id)
+        txs = search_transactions(sort_by=sort_by, limit=10, workspace_id=ws_id, user_id=view_user_id)
         if not txs:
             await update.message.reply_text("No transactions found.")
             return
@@ -1600,6 +1643,11 @@ async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
         return
     ws_id = ctx.workspace_id
+    caller_uid = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_uid, "report"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> Digest feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
     from services.scheduler_service import format_daily_digest
     from bot.keyboards import get_digest_keyboard
     
@@ -2156,7 +2204,7 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
 
     if is_admin_mode:
         group_workspaces = [w for w in unique_workspaces if w.chat_type != 'dm']
-        if is_group and chat and getattr(chat, 'type', None) == 'group':
+        if is_group:
             # In group chats, isolate foreign personal DM workspaces (only surface caller's own personal DM ledgers)
             dm_workspaces = [
                 w for w in unique_workspaces
@@ -2653,70 +2701,92 @@ def render_permissions_list_payload() -> tuple[str, Any]:
     users = get_all_users_for_permissions()
     
     role_icons = {'owner': '👑', 'admin': '🛡️', 'member': '👤', 'viewer': '👁️'}
+    unique_uids = {u['telegram_user_id'] for u in users}
     text_lines = [
         "👥 <b>User Permissions & Access Control</b>",
         "━━━━━━━━━━━━━━━━━━━━",
         "Manage access levels, roles, and restrictions for all users from Telegram.",
         "",
-        f"<b>Total Users:</b> {len(users)}",
+        f"<b>Total Users:</b> {len(unique_uids)}",
         "━━━━━━━━━━━━━━━━━━━━"
     ]
     keyboard = []
+    seen_uids = set()
     for u in users:
         uid = u['telegram_user_id']
         role = (u['role'] or 'member').lower()
         is_active = bool(u['is_active'])
         icon = role_icons.get(role, '👤')
         status_dot = "🟢" if is_active else "🔴"
-        uname = f"@{u['username']}" if u['username'] else (u['display_name'] or f"ID {uid}")
+        raw_name = u['display_name'] or (f"@{u['username']}" if u['username'] else f"ID {uid}")
+        ws_title = u.get('workspace_title') or "Workspace"
         
-        text_lines.append(f"{status_dot} {icon} <b>{html.escape(uname)}</b> — <code>{role.upper()}</code> (<code>{uid}</code>)")
-        btn_label = f"{status_dot} {icon} {uname[:16]} ({role[:3].upper()})"
-        keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"perm_view:{uid}")])
+        text_lines.append(f"{status_dot} {icon} <b>{html.escape(raw_name)}</b> — <code>{role.title()}</code> ({html.escape(ws_title)}) (<code>{uid}</code>)")
+        if uid not in seen_uids:
+            seen_uids.add(uid)
+            uname = f"@{u['username']}" if u['username'] else (u['display_name'] or f"ID {uid}")
+            btn_label = f"{status_dot} {icon} {uname[:16]} ({role[:3].upper()})"
+            keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"perm_view:{uid}")])
         
     text_lines.append("")
     text_lines.append("<i>Tap any user below to view details, change permissions, or revoke access:</i>")
     return "\n".join(text_lines), InlineKeyboardMarkup(keyboard)
 
 
-def render_user_permission_card(target_uid: int) -> tuple[str, Any]:
-    """Renders detailed card and action buttons for a single user."""
-    from database.queries import get_all_users_for_permissions
+def render_user_permission_card(target_uid: int, workspace_id: Optional[str] = None) -> tuple[str, Any]:
+    """Renders detailed card and action buttons for a single user across their workspaces."""
+    from database.queries import get_all_users_for_permissions, get_workspace_by_id, get_default_workspace_id
     users = get_all_users_for_permissions()
-    target_user = next((u for u in users if u['telegram_user_id'] == int(target_uid)), None)
+    user_rows = [u for u in users if u['telegram_user_id'] == int(target_uid)]
     
-    role_icons = {'owner': '👑', 'admin': '🛡️', 'member': '👤', 'viewer': '👁️'}
-    if not target_user:
+    if not user_rows:
         return "❌ User not found.", InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Users", callback_data="perm_list")]])
         
-    role = (target_user['role'] or 'member').lower()
-    is_active = bool(target_user['is_active'])
-    status_text = "🟢 Active (Access Granted)" if is_active else "🔴 Revoked / Blocked (No Access)"
-    icon = role_icons.get(role, '👤')
-    display = target_user['display_name'] or "Unknown"
-    uname = f"@{target_user['username']}" if target_user['username'] else "None"
-    
-    card = (
-        "⚙️ <b>User Permissions & Access Control</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 <b>Name:</b> {html.escape(display)}\n"
-        f"💬 <b>Username:</b> {html.escape(uname)}\n"
-        f"🆔 <b>User ID:</b> <code>{target_uid}</code>\n"
-        f"🛡️ <b>Current Role:</b> {icon} <b>{role.upper()}</b>\n"
-        f"🚦 <b>Status:</b> <b>{status_text}</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "<i>Select an action below to update this user's role or access:</i>"
-    )
-    
+    role_icons = {'owner': '👑', 'admin': '🛡️', 'member': '👤', 'viewer': '👁️'}
+    first = user_rows[0]
+    display = first['display_name'] or "Unknown"
+    uname = f"@{first['username']}" if first['username'] else "None"
+
+    card_lines = [
+        "⚙️ <b>User Permissions & Access Control</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"👤 <b>Name:</b> {html.escape(display)}",
+        f"💬 <b>Username:</b> {html.escape(uname)}",
+        f"🆔 <b>User ID:</b> <code>{target_uid}</code>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "📂 <b>Workspace Roles:</b>"
+    ]
+
+    for row in user_rows:
+        ws_title = row.get('workspace_title') or "Workspace"
+        r_role = (row['role'] or 'member').lower()
+        r_active = bool(row['is_active'])
+        r_icon = role_icons.get(r_role, '👤')
+        status_label = "Active" if r_active else "Revoked / Blocked"
+        card_lines.append(f"📁 {html.escape(ws_title)}: {r_icon} <b>{r_role.upper()}</b> — {status_label}")
+
+    target_ws = workspace_id or get_default_workspace_id()
+    ws_obj = get_workspace_by_id(target_ws) if target_ws else None
+    current_ws_title = ws_obj.title if ws_obj and ws_obj.title else "This Workspace"
+    card_lines.append("━━━━━━━━━━━━━━━━━━━━")
+    card_lines.append(f"🛠️ Role changes below apply to: <b>{html.escape(current_ws_title)}</b> (the chat where you opened this panel).")
+    card_lines.append("<i>Select an action below to update this user's role or access:</i>")
+
+    card = "\n".join(card_lines)
+
+    current_row = next((r for r in user_rows if r.get('workspace_id') == target_ws), None)
+    curr_role = (current_row['role'] if current_row else 'member').lower()
+    curr_active = bool(current_row['is_active']) if current_row else True
+
     buttons = [
         [
-            InlineKeyboardButton(f"{'✅ ' if role == 'admin' and is_active else ''}🛡️ Admin", callback_data=f"perm_set:{target_uid}:admin"),
-            InlineKeyboardButton(f"{'✅ ' if role == 'member' and is_active else ''}👤 Member", callback_data=f"perm_set:{target_uid}:member")
+            InlineKeyboardButton(f"{'✅ ' if curr_role == 'admin' and curr_active else ''}🛡️ Admin", callback_data=f"perm_set:{target_uid}:admin"),
+            InlineKeyboardButton(f"{'✅ ' if curr_role == 'member' and curr_active else ''}👤 Member", callback_data=f"perm_set:{target_uid}:member")
         ],
         [
-            InlineKeyboardButton(f"{'✅ ' if role == 'viewer' and is_active else ''}👁️ Viewer", callback_data=f"perm_set:{target_uid}:viewer"),
-            InlineKeyboardButton("🚫 Revoke / Block" if is_active else "🟢 Re-activate Member", 
-                                 callback_data=f"perm_set:{target_uid}:revoke" if is_active else f"perm_set:{target_uid}:member")
+            InlineKeyboardButton(f"{'✅ ' if curr_role == 'viewer' and curr_active else ''}👁️ Viewer", callback_data=f"perm_set:{target_uid}:viewer"),
+            InlineKeyboardButton("🚫 Revoke / Block" if curr_active else "🟢 Re-activate Member", 
+                                 callback_data=f"perm_set:{target_uid}:revoke" if curr_active else f"perm_set:{target_uid}:member")
         ],
         [
             InlineKeyboardButton("❌ Remove From Workspace", callback_data=f"perm_remove:{target_uid}")

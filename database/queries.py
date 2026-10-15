@@ -710,50 +710,44 @@ def get_all_users_for_permissions() -> list[RowDict]:
         cursor.execute("""
             SELECT 
                 u.telegram_user_id,
-                MAX(COALESCE(u.username, '')) as username,
-                MAX(COALESCE(u.display_name, '')) as display_name,
-                MAX(COALESCE(u.is_active, 0)) as is_active,
-                MAX(u.joined_at) as joined_at,
-                MAX(COALESCE(u.request_status, 'approved')) as request_status,
-                CASE MAX(
-                    CASE u.role
-                        WHEN 'owner' THEN 4
-                        WHEN 'admin' THEN 3
-                        WHEN 'member' THEN 2
-                        WHEN 'viewer' THEN 1
-                        ELSE 0
-                    END
-                )
-                    WHEN 4 THEN 'owner'
-                    WHEN 3 THEN 'admin'
-                    WHEN 2 THEN 'member'
-                    WHEN 1 THEN 'viewer'
-                    ELSE 'viewer'
-                END as role
+                u.workspace_id,
+                u.workspace_title,
+                u.username,
+                u.display_name,
+                u.is_active,
+                u.joined_at,
+                u.request_status,
+                u.role
             FROM (
                 SELECT 
                     wm.telegram_user_id,
-                    wm.username,
-                    wm.display_name,
-                    wm.role,
-                    wm.is_active,
+                    wm.workspace_id,
+                    COALESCE(NULLIF(w.title, ''), 'Workspace') as workspace_title,
+                    COALESCE(wm.username, '') as username,
+                    COALESCE(wm.display_name, '') as display_name,
+                    COALESCE(wm.is_active, 0) as is_active,
                     wm.joined_at,
-                    COALESCE(ar.status, 'approved') as request_status
+                    COALESCE(ar.status, 'approved') as request_status,
+                    wm.role
                 FROM workspace_members wm
+                LEFT JOIN workspaces w ON wm.workspace_id = w.id
                 LEFT JOIN access_requests ar ON wm.telegram_user_id = ar.telegram_user_id
+                WHERE (w.is_active = 1 OR w.id IS NULL)
                 UNION ALL
                 SELECT 
                     ar.telegram_user_id,
-                    ar.username,
-                    ar.display_name,
-                    'viewer' as role,
+                    ar.workspace_id,
+                    COALESCE(NULLIF(w.title, ''), 'Workspace') as workspace_title,
+                    COALESCE(ar.username, '') as username,
+                    COALESCE(ar.display_name, '') as display_name,
                     CASE WHEN ar.status = 'approved' THEN 1 ELSE 0 END as is_active,
                     ar.requested_at as joined_at,
-                    ar.status as request_status
+                    ar.status as request_status,
+                    'viewer' as role
                 FROM access_requests ar
+                LEFT JOIN workspaces w ON ar.workspace_id = w.id
                 WHERE ar.telegram_user_id NOT IN (SELECT telegram_user_id FROM workspace_members)
             ) u
-            GROUP BY u.telegram_user_id
             ORDER BY is_active DESC, 
                 CASE role
                     WHEN 'owner' THEN 4
@@ -762,7 +756,8 @@ def get_all_users_for_permissions() -> list[RowDict]:
                     WHEN 'viewer' THEN 1
                     ELSE 0
                 END DESC, 
-                telegram_user_id ASC
+                telegram_user_id ASC,
+                workspace_title ASC
         """)
         return [RowDict(dict(r)) for r in cursor.fetchall()]
 

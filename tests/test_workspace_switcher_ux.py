@@ -164,7 +164,7 @@ def test_workspaces_ui_rendering_no_raw_uuids():
         ws_p = get_or_create_workspace(chat_id=3000000003, chat_type="dm", title="Secondary (Personal)", creator_user_id=owner_id)
         add_workspace_member(ws_p.id, owner_id, role="owner")
 
-        up = make_mock_update(user_id=owner_id, chat_id=group_chat_id, chat_type="supergroup", text="/workspaces")
+        up = make_mock_update(user_id=owner_id, chat_id=owner_id, chat_type="private", text="/workspaces")
         text, markup = render_workspaces_view(up)
 
         # UI Checks

@@ -397,7 +397,8 @@ async def nav_stats(query, context, parts, ws_id, ws_ctx, update=None):
         await query.answer("⛔ This feature is disabled for your role.", show_alert=True)
         return
     now_dt = get_current_time_in_tz()
-    stats = get_monthly_summary(now_dt.year, now_dt.month, workspace_id=ws_id)
+    view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin')) else caller_id
+    stats = get_monthly_summary(now_dt.year, now_dt.month, workspace_id=ws_id, user_id=view_user_id)
     month_name = date(now_dt.year, now_dt.month, 1).strftime("%B %Y")
     top_p_text = "N/A"
     if stats['top_recipient']:

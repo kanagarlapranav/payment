@@ -1054,6 +1054,10 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
 
     # --- 1. Transaction Detail, Duplicate & Backup Actions ---
     elif action == "tx_view":
+        from bot.feature_registry import feature_allowed
+        if not feature_allowed(ws_id, caller_uid, "details"):
+            await query.answer("⛔ Transaction details are restricted for your role in this workspace.", show_alert=True)
+            return
         tx_id = int(parts[1])
         caller_role = ws_ctx.role if ws_ctx else 'viewer'
         text, markup = render_transaction_detail(tx_id, workspace_id=ws_id, role=caller_role)
@@ -1876,12 +1880,12 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             return
         target_uid = int(parts[1])
         from bot.commands import render_user_permission_card
-        text, markup = render_user_permission_card(target_uid)
+        text, markup = render_user_permission_card(target_uid, workspace_id=ws_id)
         await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
         return
 
     elif action == "perm_set":
-        if not is_owner(update):
+        if not is_global_owner(caller_uid):
             await query.answer("⛔ Only the bot owner can manage permissions.", show_alert=True)
             return
         target_uid = int(parts[1])
@@ -1895,23 +1899,25 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             return
         if setting not in ('member', 'admin', 'viewer', 'revoke'):
             setting = 'member'
-        from database.queries import set_user_permission_and_role
+        from database.queries import set_user_permission_and_role, get_workspace_by_id
         target_ws_scope = ws_id
+        ws_obj = get_workspace_by_id(target_ws_scope) if target_ws_scope else None
+        workspace_title = (ws_obj.title if ws_obj and ws_obj.title else None) or "this workspace"
         if setting == "revoke":
             set_user_permission_and_role(target_uid, "viewer", is_active=False, workspace_id=target_ws_scope)
             try:
-                await query.answer("🚫 User access revoked & blocked!", show_alert=False)
+                await query.answer(f"🚫 User access revoked in {workspace_title}!", show_alert=False)
             except Exception:
                 pass
         else:
             set_user_permission_and_role(target_uid, setting, is_active=True, workspace_id=target_ws_scope)
             try:
-                await query.answer(f"✅ Role set to {setting.upper()}!", show_alert=False)
+                await query.answer(f"✅ Role set to {setting.upper()} in {workspace_title}!", show_alert=False)
             except Exception:
                 pass
 
         from bot.commands import render_user_permission_card
-        text, markup = render_user_permission_card(target_uid)
+        text, markup = render_user_permission_card(target_uid, workspace_id=target_ws_scope)
         await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
         return
 
@@ -1924,10 +1930,14 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         if owner_id and target_uid == int(owner_id):
             await query.answer("⛔ You cannot remove the workspace owner.", show_alert=True)
             return
-        from database.queries import get_all_users_for_permissions
+        from database.queries import get_all_users_for_permissions, get_workspace_by_id
         users = get_all_users_for_permissions()
-        target_user = next((u for u in users if u['telegram_user_id'] == target_uid), None)
+        target_user = next((u for u in users if u['telegram_user_id'] == target_uid and (not ws_id or u.get('workspace_id') == ws_id)), None)
+        if not target_user:
+            target_user = next((u for u in users if u['telegram_user_id'] == target_uid), None)
         display = (target_user['display_name'] if target_user else None) or f"User {target_uid}"
+        ws_obj = get_workspace_by_id(ws_id) if ws_id else None
+        ws_title = (ws_obj.title if ws_obj and ws_obj.title else None) or "this workspace"
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         confirm_markup = InlineKeyboardMarkup([
             [
@@ -1937,7 +1947,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         ])
         await safe_edit_callback_message(
             query,
-            f"⚠️ <b>Confirm Member Removal</b>\n\nAre you sure you want to remove <b>{html.escape(display)}</b> (<code>{target_uid}</code>) from this workspace?\n\nThey will lose access to records in this workspace.",
+            f"⚠️ <b>Confirm Member Removal</b>\n\nAre you sure you want to remove <b>{html.escape(display)}</b> (<code>{target_uid}</code>) from <b>{html.escape(ws_title)}</b>?\n\nThey will lose access to records in this workspace.",
             reply_markup=confirm_markup,
             parse_mode='HTML'
         )
@@ -1951,12 +1961,14 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             await query.answer("⚠️ Could not determine workspace.", show_alert=True)
             return
         target_uid = int(parts[1])
-        from database.queries import remove_workspace_member
+        from database.queries import remove_workspace_member, get_workspace_by_id
+        ws_obj = get_workspace_by_id(ws_id)
+        ws_title = (ws_obj.title if ws_obj and ws_obj.title else None) or "this workspace"
         success = remove_workspace_member(ws_id, target_uid)
         if success:
-            await query.answer("✅ Member removed from workspace!", show_alert=True)
-            from bot.commands import render_permissions_list_payload
-            text, markup = render_permissions_list_payload()
+            await query.answer(f"✅ Member removed from {ws_title}!", show_alert=True)
+            from bot.commands import render_user_permission_card
+            text, markup = render_user_permission_card(target_uid, workspace_id=ws_id)
             await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
         else:
             await query.answer("❌ Failed to remove member.", show_alert=True)
@@ -2760,21 +2772,26 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
 
     # 5. Interactive Filter Callbacks
     elif action == "filter":
+        from bot.feature_registry import feature_allowed
+        if not feature_allowed(ws_id, caller_uid, "history"):
+            await query.answer("⛔ History is restricted for your role in this workspace.", show_alert=True)
+            return
+        view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin')) else caller_uid
         filter_type = parts[1]
         now = get_current_time_in_tz()
         
         if filter_type == "today":
-            txs = search_transactions(target_date=now.date(), sort_by="date_desc", workspace_id=ws_id)
+            txs = search_transactions(target_date=now.date(), sort_by="date_desc", workspace_id=ws_id, user_id=view_user_id)
             title = f"📅 Today's Transactions ({now.strftime('%d %b %Y')})"
         elif filter_type == "yesterday":
             y_date = now.date() - timedelta(days=1)
-            txs = search_transactions(target_date=y_date, sort_by="date_desc", workspace_id=ws_id)
+            txs = search_transactions(target_date=y_date, sort_by="date_desc", workspace_id=ws_id, user_id=view_user_id)
             title = f"📅 Yesterday's Transactions ({y_date.strftime('%d %b %Y')})"
         elif filter_type == "this_month":
-            txs = search_transactions(year=now.year, month=now.month, sort_by="date_desc", workspace_id=ws_id)
+            txs = search_transactions(year=now.year, month=now.month, sort_by="date_desc", workspace_id=ws_id, user_id=view_user_id)
             title = f"🗓️ This Month's Transactions ({now.strftime('%B %Y')})"
         elif filter_type == "monthly_stats":
-            stats = get_monthly_summary(now.year, now.month, workspace_id=ws_id)
+            stats = get_monthly_summary(now.year, now.month, workspace_id=ws_id, user_id=view_user_id)
             top_p = f"{stats['top_recipient']['person_name']} ({format_currency(stats['top_recipient']['total'])})" if stats['top_recipient'] else "N/A"
             text = (
                 f"📊 <b>Monthly Analytics - {now.strftime('%B %Y')}</b>\n\n"
@@ -2787,13 +2804,13 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             await query.edit_message_text(text, reply_markup=get_filter_keyboard(), parse_mode='HTML')
             return
         elif filter_type == "type_sent":
-            txs = search_transactions(tx_type="SENT", limit=15, sort_by="date_desc", workspace_id=ws_id)
+            txs = search_transactions(tx_type="SENT", limit=15, sort_by="date_desc", workspace_id=ws_id, user_id=view_user_id)
             title = "🔴 Recent Sent Transactions"
         elif filter_type == "type_received":
-            txs = search_transactions(tx_type="RECEIVED", limit=15, sort_by="date_desc", workspace_id=ws_id)
+            txs = search_transactions(tx_type="RECEIVED", limit=15, sort_by="date_desc", workspace_id=ws_id, user_id=view_user_id)
             title = "🟢 Recent Received Transactions"
         elif filter_type == "show_ids":
-            txs = get_recent_transactions(limit=10, workspace_id=ws_id)
+            txs = get_recent_transactions(limit=10, workspace_id=ws_id, user_id=view_user_id)
             if not txs:
                 await query.edit_message_text("No transactions found.")
                 return
@@ -2829,6 +2846,12 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
 
     # 6. Sorting Callbacks
     elif action == "sort":
+        caller_id = update.effective_user.id if update.effective_user else None
+        from bot.feature_registry import feature_allowed
+        if not feature_allowed(ws_id, caller_id, "history"):
+            await query.answer("⛔ History is restricted for your role in this workspace.", show_alert=True)
+            return
+        view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin')) else caller_id
         sort_by = parts[1]
         if sort_by == "back_filters":
             await query.edit_message_text("🎛️ <b>Filter & Sort Transactions:</b>\n\nChoose an option below:", reply_markup=get_filter_keyboard(), parse_mode='HTML')
@@ -2840,7 +2863,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             "amount_desc": "Amount (Highest first)",
             "amount_asc": "Amount (Lowest first)"
         }
-        txs = search_transactions(sort_by=sort_by, limit=10, workspace_id=ws_id)
+        txs = search_transactions(sort_by=sort_by, limit=10, workspace_id=ws_id, user_id=view_user_id)
         if not txs:
             await query.edit_message_text("No transactions found.")
             return
