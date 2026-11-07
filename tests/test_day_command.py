@@ -243,3 +243,52 @@ def test_day_command_registered_in_app():
     assert "daily" in registered_cmds
     assert "daysummary" in registered_cmds
 
+
+def test_handle_text_backslash_day_date():
+    """Verify typing \\day 23/06/2026 routes cleanly via handle_text."""
+    from bot.handlers import handle_text
+
+    async def _run():
+        group_chat_id = -100888300
+        ws = get_or_create_workspace(
+            title="Backslash Day Test Group",
+            creator_user_id=888300,
+            chat_id=group_chat_id,
+            chat_type="group"
+        )
+        owner_uid = 888300
+        add_workspace_member(ws.id, owner_uid, role="owner")
+
+        # Insert a transaction on 23/06/2026
+        t = Transaction(
+            amount=750.0,
+            transaction_type="RECEIVED",
+            person_name="Freelance Project",
+            category="Income",
+            transaction_date="2026-06-23",
+            transaction_time="14:00:00",
+            workspace_id=ws.id,
+            telegram_user_id=owner_uid
+        )
+        insert_transaction_with_balance(t)
+
+        u = MagicMock()
+        u.effective_user.id = owner_uid
+        u.effective_chat.id = group_chat_id
+        u.effective_chat.type = "group"
+        u.message.text = r"\day 23/06/2026"
+        u.message.chat_id = group_chat_id
+        u.message.message_id = 9999
+        u.message.reply_text = AsyncMock()
+
+        ctx = MagicMock()
+        await handle_text(u, ctx)
+
+        assert u.message.reply_text.called
+        reply = u.message.reply_text.call_args[0][0]
+        assert "Daily Financial Statement" in reply
+        assert "23 Jun 2026" in reply
+        assert "750" in reply
+
+    asyncio.run(_run())
+

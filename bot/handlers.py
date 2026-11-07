@@ -3069,6 +3069,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif cmd_lower in (r'\balance', 'balance', '/balance'):
         await balance_command(update, context)
         return
+    elif cmd_lower in (r'\today', 'today', '/today'):
+        from bot.commands import today_command
+        await today_command(update, context)
+        return
+    elif cmd_token in (r'\day', 'day', '/day', r'\daily', 'daily', '/daily', r'\daysummary', 'daysummary', '/daysummary'):
+        from bot.commands import day_command
+        parts = text.split(maxsplit=1)
+        context.args = parts[1].split() if len(parts) > 1 else []
+        await day_command(update, context)
+        return
     elif cmd_token in (r'\date', 'date', '/date'):
         parts = text.split(maxsplit=1)
         context.args = [parts[1]] if len(parts) > 1 else []
