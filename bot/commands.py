@@ -403,6 +403,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sections.append(
         "📊 <b>2. Balance & History</b>\n"
         "• /balance — Current balance & today's cash flow\n"
+        "• /day [date] — Daily financial statement (opening, closing, inflows & outflows)\n"
+        "• /date &lt;date&gt; — View transactions on a specific date\n"
         "• /history — Clean sequential transaction list\n"
         "• /last5 (or /recent) — View latest 5 transactions\n"
         "• /search &lt;query&gt; — Search by person name, bank, or UTR\n"
@@ -676,6 +678,107 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
     await balance_command(update, context)
+
+
+def render_day_financial_statement(summary: dict) -> str:
+    """Renders formatted HTML daily financial statement card."""
+    d = summary["date"]
+    date_formatted = d.strftime("%A, %d %b %Y") if hasattr(d, "strftime") else str(d)
+    open_bal = format_currency(summary["opening_balance"])
+    close_bal = format_currency(summary["closing_balance"])
+    inflows = format_currency(summary["inflows"])
+    outflows = format_currency(summary["outflows"])
+    net_val = summary["net_change"]
+    net_sign = "+" if net_val > 0 else ("-" if net_val < 0 else "")
+    net_formatted = f"{net_sign}{format_currency(abs(net_val))}"
+    
+    inflow_cnt = summary["inflow_count"]
+    outflow_cnt = summary["outflow_count"]
+    inflow_label = f" ({inflow_cnt} tx{'s' if inflow_cnt != 1 else ''})" if inflow_cnt > 0 else ""
+    outflow_label = f" ({outflow_cnt} tx{'s' if outflow_cnt != 1 else ''})" if outflow_cnt > 0 else ""
+
+    lines = [
+        "📅 <b>Daily Financial Statement</b>",
+        f"🗓️ <b>Date:</b> {html.escape(date_formatted)}",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"🏦 <b>Opening Balance:</b>  <code>{html.escape(open_bal)}</code>",
+        "",
+        f"🟢 <b>Inflows (Received):</b>  +{html.escape(inflows)}{inflow_label}",
+        f"🔴 <b>Outflows (Sent):</b>      -{html.escape(outflows)}{outflow_label}",
+        f"📈 <b>Net Daily Flow:</b>    {html.escape(net_formatted)}",
+        "",
+        f"🎯 <b>Closing Balance:</b>  <code>{html.escape(close_bal)}</code>",
+        "━━━━━━━━━━━━━━━━━━━━"
+    ]
+
+    transfers = summary.get("transfers", 0.0)
+    transfer_cnt = summary.get("transfer_count", 0)
+    if transfers > 0:
+        lines.append(f"🔄 <b>Transfers:</b>  {html.escape(format_currency(transfers))} ({transfer_cnt} tx{'s' if transfer_cnt != 1 else ''})")
+
+    tx_cnt = summary["tx_count"]
+    if tx_cnt > 0:
+        top_cat = summary.get("top_category")
+        if top_cat:
+            lines.append(f"🏷️ <b>Top Spend:</b> {html.escape(top_cat[0])} ({html.escape(format_currency(top_cat[1]))})")
+        lines.append(f"📊 <b>Activity:</b> {tx_cnt} transaction{'s' if tx_cnt != 1 else ''}")
+        date_str = summary["date_str"]
+        lines.append(f"💡 <i>Tip: Use <code>/date {html.escape(date_str)}</code> to view individual transaction items.</i>")
+    else:
+        lines.append("ℹ️ <i>No transactions recorded on this day. Balance remained unchanged.</i>")
+
+    return "\n".join(lines)
+
+
+async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Shows full daily financial statement for a specific date or today.
+    Usage:
+      /day                  (Today's statement)
+      /day yesterday        (Yesterday's statement)
+      /day 05/11/2026       (Specific date)
+    """
+    if not await require_authorized(update): return
+    from bot.auth import get_workspace_context
+    ctx = get_workspace_context(update)
+    if not ctx or not ctx.workspace_id:
+        await update.message.reply_text("I couldn't determine which ledger to read. Try /workspaces.")
+        return
+    ws_id = ctx.workspace_id
+    caller_id = update.effective_user.id if update.effective_user else None
+    from bot.feature_registry import feature_allowed
+    if not feature_allowed(ws_id, caller_id, "history"):
+        await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
+        return
+
+    from bot.keyboards import get_standard_nav_keyboard
+    from utils.dates import get_current_time_in_tz, parse_date
+    from services.balance_service import get_day_financial_summary
+
+    if not context.args:
+        target_d = get_current_time_in_tz().date()
+    else:
+        raw_date = " ".join(context.args).strip()
+        target_d = parse_date(raw_date)
+        if not target_d:
+            await update.message.reply_text(
+                "❌ Could not parse date.\n\n"
+                "<b>Usage:</b> <code>/day [date]</code>\n"
+                "<b>Examples:</b>\n"
+                "• <code>/day</code> (today's statement)\n"
+                "• <code>/day yesterday</code>\n"
+                "• <code>/day 05/11/2026</code>\n"
+                "• <code>/day 31 Aug 2026</code>",
+                reply_markup=get_standard_nav_keyboard(),
+                parse_mode='HTML'
+            )
+            return
+
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    summary = get_day_financial_summary(target_d, workspace_id=ws_id, user_id=view_user_id)
+    text = render_day_financial_statement(summary)
+    await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
+
 
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

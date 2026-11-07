@@ -15,7 +15,7 @@ from config import TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID, logger, BASE_DIR, DASHB
 from database.db import setup_database
 from telegram.request import HTTPXRequest
 from bot.commands import (
-    start_command, balance_command, today_command, history_command, last5_command,
+    start_command, balance_command, today_command, day_command, history_command, last5_command,
     edit_command, delete_command, date_command, search_command,
     monthly_command, filter_command, sort_command, details_command,
     setbalance_command, export_command, help_command, chatid_command, amount_command,
@@ -198,6 +198,7 @@ def build_application():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("balance", balance_command))
     app.add_handler(CommandHandler("today", today_command))
+    app.add_handler(CommandHandler(["day", "daily", "daysummary"], day_command))
     app.add_handler(CommandHandler("history", history_command))
     app.add_handler(CommandHandler("last5", last5_command))
     app.add_handler(CommandHandler("recent", last5_command))

@@ -642,3 +642,158 @@ def validate_ledger_invariants(db_path=None, workspace_id: str = None, conn=None
 
     return errors
 
+
+def get_day_financial_summary(target_date, workspace_id: str = None, user_id: int = None) -> dict:
+    """
+    Computes daily financial statement for a target date:
+      - Opening Balance (balance at start of day)
+      - Inflows (total RECEIVED)
+      - Outflows (total SENT)
+      - Transfers (total TRANSFER)
+      - Net Daily Change (Inflows - Outflows)
+      - Closing Balance (balance at end of day = Opening Balance + Net Daily Change)
+      - Transaction counts, top category, and category breakdown.
+    Works for any arbitrary date, including zero-activity days.
+    Honors workspace isolation and optional member user_id scoping.
+    """
+    import datetime
+    from utils.dates import parse_date
+    if isinstance(target_date, str):
+        parsed = parse_date(target_date)
+        if parsed:
+            target_date = parsed if isinstance(parsed, datetime.date) else parsed.date()
+        else:
+            target_date = datetime.date.fromisoformat(target_date)
+    elif hasattr(target_date, 'date') and callable(getattr(target_date, 'date')):
+        target_date = target_date.date()
+
+    target_date_str = str(target_date)
+
+    from database.queries import _resolve_query_workspace_filter, _build_user_filter, get_default_workspace_id
+    ws_filter, ws_params = _resolve_query_workspace_filter(workspace_id, user_id)
+    ws_id = ws_params[0]
+
+    # Ensure balances are up to date
+    try:
+        recalculate_all_balances(workspace_id=ws_id)
+    except Exception as e:
+        logger.debug(f"recalculate_all_balances note in get_day_financial_summary: {e}")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # 1. Calculate Opening Balance
+        is_user_scoped = False
+        if user_id is not None:
+            from config import TELEGRAM_USER_ID
+            owner_id = int(TELEGRAM_USER_ID) if TELEGRAM_USER_ID else None
+            if not (owner_id and int(user_id) == owner_id):
+                is_user_scoped = True
+
+        if not is_user_scoped:
+            cursor.execute(f"""
+                SELECT balance_after
+                FROM transactions
+                WHERE {ws_filter}
+                  AND transaction_date < ?
+                  AND deleted_at IS NULL
+                ORDER BY occurred_at DESC, created_at DESC, id DESC
+                LIMIT 1
+            """, ws_params + [target_date_str])
+            prev_tx = cursor.fetchone()
+            if prev_tx and prev_tx['balance_after'] is not None:
+                dec_opening = Decimal(str(prev_tx['balance_after'])).quantize(CENT)
+            else:
+                cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'initial_balance'", (ws_id,))
+                init_row = cursor.fetchone()
+                if not init_row and ws_id == get_default_workspace_id():
+                    cursor.execute("SELECT value FROM settings WHERE key = 'initial_balance'")
+                    init_row = cursor.fetchone()
+                init_val_str = init_row['value'] if init_row and init_row['value'] is not None else '0.0'
+                try:
+                    dec_opening = Decimal(str(init_val_str)).quantize(CENT)
+                except Exception:
+                    dec_opening = Decimal('0.00')
+        else:
+            cursor.execute(f"""
+                SELECT transaction_type, amount
+                FROM transactions
+                WHERE {ws_filter}
+                  AND telegram_user_id = ?
+                  AND transaction_date < ?
+                  AND deleted_at IS NULL
+            """, ws_params + [int(user_id), target_date_str])
+            u_prev_rows = cursor.fetchall()
+            u_sent_before = Decimal('0.00')
+            u_recv_before = Decimal('0.00')
+            for r in u_prev_rows:
+                a = parse_decimal_amount(r['amount'], allow_zero=False)
+                if r['transaction_type'] == 'SENT':
+                    u_sent_before += a
+                elif r['transaction_type'] == 'RECEIVED':
+                    u_recv_before += a
+            dec_opening = (u_recv_before - u_sent_before).quantize(CENT)
+
+        # 2. Query transactions ON target_date
+        day_conditions = [ws_filter, "transaction_date = ?", "deleted_at IS NULL"]
+        day_params = list(ws_params) + [target_date_str]
+        if is_user_scoped:
+            day_conditions.append("telegram_user_id = ?")
+            day_params.append(int(user_id))
+
+        cursor.execute(f"""
+            SELECT id, transaction_type, amount, person_name, category, payment_app, transaction_time, occurred_at, balance_after
+            FROM transactions
+            WHERE {' AND '.join(day_conditions)}
+            ORDER BY occurred_at ASC, created_at ASC, id ASC
+        """, day_params)
+        day_rows = [dict(r) for r in cursor.fetchall()]
+
+        dec_inflows = Decimal('0.00')
+        dec_outflows = Decimal('0.00')
+        dec_transfers = Decimal('0.00')
+        inflow_count = 0
+        outflow_count = 0
+        transfer_count = 0
+        category_expenses = {}
+
+        for t in day_rows:
+            amt = parse_decimal_amount(t['amount'], allow_zero=False)
+            tt = t['transaction_type']
+            if tt == 'RECEIVED':
+                dec_inflows += amt
+                inflow_count += 1
+            elif tt == 'SENT':
+                dec_outflows += amt
+                outflow_count += 1
+                cat = t.get('category') or 'General'
+                category_expenses[cat] = category_expenses.get(cat, Decimal('0.00')) + amt
+            elif tt == 'TRANSFER':
+                dec_transfers += amt
+                transfer_count += 1
+
+        dec_net = dec_inflows - dec_outflows
+        dec_closing = dec_opening + dec_net
+
+        sorted_cats = sorted(category_expenses.items(), key=lambda x: x[1], reverse=True)
+        top_category = (sorted_cats[0][0], float(sorted_cats[0][1].quantize(CENT))) if sorted_cats else None
+
+        return {
+            "date": target_date,
+            "date_str": target_date_str,
+            "opening_balance": float(dec_opening),
+            "inflows": float(dec_inflows.quantize(CENT)),
+            "outflows": float(dec_outflows.quantize(CENT)),
+            "transfers": float(dec_transfers.quantize(CENT)),
+            "net_change": float(dec_net.quantize(CENT)),
+            "closing_balance": float(dec_closing.quantize(CENT)),
+            "inflow_count": inflow_count,
+            "outflow_count": outflow_count,
+            "transfer_count": transfer_count,
+            "tx_count": len(day_rows),
+            "transactions": day_rows,
+            "top_category": top_category,
+            "category_breakdown": [(cat, float(amt.quantize(CENT))) for cat, amt in sorted_cats]
+        }
+
+
