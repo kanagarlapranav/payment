@@ -2811,41 +2811,171 @@ async def removemember_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ Failed to remove member.")
 
 
-def render_permissions_list_payload() -> tuple[str, Any]:
+ROLE_ICONS = {'owner': '👑', 'admin': '🛡️', 'member': '👤', 'viewer': '👁️'}
+ROLE_PRIORITY = {'owner': 4, 'admin': 3, 'member': 2, 'viewer': 1}
+
+
+def resolve_user_names(user_rows: list[dict], uid: int) -> tuple[str, Optional[str]]:
+    """Resolves (best_display_name, best_username) across all workspace rows for a user.
+
+    Priority for display name:
+    1. First non-empty display_name that is not a raw ID representation ('ID <digits>', '<digits>').
+    2. Else @username if any row has a username.
+    3. Else 'User <telegram_user_id>'.
+    """
+    best_display = None
+    best_uname = None
+
+    for r in user_rows:
+        disp = (r.get('display_name') or '').strip()
+        if disp and disp != f"ID {uid}" and disp != str(uid) and not (disp.startswith("ID ") and disp[3:].isdigit()):
+            if not best_display:
+                best_display = disp
+
+        uname = (r.get('username') or '').strip()
+        if uname:
+            uname = uname.lstrip('@')
+            if not best_uname:
+                best_uname = uname
+
+    if best_display:
+        resolved_name = best_display
+    elif best_uname:
+        resolved_name = f"@{best_uname}"
+    else:
+        resolved_name = f"User {uid}"
+
+    return resolved_name, best_uname
+
+
+def get_highest_role(user_rows: list[dict]) -> str:
+    """Returns the highest role for a user across their workspace rows."""
+    best_prio = -1
+    best_role = 'member'
+    for r in user_rows:
+        role = (r.get('role') or 'member').lower()
+        prio = ROLE_PRIORITY.get(role, 0)
+        if prio > best_prio:
+            best_prio = prio
+            best_role = role
+    return best_role
+
+
+def render_permissions_list_payload(workspace_id: Optional[str] = None) -> tuple[str, Any]:
     """Renders interactive user permissions and role manager card with inline buttons."""
-    from database.queries import get_all_users_for_permissions
+    from collections import OrderedDict
+    from database.queries import get_all_users_for_permissions, get_default_workspace_id
+    from bot.auth import is_super_admin
+    import config
+
+    target_ws = workspace_id or get_default_workspace_id()
     users = get_all_users_for_permissions()
-    
-    role_icons = {'owner': '👑', 'admin': '🛡️', 'member': '👤', 'viewer': '👁️'}
-    unique_uids = {u['telegram_user_id'] for u in users}
+
+    owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+
+    # Group rows by user ID while preserving original ordering
+    grouped_users: OrderedDict[int, list[dict]] = OrderedDict()
+    for u in users:
+        uid = int(u['telegram_user_id'])
+        if uid not in grouped_users:
+            grouped_users[uid] = []
+        grouped_users[uid].append(u)
+
+    # Partition users into:
+    # 1. Users who have a role in THIS workspace (target_ws)
+    # 2. Users who only belong to other workspaces
+    current_ws_users: list[tuple[int, list[dict]]] = []
+    other_ws_users: list[tuple[int, list[dict]]] = []
+
+    for uid, u_rows in grouped_users.items():
+        if any(r.get('workspace_id') == target_ws for r in u_rows):
+            current_ws_users.append((uid, u_rows))
+        else:
+            other_ws_users.append((uid, u_rows))
+
+    total_user_count = len(grouped_users)
+
     text_lines = [
         "👥 <b>User Permissions & Access Control</b>",
         "━━━━━━━━━━━━━━━━━━━━",
-        "Manage access levels, roles, and restrictions for all users from Telegram.",
-        "",
-        f"<b>Total Users:</b> {len(unique_uids)}",
+        "👑 Owner — everything • 🛡️ Admin — add/edit, manage users • 👤 Member — add and see • 👁️ Viewer — see only",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"<b>Total Users:</b> {total_user_count}",
         "━━━━━━━━━━━━━━━━━━━━"
     ]
-    keyboard = []
-    seen_uids = set()
-    for u in users:
-        uid = u['telegram_user_id']
-        role = (u['role'] or 'member').lower()
-        is_active = bool(u['is_active'])
-        icon = role_icons.get(role, '👤')
+
+    def render_user_block(uid: int, u_rows: list[dict]):
+        resolved_name, _ = resolve_user_names(u_rows, uid)
+        is_owner_user = (owner_id and str(uid) == str(owner_id)) or is_super_admin(uid)
+        header_name = f"{resolved_name} (you)" if (is_owner_user and "(you)" not in resolved_name) else resolved_name
+
+        target_row = next((r for r in u_rows if r.get('workspace_id') == target_ws), None)
+        highest_role = get_highest_role(u_rows)
+        top_icon = ROLE_ICONS.get(highest_role, '👤')
+
+        if target_row:
+            is_active = bool(target_row.get('is_active', 1))
+        else:
+            is_active = any(bool(r.get('is_active', 1)) for r in u_rows)
         status_dot = "🟢" if is_active else "🔴"
-        raw_name = u['display_name'] or (f"@{u['username']}" if u['username'] else f"ID {uid}")
-        ws_title = u.get('workspace_title') or "Workspace"
-        
-        text_lines.append(f"{status_dot} {icon} <b>{html.escape(raw_name)}</b> — <code>{role.title()}</code> ({html.escape(ws_title)}) (<code>{uid}</code>)")
-        if uid not in seen_uids:
-            seen_uids.add(uid)
-            uname = f"@{u['username']}" if u['username'] else (u['display_name'] or f"ID {uid}")
-            btn_label = f"{status_dot} {icon} {uname[:16]} ({role[:3].upper()})"
-            keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"perm_view:{uid}")])
-        
+
+        text_lines.append(f"{status_dot} {top_icon} <b>{html.escape(header_name)}</b>")
+
+        # Sort workspace rows: current workspace first, then alphabetically by workspace title
+        sorted_rows = sorted(
+            u_rows,
+            key=lambda r: (0 if r.get('workspace_id') == target_ws else 1, r.get('workspace_title') or '')
+        )
+
+        seen_ws = set()
+        for r in sorted_rows:
+            ws_id_val = r.get('workspace_id')
+            role_val = (r.get('role') or 'member').lower()
+            ws_title = r.get('workspace_title') or "Workspace"
+            is_act = bool(r.get('is_active', 1))
+            key = (ws_id_val, role_val)
+            if key in seen_ws:
+                continue
+            seen_ws.add(key)
+            status_suffix = "" if is_act else " (Revoked)"
+            text_lines.append(f"   • {html.escape(ws_title)} — {role_val.title()}{status_suffix}")
+
+    # Render current workspace users first
+    for uid, u_rows in current_ws_users:
+        render_user_block(uid, u_rows)
+
+    # If there are users who only belong to other workspaces, show separator and render them
+    if other_ws_users:
+        text_lines.append("")
+        text_lines.append("— Other workspaces —")
+        for uid, u_rows in other_ws_users:
+            render_user_block(uid, u_rows)
+
     text_lines.append("")
     text_lines.append("<i>Tap any user below to view details, change permissions, or revoke access:</i>")
+
+    # Build keyboard buttons following the exact same order (current ws first, then other ws)
+    keyboard = []
+    for uid, u_rows in (current_ws_users + other_ws_users):
+        resolved_name, _ = resolve_user_names(u_rows, uid)
+        target_row = next((r for r in u_rows if r.get('workspace_id') == target_ws), None)
+        highest_role = get_highest_role(u_rows)
+
+        if target_row:
+            ws_role = (target_row.get('role') or 'member').lower()
+            role_abbr = ws_role[:3].upper()
+            is_act = bool(target_row.get('is_active', 1))
+            status_dot = "🟢" if is_act else "🔴"
+            icon = ROLE_ICONS.get(ws_role, '👤')
+            btn_label = f"{status_dot} {icon} {resolved_name} ({role_abbr})"
+        else:
+            is_act = any(bool(r.get('is_active', 1)) for r in u_rows)
+            status_dot = "🟢" if is_act else "🔴"
+            top_icon = ROLE_ICONS.get(highest_role, '👤')
+            btn_label = f"{status_dot} {top_icon} {resolved_name}"
+
+        keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"perm_view:{uid}")])
+
     return "\n".join(text_lines), InlineKeyboardMarkup(keyboard)
 
 
@@ -2859,14 +2989,13 @@ def render_user_permission_card(target_uid: int, workspace_id: Optional[str] = N
         return "❌ User not found.", InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Users", callback_data="perm_list")]])
         
     role_icons = {'owner': '👑', 'admin': '🛡️', 'member': '👤', 'viewer': '👁️'}
-    first = user_rows[0]
-    display = first['display_name'] or "Unknown"
-    uname = f"@{first['username']}" if first['username'] else "None"
+    resolved_name, best_uname = resolve_user_names(user_rows, int(target_uid))
+    uname = f"@{best_uname}" if best_uname else "None"
 
     card_lines = [
         "⚙️ <b>User Permissions & Access Control</b>",
         "━━━━━━━━━━━━━━━━━━━━",
-        f"👤 <b>Name:</b> {html.escape(display)}",
+        f"👤 <b>Name:</b> {html.escape(resolved_name)}",
         f"💬 <b>Username:</b> {html.escape(uname)}",
         f"🆔 <b>User ID:</b> <code>{target_uid}</code>",
         "━━━━━━━━━━━━━━━━━━━━",
@@ -2914,9 +3043,11 @@ def render_user_permission_card(target_uid: int, workspace_id: Optional[str] = N
 
 async def permissions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Opens interactive user permissions and access control dashboard (Owner only)."""
-    from bot.auth import require_owner
+    from bot.auth import require_owner, get_workspace_context
     if not await require_owner(update): return
-    card, markup = render_permissions_list_payload()
+    ctx = get_workspace_context(update)
+    ws_id = ctx.workspace_id if ctx else None
+    card, markup = render_permissions_list_payload(workspace_id=ws_id)
     await update.message.reply_text(card, reply_markup=markup, parse_mode='HTML')
 
 

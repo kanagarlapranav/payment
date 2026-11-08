@@ -1870,7 +1870,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
             await query.answer("⛔ Only the bot owner can manage permissions.", show_alert=True)
             return
         from bot.commands import render_permissions_list_payload
-        text, markup = render_permissions_list_payload()
+        text, markup = render_permissions_list_payload(workspace_id=ws_id)
         await safe_edit_callback_message(query, text, reply_markup=markup, parse_mode='HTML')
         return
 
