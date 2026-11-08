@@ -2749,6 +2749,74 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Failed to grant admin powers: {err}")
 
 
+async def demote_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Demotes an admin back to regular member (Owner only). Usage: /demote <name_or_@username> or reply /demote"""
+    from bot.auth import get_workspace_context
+    from database.queries import get_all_workspace_members, update_workspace_member_role, set_user_permission_and_role
+    if not await require_admin(update): return
+    ctx = get_workspace_context(update)
+    if not ctx:
+        await update.message.reply_text("❌ Workspace not found.")
+        return
+
+    if ctx.role != 'owner' and not is_owner(update):
+        await update.message.reply_text("⛔ Only the workspace owner can remove Admin powers.", parse_mode='HTML')
+        return
+
+    target_uid = None
+    target_display = None
+
+    # Check if replying to user
+    reply_msg = getattr(update.message, 'reply_to_message', None) if update.message else None
+    if reply_msg and getattr(reply_msg, 'from_user', None):
+        replied_user = reply_msg.from_user
+        if getattr(replied_user, 'id', None) is not None and isinstance(replied_user.id, int):
+            target_uid = replied_user.id
+            target_display = getattr(replied_user, 'full_name', None) or getattr(replied_user, 'first_name', None) or (f"@{replied_user.username}" if getattr(replied_user, 'username', None) else str(target_uid))
+
+    if not target_uid and context.args:
+        target_identifier = context.args[0].strip()
+        if target_identifier.lstrip('-').isdigit():
+            target_uid = int(target_identifier)
+            target_display = str(target_uid)
+        else:
+            uname = target_identifier.lstrip('@').lower()
+            members = get_all_workspace_members(ctx.workspace_id)
+            for m in members:
+                if (m.username and m.username.lower() == uname) or (m.display_name and uname in m.display_name.lower()):
+                    target_uid = m.telegram_user_id
+                    target_display = f"@{m.username}" if m.username else m.display_name
+                    break
+
+    if not target_uid:
+        await update.message.reply_text(
+            "<b>Usage:</b> <code>/demote &lt;@username or name&gt;</code>\n\n"
+            "<i>Or reply to a user's message with <code>/demote</code> to remove their admin rights.</i>",
+            parse_mode='HTML'
+        )
+        return
+
+    owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
+    if owner_id and target_uid == int(owner_id):
+        await update.message.reply_text("⛔ You cannot demote the workspace owner.")
+        return
+
+    try:
+        update_workspace_member_role(ctx.workspace_id, target_uid, 'member')
+        set_user_permission_and_role(target_uid, 'member', is_active=True, workspace_id=ctx.workspace_id)
+        from services.task_manager import schedule_debounced_backup
+        schedule_debounced_backup(context.bot)
+        target_display = target_display or str(target_uid)
+        await update.message.reply_text(
+            f"👤 <b>Admin Rights Removed</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ <b>{html.escape(target_display)}</b> (<code>{target_uid}</code>) is now a regular <b>MEMBER</b> in this workspace.",
+            parse_mode='HTML'
+        )
+    except Exception as err:
+        logger.error(f"Error in demote_command: {err}", exc_info=True)
+        await update.message.reply_text(f"❌ Failed to demote admin: {err}")
+
+
 async def removemember_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Removes a member from the current workspace (Admin/Owner only). Usage: /removemember <user_id_or_@username>"""
     from bot.auth import get_workspace_context
@@ -2782,7 +2850,7 @@ async def removemember_command(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         uname = target_identifier.lstrip('@').lower()
         for m in members:
-            if m.username and m.username.lower() == uname:
+            if (m.username and m.username.lower() == uname) or (m.display_name and uname in m.display_name.lower()):
                 target_member = m
                 target_uid = m.telegram_user_id
                 break
@@ -2802,6 +2870,8 @@ async def removemember_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
     success = remove_workspace_member(ctx.workspace_id, target_uid)
     if success:
+        from services.task_manager import schedule_debounced_backup
+        schedule_debounced_backup(context.bot)
         target_display = f"@{target_member.username}" if (target_member and target_member.username) else ((target_member.display_name if target_member else None) or str(target_uid))
         await update.message.reply_text(
             f"✅ <b>{html.escape(target_display)}</b> (<code>{target_uid}</code>) was removed from this workspace.",

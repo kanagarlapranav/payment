@@ -64,6 +64,8 @@ COMMAND_ROLE_POLICY = {
     "gemini": "admin", "geministatus": "admin", "quota": "admin", "ai": "admin", "insights": "admin",
 
     # Owner only (Governance, Initial Balance, Permissions & Disaster Recovery)
+    "admin": "owner", "makeadmin": "owner", "promote": "owner",
+    "demote": "owner", "removeadmin": "owner", "unadmin": "owner", "removemember": "admin",
     "setbalance": "owner", "restore": "owner", "importbackup": "owner",
     "setrole": "owner", "permissions": "owner", "roles": "owner",
     "settings": "owner", "config": "owner"

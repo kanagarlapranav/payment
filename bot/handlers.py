@@ -1966,6 +1966,11 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         ws_title = (ws_obj.title if ws_obj and ws_obj.title else None) or "this workspace"
         success = remove_workspace_member(ws_id, target_uid)
         if success:
+            try:
+                from services.task_manager import schedule_debounced_backup
+                schedule_debounced_backup(context.bot)
+            except Exception:
+                pass
             await query.answer(f"✅ Member removed from {ws_title}!", show_alert=True)
             from bot.commands import render_user_permission_card
             text, markup = render_user_permission_card(target_uid, workspace_id=ws_id)
