@@ -555,24 +555,46 @@ def add_workspace_member(
     telegram_user_id: int | str,
     username: str = "",
     display_name: str = "",
-    role: str = "member"
-) -> RowDict:
+    role: str = "member",
+    is_explicit_readd: bool = False,
+    is_auto_add: bool = False
+) -> RowDict | None:
     """
     Adds or updates a user's membership in a workspace.
     Valid roles: 'owner', 'admin', 'member', 'viewer'.
+    If is_auto_add is True and the user was previously removed, auto-add is rejected.
+    Otherwise, an explicit add clears any existing removed marker and adds the member.
     """
+    if not workspace_id or not telegram_user_id:
+        return None
+    uid = int(telegram_user_id)
+    ws_id_str = str(workspace_id)
     valid_roles = {'owner', 'admin', 'member', 'viewer'}
     clean_role = role.lower() if role and role.lower() in valid_roles else 'member'
-    if is_restricted_user(telegram_user_id, workspace_id=workspace_id) and clean_role == 'owner':
+    if is_restricted_user(uid, workspace_id=ws_id_str) and clean_role == 'owner':
         clean_role = 'member'
     now_utc = utc_now_iso()
     with LEDGER_LOCK:
         with get_db_connection() as conn:
             cursor = conn.cursor()
+            if is_auto_add and not is_explicit_readd:
+                cursor.execute("""
+                    SELECT value FROM workspace_settings
+                    WHERE workspace_id = ? AND key = ?
+                """, (ws_id_str, f"removed_user:{uid}"))
+                if cursor.fetchone():
+                    logger.info(f"add_workspace_member auto-add rejected: user {uid} was removed from workspace {ws_id_str}")
+                    return None
+            else:
+                cursor.execute("""
+                    DELETE FROM workspace_settings
+                    WHERE workspace_id = ? AND key = ?
+                """, (ws_id_str, f"removed_user:{uid}"))
+
             cursor.execute("""
                 SELECT id FROM workspace_members
                 WHERE workspace_id = ? AND telegram_user_id = ?
-            """, (str(workspace_id), int(telegram_user_id)))
+            """, (ws_id_str, uid))
             existing_member = cursor.fetchone()
             if existing_member:
                 cursor.execute("""
@@ -585,11 +607,11 @@ def add_workspace_member(
                     INSERT INTO workspace_members (
                         workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-                """, (str(workspace_id), int(telegram_user_id), str(username or ""), str(display_name or ""), clean_role, now_utc, now_utc))
+                """, (ws_id_str, uid, str(username or ""), str(display_name or ""), clean_role, now_utc, now_utc))
             conn.commit()
             return RowDict({
-                'workspace_id': str(workspace_id),
-                'telegram_user_id': int(telegram_user_id),
+                'workspace_id': ws_id_str,
+                'telegram_user_id': uid,
                 'username': str(username or ""),
                 'display_name': str(display_name or ""),
                 'role': clean_role,
@@ -791,6 +813,14 @@ def set_user_permission_and_role(telegram_user_id: int, role: str, is_active: bo
                     WHERE workspace_id = ? AND telegram_user_id = ?
                 """, (target_ws_id, int(telegram_user_id)))
                 if not cursor.fetchone():
+                    # Refuse resurrection if user was removed from this workspace
+                    cursor.execute("""
+                        SELECT value FROM workspace_settings
+                        WHERE workspace_id = ? AND key = ?
+                    """, (target_ws_id, f"removed_user:{int(telegram_user_id)}"))
+                    if cursor.fetchone():
+                        logger.info(f"set_user_permission_and_role: refused resurrection of removed user {telegram_user_id} in {target_ws_id}")
+                        return False
                     # Target user is not yet in this workspace; add them directly to this workspace
                     cursor.execute("""
                         INSERT INTO workspace_members (workspace_id, telegram_user_id, role, username, display_name, is_active, status, joined_at, updated_at)
@@ -813,6 +843,13 @@ def set_user_permission_and_role(telegram_user_id: int, role: str, is_active: bo
                     WHERE workspace_id = ? AND telegram_user_id = ?
                 """, (target_ws_id, int(telegram_user_id)))
                 if not cursor.fetchone():
+                    cursor.execute("""
+                        SELECT value FROM workspace_settings
+                        WHERE workspace_id = ? AND key = ?
+                    """, (target_ws_id, f"removed_user:{int(telegram_user_id)}"))
+                    if cursor.fetchone():
+                        logger.info(f"set_user_permission_and_role: refused resurrection of removed user {telegram_user_id} in {target_ws_id}")
+                        return False
                     cursor.execute("""
                         INSERT OR REPLACE INTO workspace_members 
                         (workspace_id, telegram_user_id, username, display_name, role, is_active, joined_at, updated_at)

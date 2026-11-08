@@ -175,7 +175,7 @@ def test_day_command_flow_and_gating():
         denied_msg = u_member.message.reply_text.call_args[0][0]
         assert "Access Denied" in denied_msg or "restricted" in denied_msg
 
-        # 2. Member with history allowed -> Scoped to member's transactions
+        # 2. Member with history allowed -> In group chat, member sees full day ledger
         set_feature_permission(ws.id, "history", "member", True)
         u_member.message.reply_text.reset_mock()
 
@@ -184,9 +184,9 @@ def test_day_command_flow_and_gating():
         member_msg = u_member.message.reply_text.call_args[0][0]
         assert "Daily Financial Statement" in member_msg
         assert "25 Oct 2026" in member_msg
-        # Member only sees their 450 sent, not other's 1200 received
+        # Member in group chat sees the full day ledger (Nov 8 decision: both 450 sent and 1,200 received)
         assert "450" in member_msg
-        assert "1,200" not in member_msg
+        assert "1,200" in member_msg
 
         # 3. Owner -> Full workspace view
         u_owner = MagicMock()
@@ -289,6 +289,86 @@ def test_handle_text_backslash_day_date():
         assert "Daily Financial Statement" in reply
         assert "23 Jun 2026" in reply
         assert "750" in reply
+
+    asyncio.run(_run())
+
+
+def test_day_command_scoping_in_dm_workspace_and_viewer_in_dm():
+    """Verify that in personal DM workspaces, member and viewer see only their own rows."""
+    from bot.commands import day_command
+
+    async def _run():
+        owner_uid = 888400
+        member_uid = 888401
+        viewer_uid = 888402
+
+        # Personal DM workspace
+        ws_dm = get_or_create_workspace(
+            title="Personal DM Workspace",
+            creator_user_id=owner_uid,
+            chat_id=owner_uid,
+            chat_type="dm"
+        )
+        add_workspace_member(ws_dm.id, owner_uid, role="owner")
+        add_workspace_member(ws_dm.id, member_uid, role="member")
+        add_workspace_member(ws_dm.id, viewer_uid, role="viewer")
+
+        # Insert 2 transactions: one by member, one by owner
+        t_member = Transaction(
+            amount=300.0,
+            transaction_type="SENT",
+            person_name="Member Snack",
+            category="Food & Dining",
+            transaction_date="2026-10-26",
+            transaction_time="12:00:00",
+            workspace_id=ws_dm.id,
+            telegram_user_id=member_uid
+        )
+        insert_transaction_with_balance(t_member)
+
+        t_owner = Transaction(
+            amount=5000.0,
+            transaction_type="RECEIVED",
+            person_name="Salary",
+            category="Income",
+            transaction_date="2026-10-26",
+            transaction_time="10:00:00",
+            workspace_id=ws_dm.id,
+            telegram_user_id=owner_uid
+        )
+        insert_transaction_with_balance(t_owner)
+
+        ctx_args = MagicMock()
+        ctx_args.args = ["2026-10-26"]
+
+        from bot.auth import set_user_active_workspace
+        set_user_active_workspace(member_uid, ws_dm.id)
+        set_user_active_workspace(viewer_uid, ws_dm.id)
+
+        # 1. Member in DM workspace -> Only sees own 300, NOT owner's 5000
+        u_member = MagicMock()
+        u_member.effective_user.id = member_uid
+        u_member.effective_chat.id = member_uid
+        u_member.effective_chat.type = "private"
+        u_member.message.reply_text = AsyncMock()
+
+        await day_command(u_member, ctx_args)
+        assert u_member.message.reply_text.called
+        m_msg = u_member.message.reply_text.call_args[0][0]
+        assert "300" in m_msg
+        assert "5,000" not in m_msg
+
+        # 2. Viewer in DM workspace -> Only sees own rows (0 txs), NOT owner's 5000
+        u_viewer = MagicMock()
+        u_viewer.effective_user.id = viewer_uid
+        u_viewer.effective_chat.id = viewer_uid
+        u_viewer.effective_chat.type = "private"
+        u_viewer.message.reply_text = AsyncMock()
+
+        await day_command(u_viewer, ctx_args)
+        assert u_viewer.message.reply_text.called
+        v_msg = u_viewer.message.reply_text.call_args[0][0]
+        assert "5,000" not in v_msg
 
     asyncio.run(_run())
 

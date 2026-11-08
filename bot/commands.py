@@ -2291,15 +2291,11 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
     if is_admin_mode:
         available_workspaces = get_all_active_workspaces()
     else:
-        from database.queries import get_user_workspaces, get_workspace_by_chat_id
-        user_ws_list = get_user_workspaces(user_id) if user_id else []
+        from database.queries import get_workspace_by_chat_id
         dm_ws = get_workspace_by_chat_id(chat_id) if chat_id is not None else None
         if not dm_ws and ctx and ctx.workspace:
             dm_ws = ctx.workspace
-        merged = list(user_ws_list)
-        if dm_ws and not any(w.id == dm_ws.id for w in merged):
-            merged.append(dm_ws)
-        available_workspaces = merged
+        available_workspaces = [dm_ws] if dm_ws else []
 
     seen = set()
     unique_workspaces = []
@@ -2322,12 +2318,8 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
         else:
             dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm']
     else:
-        group_workspaces = [w for w in unique_workspaces if w.chat_type != 'dm']
-        dm_workspaces = [
-            w for w in unique_workspaces
-            if (getattr(w, 'chat_type', None) or (w['chat_type'] if hasattr(w, '__getitem__') else '')) == 'dm'
-            and str(getattr(w, 'chat_id', None) if getattr(w, 'chat_id', None) is not None else (w['chat_id'] if hasattr(w, '__getitem__') else '')) == str(user_id)
-        ]
+        group_workspaces = []
+        dm_workspaces = [] if is_group else ([w for w in unique_workspaces if w.chat_type == 'dm'] or unique_workspaces)
 
     curr_ws_id = ctx.workspace_id if ctx else ""
     curr_title = ctx.workspace.title if (ctx and ctx.workspace and ctx.workspace.title) else "Workspace"
@@ -2393,11 +2385,6 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
         ]
         keyboard_rows.append(action_row)
     else:
-        for ws in group_workspaces:
-            is_curr = (ws.id == curr_ws_id)
-            icon = "✅ " if is_curr else "👥 "
-            keyboard_rows.append([InlineKeyboardButton(f"{icon}{ws.title or 'Group'}"[:32], callback_data=f"ws_switch:{ws.id}")])
-
         action_row = [
             InlineKeyboardButton("🔄 Reset to Chat Default", callback_data="ws_reset")
         ]
@@ -2560,16 +2547,14 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def setrole_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sets a workspace member's role (Owner only). Usage: /setrole <user_id_or_name> <role> or reply to message with /setrole <role>"""
-    from bot.auth import get_workspace_context
+    from bot.auth import get_workspace_context, is_owner
     from database.queries import get_all_workspace_members, update_workspace_member_role, set_user_permission_and_role
-    if not await require_admin(update): return
+    if not is_owner(update):
+        await update.message.reply_text("⛔ Access restricted: Only the workspace owner can change member roles.", parse_mode='HTML')
+        return
     ctx = get_workspace_context(update)
     if not ctx:
         await update.message.reply_text("❌ Workspace not found.")
-        return
-
-    if ctx.role != 'owner' and not is_owner(update):
-        await update.message.reply_text("⛔ Only the workspace owner can change member roles.", parse_mode='HTML')
         return
 
     valid_roles = ('owner', 'admin', 'member', 'viewer')
@@ -2751,16 +2736,17 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def demote_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Demotes an admin back to regular member (Owner only). Usage: /demote <name_or_@username> or reply /demote"""
-    from bot.auth import get_workspace_context
-    from database.queries import get_all_workspace_members, update_workspace_member_role, set_user_permission_and_role
-    if not await require_admin(update): return
+    from bot.auth import get_workspace_context, is_owner
+    from database.queries import (
+        get_all_workspace_members, update_workspace_member_role,
+        set_user_permission_and_role, get_workspace_member, get_workspace_setting
+    )
+    if not is_owner(update):
+        await update.message.reply_text("⛔ Access restricted: Only the workspace owner can remove Admin powers.", parse_mode='HTML')
+        return
     ctx = get_workspace_context(update)
     if not ctx:
         await update.message.reply_text("❌ Workspace not found.")
-        return
-
-    if ctx.role != 'owner' and not is_owner(update):
-        await update.message.reply_text("⛔ Only the workspace owner can remove Admin powers.", parse_mode='HTML')
         return
 
     target_uid = None
@@ -2799,6 +2785,11 @@ async def demote_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner_id = getattr(config, 'TELEGRAM_USER_ID', None)
     if owner_id and target_uid == int(owner_id):
         await update.message.reply_text("⛔ You cannot demote the workspace owner.")
+        return
+
+    mem_rec = get_workspace_member(ctx.workspace_id, target_uid)
+    if not mem_rec or get_workspace_setting(ctx.workspace_id, f"removed_user:{target_uid}") == '1':
+        await update.message.reply_text("❌ User is not an active member in this workspace.")
         return
 
     try:
@@ -2866,7 +2857,7 @@ async def addmember_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target_display = f"@{target_uname}"
 
     if target_uid:
-        add_workspace_member(ctx.workspace_id, target_uid, username=target_uname, display_name=target_display, role=role)
+        add_workspace_member(ctx.workspace_id, target_uid, username=target_uname, display_name=target_display, role=role, is_explicit_readd=True)
         schedule_debounced_backup(context.bot)
         await update.message.reply_text(
             f"✅ <b>{html.escape(target_display)}</b> (<code>{target_uid}</code>) was added to this workspace with role <b>{role.upper()}</b>.",
@@ -2881,7 +2872,7 @@ async def addmember_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if found_u:
             target_uid = found_u['telegram_user_id']
             target_display = found_u['display_name'] or f"@{target_uname}"
-            add_workspace_member(ctx.workspace_id, target_uid, username=target_uname, display_name=target_display, role=role)
+            add_workspace_member(ctx.workspace_id, target_uid, username=target_uname, display_name=target_display, role=role, is_explicit_readd=True)
             schedule_debounced_backup(context.bot)
             await update.message.reply_text(
                 f"✅ <b>{html.escape(target_display)}</b> (<code>{target_uid}</code>) was added to this workspace with role <b>{role.upper()}</b>.",
@@ -2898,11 +2889,11 @@ async def addmember_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def removemember_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Removes a member from the current workspace (Admin/Owner only). Usage: /removemember <user_id_or_@username>"""
-    from bot.auth import get_workspace_context
+    """Removes a member from the current workspace (Owner only). Usage: /removemember <user_id_or_@username>"""
+    from bot.auth import get_workspace_context, require_owner
     from database.queries import get_all_workspace_members, remove_workspace_member
 
-    if not await require_admin(update): return
+    if not await require_owner(update): return
     ctx = get_workspace_context(update)
     if not ctx:
         await update.message.reply_text("❌ Current workspace context could not be determined.")
@@ -3163,13 +3154,27 @@ def render_user_permission_card(target_uid: int, workspace_id: Optional[str] = N
     target_ws = workspace_id or get_default_workspace_id()
     ws_obj = get_workspace_by_id(target_ws) if target_ws else None
     current_ws_title = ws_obj.title if ws_obj and ws_obj.title else "This Workspace"
+
+    from database.queries import get_workspace_setting
+    is_removed_from_ws = bool(target_ws and get_workspace_setting(target_ws, f"removed_user:{int(target_uid)}") == '1')
+    current_row = next((r for r in user_rows if r.get('workspace_id') == target_ws), None)
+
+    if current_row is None and is_removed_from_ws:
+        card_lines.append("━━━━━━━━━━━━━━━━━━━━")
+        card_lines.append(f"📁 <b>Status:</b> ❌ <b>REMOVED from {html.escape(current_ws_title)}</b>")
+        card_lines.append("<i>This user was removed from this workspace. Role buttons are disabled. To re-add them, use <code>/addmember</code>.</i>")
+        card = "\n".join(card_lines)
+        buttons = [
+            [InlineKeyboardButton("⬅️ Back to Users", callback_data="perm_list")]
+        ]
+        return card, InlineKeyboardMarkup(buttons)
+
     card_lines.append("━━━━━━━━━━━━━━━━━━━━")
     card_lines.append(f"🛠️ Role changes below apply to: <b>{html.escape(current_ws_title)}</b> (the chat where you opened this panel).")
     card_lines.append("<i>Select an action below to update this user's role or access:</i>")
 
     card = "\n".join(card_lines)
 
-    current_row = next((r for r in user_rows if r.get('workspace_id') == target_ws), None)
     curr_role = (current_row['role'] if current_row else 'member').lower()
     curr_active = bool(current_row['is_active']) if current_row else True
 

@@ -58,7 +58,15 @@ async def on_startup(app):
             # Path 1: Cloud restore from Telegram
             restored = await restore_from_telegram(app.bot)
             if restored:
-                logger.info("Startup path taken: [CLOUD RESTORE SUCCESS] - Database restored successfully from Telegram cloud backup.")
+                with get_db_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT key, value FROM settings WHERE key IN ('last_telegram_backup_at', 'backup_revision', 'last_backup_at')")
+                    bkp_meta = dict(cur.fetchall())
+                logger.info(
+                    f"Startup path taken: [CLOUD RESTORE SUCCESS] - Database restored successfully from Telegram cloud backup "
+                    f"(backup_date={bkp_meta.get('last_telegram_backup_at') or bkp_meta.get('last_backup_at') or 'unknown'}, "
+                    f"revision={bkp_meta.get('backup_revision') or 'unknown'})."
+                )
                 with LEDGER_LOCK:
                     with get_db_connection() as conn:
                         now_utc = utc_now_iso()
@@ -68,7 +76,14 @@ async def on_startup(app):
                 export_database_to_json()
             elif restore_local_fallback_if_valid():
                 # Path 2: Local fallback with valid checksum
-                logger.info("Startup path taken: [LOCAL RESTORE SUCCESS] - Restored from valid local JSON backup file.")
+                with get_db_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT key, value FROM settings WHERE key IN ('last_backup_at', 'backup_revision')")
+                    bkp_meta = dict(cur.fetchall())
+                logger.info(
+                    f"Startup path taken: [LOCAL RESTORE SUCCESS] - Restored from valid local JSON backup file "
+                    f"(backup_date={bkp_meta.get('last_backup_at') or 'unknown'}, revision={bkp_meta.get('backup_revision') or 'unknown'})."
+                )
                 with LEDGER_LOCK:
                     with get_db_connection() as conn:
                         now_utc = utc_now_iso()

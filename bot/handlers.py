@@ -1904,13 +1904,19 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         ws_obj = get_workspace_by_id(target_ws_scope) if target_ws_scope else None
         workspace_title = (ws_obj.title if ws_obj and ws_obj.title else None) or "this workspace"
         if setting == "revoke":
-            set_user_permission_and_role(target_uid, "viewer", is_active=False, workspace_id=target_ws_scope)
+            res = set_user_permission_and_role(target_uid, "viewer", is_active=False, workspace_id=target_ws_scope)
+            if not res:
+                await query.answer(f"⛔ User was removed from {workspace_title}. Use /addmember to re-add.", show_alert=True)
+                return
             try:
                 await query.answer(f"🚫 User access revoked in {workspace_title}!", show_alert=False)
             except Exception:
                 pass
         else:
-            set_user_permission_and_role(target_uid, setting, is_active=True, workspace_id=target_ws_scope)
+            res = set_user_permission_and_role(target_uid, setting, is_active=True, workspace_id=target_ws_scope)
+            if not res:
+                await query.answer(f"⛔ User was removed from {workspace_title}. Use /addmember to re-add.", show_alert=True)
+                return
             try:
                 await query.answer(f"✅ Role set to {setting.upper()} in {workspace_title}!", show_alert=False)
             except Exception:

@@ -76,7 +76,7 @@ def test_fix1_last5_command_gate_and_scope():
         call_args = u_member.message.reply_text.call_args[0][0]
         assert "⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace." in call_args
 
-        # 2. Member with history allowed -> Scoped to own transactions only
+        # 2. Member with history allowed -> Under Nov 8 decision, member in group chat sees full ledger
         set_feature_permission(ws.id, "history", "member", True)
         u_member.message.reply_text.reset_mock()
 
@@ -84,7 +84,7 @@ def test_fix1_last5_command_gate_and_scope():
         assert u_member.message.reply_text.called
         text_reply = u_member.message.reply_text.call_args[0][0]
         assert "Member Chai" in text_reply
-        assert "Other Secret Item" not in text_reply
+        assert "Other Secret Item" in text_reply
 
         # 3. Owner path -> Sees all transactions
         u_owner = MagicMock()
@@ -179,7 +179,7 @@ def test_fix2_sort_command_gate_and_scope():
         call_no_args = u_member.message.reply_text.call_args[0][0]
         assert "⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace." in call_no_args
 
-        # 2. Member with history allowed -> Scoped to own rows
+        # 2. Member with history allowed -> Under Nov 8 decision, member in group chat sees full ledger
         set_feature_permission(ws.id, "history", "member", True)
         u_member.message.reply_text.reset_mock()
 
@@ -187,7 +187,7 @@ def test_fix2_sort_command_gate_and_scope():
         assert u_member.message.reply_text.called
         text_reply = u_member.message.reply_text.call_args[0][0]
         assert "Member Coffee" in text_reply
-        assert "Other Secret Dinner" not in text_reply
+        assert "Other Secret Dinner" in text_reply
 
         # 3. Owner path -> Sees all rows
         u_owner = MagicMock()
@@ -280,7 +280,7 @@ def test_fix3_sort_callback_gate_and_scope():
         query_member.answer.assert_any_call("⛔ History is restricted for your role in this workspace.", show_alert=True)
         query_member.edit_message_text.assert_not_called()
 
-        # 2. Member with history allowed -> Scoped to own transactions only
+        # 2. Member with history allowed -> Under Nov 8 decision, member in group chat sees full ledger
         set_feature_permission(ws.id, "history", "member", True)
         query_member.answer.reset_mock()
         query_member.edit_message_text.reset_mock()
@@ -289,7 +289,7 @@ def test_fix3_sort_callback_gate_and_scope():
         assert query_member.edit_message_text.called
         member_text = query_member.edit_message_text.call_args[0][0]
         assert "Member Snack" in member_text
-        assert "Other Luxury Watch" not in member_text
+        assert "Other Luxury Watch" in member_text
 
         # 3. Owner path -> Sees all transactions
         u_owner = MagicMock()
@@ -364,7 +364,7 @@ def test_fix4_details_command_scope():
         )
         insert_transaction_with_balance(t_other)
 
-        # 1. Member with details allowed -> Scoped to own transactions only
+        # 1. Member with details allowed -> Under Nov 8 decision, member in group chat sees full ledger
         set_feature_permission(ws.id, "details", "member", True)
 
         u_member = MagicMock()
@@ -385,8 +385,8 @@ def test_fix4_details_command_scope():
         text_reply = u_member.message.reply_text.call_args[0][0]
         assert "Member Groceries" in text_reply
         assert "REF_MEMBER_123" in text_reply
-        assert "Other Secret Hotel" not in text_reply
-        assert "REF_OTHER_456" not in text_reply
+        assert "Other Secret Hotel" in text_reply
+        assert "REF_OTHER_456" in text_reply
 
         # 2. Owner path -> Sees all transactions
         u_owner = MagicMock()
@@ -549,7 +549,7 @@ def test_fix6_filter_callback_gate_and_scope():
         query_member.answer.assert_any_call("⛔ History is restricted for your role in this workspace.", show_alert=True)
         query_member.edit_message_text.assert_not_called()
 
-        # 2. Member with history allowed -> Scoped to own transactions only
+        # 2. Member with history allowed -> Under Nov 8 decision, member in group chat sees full ledger
         set_feature_permission(ws.id, "history", "member", True)
 
         # 2a. filter:today
@@ -560,7 +560,7 @@ def test_fix6_filter_callback_gate_and_scope():
         assert query_member.edit_message_text.called
         text_today = query_member.edit_message_text.call_args[0][0]
         assert "Member Lunch" in text_today
-        assert "Other Fancy Dinner" not in text_today
+        assert "Other Fancy Dinner" in text_today
 
         # 2b. filter:monthly_stats
         query_member.edit_message_text.reset_mock()
@@ -568,9 +568,7 @@ def test_fix6_filter_callback_gate_and_scope():
         await _dispatch_callback_query(u_member, ctx)
         assert query_member.edit_message_text.called
         text_stats = query_member.edit_message_text.call_args[0][0]
-        assert "₹80" in text_stats
-        assert "₹800" not in text_stats
-        assert "₹880" not in text_stats
+        assert "₹880" in text_stats
 
         # 2c. filter:show_ids
         query_member.edit_message_text.reset_mock()
@@ -579,7 +577,7 @@ def test_fix6_filter_callback_gate_and_scope():
         assert query_member.edit_message_text.called
         text_ids = query_member.edit_message_text.call_args[0][0]
         assert "REF_FILTER_MEM_80" in text_ids
-        assert "REF_FILTER_OTH_800" not in text_ids
+        assert "REF_FILTER_OTH_800" in text_ids
 
         # 3. Owner path -> Sees all rows
         u_owner = MagicMock()
