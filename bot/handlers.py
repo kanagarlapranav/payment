@@ -3931,3 +3931,46 @@ async def handle_chat_migration(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             logger.warning(f"Telegram chat migration failed for: {old_chat_id} -> {new_chat_id}")
 
+
+async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Automatically registers users who are added to a group chat into the group workspace."""
+    msg = getattr(update, 'effective_message', None) or getattr(update, 'message', None)
+    if not msg or not getattr(msg, 'new_chat_members', None):
+        return
+    chat = update.effective_chat
+    if not chat or chat.type not in ('group', 'supergroup'):
+        return
+
+    from database.queries import get_workspace_by_chat_id, add_workspace_member, get_workspace_setting
+    from services.task_manager import schedule_debounced_backup
+
+    ws = get_workspace_by_chat_id(chat.id)
+    if not ws:
+        return
+
+    bot_id = context.bot.id if context and context.bot else None
+    default_role = get_workspace_setting(ws.id, 'default_member_role') or 'viewer'
+
+    added_names = []
+    for new_user in msg.new_chat_members:
+        if bot_id and new_user.id == bot_id:
+            continue
+        uid = new_user.id
+        uname = getattr(new_user, 'username', '') or ''
+        dname = getattr(new_user, 'full_name', '') or getattr(new_user, 'first_name', '') or uname or str(uid)
+        add_workspace_member(ws.id, uid, username=uname, display_name=dname, role=default_role)
+        added_names.append(dname)
+        logger.info(f"Auto-registered new chat member {dname} ({uid}) into workspace {ws.id} as {default_role}")
+
+    if added_names:
+        try:
+            schedule_debounced_backup(context.bot)
+        except Exception:
+            pass
+        await msg.reply_text(
+            f"👋 Welcome {', '.join(html.escape(n) for n in added_names)}!\n\n"
+            f"You have been added to <b>{html.escape(ws.title or 'this workspace')}</b> with <b>{default_role.upper()}</b> permissions.\n"
+            f"Send /help to get started!",
+            parse_mode='HTML'
+        )
+

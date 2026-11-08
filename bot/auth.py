@@ -56,6 +56,7 @@ COMMAND_ROLE_POLICY = {
     "dashboard": "member", "export": "member", "report": "member", "statement": "member",
 
     # Admin & above (Management & Mutations, AI Quota, Reports & Exports)
+    "addmember": "admin", "add_member": "admin",
     "setbudget": "admin", "addmenu": "admin",
     "delmenu": "admin", "cafeedit": "admin", "editcafe": "admin",
     "backup": "admin", "backupnow": "admin",

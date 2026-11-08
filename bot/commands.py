@@ -2817,6 +2817,86 @@ async def demote_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Failed to demote admin: {err}")
 
 
+async def addmember_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Adds a member to the current workspace (Admin/Owner only). Usage: /addmember <@username or user_id> [role]"""
+    from bot.auth import get_workspace_context
+    from database.queries import add_workspace_member, get_workspace_member
+    from services.task_manager import schedule_debounced_backup
+
+    if not await require_admin(update): return
+    ctx = get_workspace_context(update)
+    if not ctx:
+        await update.message.reply_text("❌ Current workspace context could not be determined.")
+        return
+
+    if not context.args and not getattr(update.message, 'reply_to_message', None):
+        await update.message.reply_text(
+            "<b>Usage:</b> <code>/addmember &lt;@username or user_id&gt; [role]</code>\n\n"
+            "<b>Roles:</b> <code>viewer</code>, <code>member</code>, <code>admin</code> (default: <code>viewer</code>)\n"
+            "<i>Example:</i> <code>/addmember @akhil viewer</code>\n\n"
+            "<i>💡 Quick Tip: You can also reply to anyone's message in the group with <code>/addmember</code>!</i>",
+            parse_mode='HTML'
+        )
+        return
+
+    role = "viewer"
+    if context.args and len(context.args) > 1 and context.args[1].lower() in ('owner', 'admin', 'member', 'viewer'):
+        role = context.args[1].lower()
+    elif context.args and len(context.args) == 1 and context.args[0].lower() in ('owner', 'admin', 'member', 'viewer'):
+        role = context.args[0].lower()
+
+    target_uid = None
+    target_uname = ""
+    target_display = ""
+
+    # Check if replying to someone's message
+    reply_msg = getattr(update.message, 'reply_to_message', None) if update.message else None
+    if reply_msg and getattr(reply_msg, 'from_user', None):
+        r_user = reply_msg.from_user
+        target_uid = r_user.id
+        target_uname = r_user.username or ""
+        target_display = r_user.full_name or r_user.first_name or (f"@{target_uname}" if target_uname else str(target_uid))
+    elif context.args:
+        target_identifier = context.args[0].strip()
+        if target_identifier.lstrip('-').isdigit():
+            target_uid = int(target_identifier)
+            target_display = f"User {target_uid}"
+        else:
+            target_uname = target_identifier.lstrip('@')
+            target_display = f"@{target_uname}"
+
+    if target_uid:
+        add_workspace_member(ctx.workspace_id, target_uid, username=target_uname, display_name=target_display, role=role)
+        schedule_debounced_backup(context.bot)
+        await update.message.reply_text(
+            f"✅ <b>{html.escape(target_display)}</b> (<code>{target_uid}</code>) was added to this workspace with role <b>{role.upper()}</b>.",
+            parse_mode='HTML'
+        )
+    else:
+        # User specified only @username without reply or user_id
+        # Check if user exists in other workspaces or access_requests to find their telegram_user_id
+        from database.queries import get_all_users_for_permissions
+        all_u = get_all_users_for_permissions()
+        found_u = next((u for u in all_u if u.get('username') and u['username'].lower() == target_uname.lower()), None)
+        if found_u:
+            target_uid = found_u['telegram_user_id']
+            target_display = found_u['display_name'] or f"@{target_uname}"
+            add_workspace_member(ctx.workspace_id, target_uid, username=target_uname, display_name=target_display, role=role)
+            schedule_debounced_backup(context.bot)
+            await update.message.reply_text(
+                f"✅ <b>{html.escape(target_display)}</b> (<code>{target_uid}</code>) was added to this workspace with role <b>{role.upper()}</b>.",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                f"ℹ️ To add <b>@{html.escape(target_uname)}</b>:\n\n"
+                f"1. <b>Quickest:</b> Reply to any message from them in this group with <code>/addmember {role}</code>\n"
+                f"2. <b>Invite Token:</b> Run <code>/invite {role}</code> and send them the <code>/join &lt;token&gt;</code> command\n"
+                f"3. <b>With User ID:</b> Type <code>/addmember &lt;user_id&gt; {role}</code>",
+                parse_mode='HTML'
+            )
+
+
 async def removemember_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Removes a member from the current workspace (Admin/Owner only). Usage: /removemember <user_id_or_@username>"""
     from bot.auth import get_workspace_context
