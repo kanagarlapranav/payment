@@ -364,7 +364,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
     caller_id = update.effective_user.id if update.effective_user else None
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
     is_switched = bool(ctx and ctx.workspace and getattr(ctx.workspace, 'chat_id', None) is not None and ctx.chat_id != ctx.workspace.chat_id)
     menu_text = render_home_menu_text(workspace_id=ws_id, user_id=view_user_id, switched=is_switched)
     await update.message.reply_text(menu_text, reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
@@ -644,7 +644,7 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     ws_id = ctx.workspace_id
     caller_id = update.effective_user.id if update.effective_user else None
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
 
     recalculate_all_balances(workspace_id=ws_id)
     overall = get_overall_summary(workspace_id=ws_id, user_id=view_user_id)
@@ -774,7 +774,7 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
     summary = get_day_financial_summary(target_d, workspace_id=ws_id, user_id=view_user_id)
     text = render_day_financial_statement(summary)
     await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
@@ -794,7 +794,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not feature_allowed(ws_id, caller_id, "history"):
         await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
 
     recalculate_all_balances(workspace_id=ws_id)
 
@@ -881,7 +881,7 @@ async def last5_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not feature_allowed(ws_id, caller_id, "history"):
         await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
     recalculate_all_balances(workspace_id=ws_id)
     text, markup = render_history_page(page=1, filter_type="ALL", page_size=5, workspace_id=ws_id, user_id=view_user_id)
     await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
@@ -898,7 +898,7 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ <b>Access Denied:</b> Transaction details feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
     
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
     from bot.keyboards import get_standard_nav_keyboard
     transactions = get_all_transactions_asc(workspace_id=ws_id, user_id=view_user_id)
     if not transactions:
@@ -983,7 +983,7 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     caller_id = update.effective_user.id if update.effective_user else None
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
     txs = search_transactions(target_date=target_d, sort_by="date_desc", workspace_id=ws_id, user_id=view_user_id)
     if not txs:
         await update.message.reply_text(f"No transactions found on <b>{html.escape(target_d.strftime('%d %b %Y'))}</b>.", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
@@ -1024,7 +1024,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not feature_allowed(ws_id, caller_id, "history"):
         await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
     from bot.keyboards import get_standard_nav_keyboard
     
     if not context.args:
@@ -1106,7 +1106,7 @@ async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     caller_id = update.effective_user.id if update.effective_user else None
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
     txs = search_transactions(exact_amount=amt, sort_by="date_desc", workspace_id=ws_id, user_id=view_user_id)
     if not txs:
         await update.message.reply_text(f"💵 No transactions found with amount <b>{html.escape(format_currency(amt))}</b>.", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
@@ -1143,7 +1143,7 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not feature_allowed(ws_id, caller_id, "monthly"):
         await update.message.reply_text("⛔ <b>Access Denied:</b> Monthly view feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
     
     now = get_current_time_in_tz()
     year = now.year
@@ -1201,7 +1201,7 @@ async def sort_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not feature_allowed(ws_id, caller_id, "history"):
         await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin')) else caller_id
+    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
     from bot.keyboards import get_sort_keyboard
     
     # If user provided argument e.g. /sort high, /sort low, /sort amount, /sort money
@@ -2290,11 +2290,15 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
     if is_admin_mode:
         available_workspaces = get_all_active_workspaces()
     else:
-        from database.queries import get_workspace_by_chat_id
+        from database.queries import get_user_workspaces, get_workspace_by_chat_id
+        user_ws_list = get_user_workspaces(user_id) if user_id else []
         dm_ws = get_workspace_by_chat_id(chat_id) if chat_id is not None else None
         if not dm_ws and ctx and ctx.workspace:
             dm_ws = ctx.workspace
-        available_workspaces = [dm_ws] if dm_ws else []
+        merged = list(user_ws_list)
+        if dm_ws and not any(w.id == dm_ws.id for w in merged):
+            merged.append(dm_ws)
+        available_workspaces = merged
 
     seen = set()
     unique_workspaces = []
@@ -2317,8 +2321,12 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
         else:
             dm_workspaces = [w for w in unique_workspaces if w.chat_type == 'dm']
     else:
-        group_workspaces = []
-        dm_workspaces = [] if is_group else ([w for w in unique_workspaces if w.chat_type == 'dm'] or unique_workspaces)
+        group_workspaces = [w for w in unique_workspaces if w.chat_type != 'dm']
+        dm_workspaces = [
+            w for w in unique_workspaces
+            if (getattr(w, 'chat_type', None) or (w['chat_type'] if hasattr(w, '__getitem__') else '')) == 'dm'
+            and str(getattr(w, 'chat_id', None) if getattr(w, 'chat_id', None) is not None else (w['chat_id'] if hasattr(w, '__getitem__') else '')) == str(user_id)
+        ]
 
     curr_ws_id = ctx.workspace_id if ctx else ""
     curr_title = ctx.workspace.title if (ctx and ctx.workspace and ctx.workspace.title) else "Workspace"
@@ -2353,11 +2361,10 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
             lines.append(f"{check}<b>{html.escape(ws.title or 'Personal Ledger')}</b>{badge}")
         lines.append("")
 
-    if is_admin_mode:
-        if is_group:
-            lines.append("<i>Note: Switching affects your Direct Messages (DM) only. This group chat always records to its own shared ledger.</i>")
-        else:
-            lines.append("<i>Tap any ledger below to switch your active view:</i>")
+    if is_group:
+        lines.append("<i>Note: Switching affects your Direct Messages (DM) only. This group chat always records to its own shared ledger.</i>")
+    elif len(group_workspaces) + len(dm_workspaces) > 1:
+        lines.append("<i>Tap any ledger below to switch your active view:</i>")
     else:
         lines.append("<i>Your entries are kept strictly private in your personal ledger.</i>")
 
@@ -2385,6 +2392,11 @@ def render_workspaces_view(update: Update) -> tuple[str, Any]:
         ]
         keyboard_rows.append(action_row)
     else:
+        for ws in group_workspaces:
+            is_curr = (ws.id == curr_ws_id)
+            icon = "✅ " if is_curr else "👥 "
+            keyboard_rows.append([InlineKeyboardButton(f"{icon}{ws.title or 'Group'}"[:32], callback_data=f"ws_switch:{ws.id}")])
+
         action_row = [
             InlineKeyboardButton("🔄 Reset to Chat Default", callback_data="ws_reset")
         ]
@@ -2483,7 +2495,7 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not is_global_owner and not (m and m.is_active and getattr(m, 'status', 'active') == 'active'):
                 await update.message.reply_text("⛔ <b>Access Denied:</b> You are not an active member of that workspace.", parse_mode='HTML')
                 return
-            if not is_global_owner:
+            if not is_global_owner and getattr(target_ws, 'chat_type', None) in ('dm', 'private'):
                 user_dm_ws = get_workspace_by_chat_id(chat.id) if chat and getattr(chat, 'id', None) else None
                 if not user_dm_ws or target_ws.id != user_dm_ws.id:
                     await update.message.reply_text("⛔ <b>Access Denied:</b> That ledger is not available to you.", parse_mode='HTML')
