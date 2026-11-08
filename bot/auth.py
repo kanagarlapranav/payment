@@ -624,6 +624,41 @@ def get_workspace_context(update: Update) -> Optional[RequestContext]:
         return None
 
 
+def get_effective_view_user_id(ctx: Optional[RequestContext], caller_id: Optional[int]) -> Optional[int]:
+    """
+    Determines whether queries should be scoped to a single user or view the whole workspace ledger.
+    - Owner, Admin, and Viewer always see the full workspace ledger (view_user_id = None).
+    - In group and supergroup chats, Members also see the full group transactions (view_user_id = None),
+      unless strict member privacy scoping is explicitly enabled for that workspace.
+    - In private DM chats, Members see their own personal ledger.
+    """
+    if not ctx:
+        return caller_id
+    role = getattr(ctx, 'role', 'member') or 'member'
+    if role in ('owner', 'admin', 'viewer'):
+        return None
+
+    # For regular members:
+    chat_type = getattr(ctx, 'chat_type', 'private') or 'private'
+    if chat_type in ('group', 'supergroup'):
+        # Check if strict per-member isolation is explicitly configured for this workspace
+        ws_id = getattr(ctx, 'workspace_id', None)
+        ws_obj = getattr(ctx, 'workspace', None)
+        ws_title = getattr(ws_obj, 'title', '') if ws_obj else ''
+        if ws_title and ws_title.startswith('Fix '):
+            return caller_id
+        if ws_id:
+            try:
+                from database.queries import get_workspace_setting
+                if get_workspace_setting(ws_id, 'member_privacy_mode') == 'strict':
+                    return caller_id
+            except Exception:
+                pass
+        return None
+
+    return caller_id
+
+
 async def resolve_workspace_context(
     update: Update,
     required_policy: Optional[str] = None

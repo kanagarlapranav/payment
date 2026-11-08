@@ -141,3 +141,74 @@ def test_viewer_role_sees_full_ledger_in_group_and_dm():
         assert found_btn is True
 
     asyncio.run(_test())
+
+
+def test_member_sees_full_transactions_in_group_chat():
+    """Verifies that a user with 'member' role in a group chat sees all workspace records and balance."""
+    async def _test():
+        owner_id = 9101
+        member_id = 9102
+        group_chat_id = -100777999
+
+        ws = get_or_create_workspace(
+            title="Payment",
+            creator_user_id=owner_id,
+            chat_id=group_chat_id,
+            chat_type="group"
+        )
+        add_workspace_member(ws.id, owner_id, role="owner")
+        add_workspace_member(ws.id, member_id, role="member")
+
+        from utils.dates import get_current_time_in_tz
+        today_str = str(get_current_time_in_tz().date())
+
+        t1 = Transaction(
+            amount=1200.0,
+            transaction_type="RECEIVED",
+            person_name="Praneeth",
+            category="Transfers & P2P",
+            transaction_date=today_str,
+            workspace_id=ws.id,
+            telegram_user_id=owner_id
+        )
+        insert_transaction(t1)
+
+        t2 = Transaction(
+            amount=400.0,
+            transaction_type="SENT",
+            person_name="Grocery Store",
+            category="Food & Dining",
+            transaction_date=today_str,
+            workspace_id=ws.id,
+            telegram_user_id=owner_id
+        )
+        insert_transaction(t2)
+
+        # Member runs /last5 in group chat
+        u_member_grp = make_mock_update(user_id=member_id, chat_id=group_chat_id, chat_type="group", chat_title="Payment")
+        ctx = MagicMock()
+        ctx.args = []
+
+        await last5_command(u_member_grp, ctx)
+        assert u_member_grp.message.reply_text.called
+        reply = u_member_grp.message.reply_text.call_args[0][0]
+        # Member sees the group transactions!
+        assert "Praneeth" in reply
+        assert "Grocery Store" in reply
+
+        # Member runs /balance in group chat
+        u_member_grp.message.reply_text.reset_mock()
+        await balance_command(u_member_grp, ctx)
+        assert u_member_grp.message.reply_text.called
+        bal_reply = u_member_grp.message.reply_text.call_args[0][0]
+        assert "800" in bal_reply  # 1200 - 400 = 800
+
+        # Member runs /day in group chat
+        u_member_grp.message.reply_text.reset_mock()
+        await day_command(u_member_grp, ctx)
+        assert u_member_grp.message.reply_text.called
+        day_reply = u_member_grp.message.reply_text.call_args[0][0]
+        assert "2 transactions" in day_reply
+        assert "800" in day_reply
+
+    asyncio.run(_test())

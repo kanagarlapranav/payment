@@ -47,6 +47,7 @@ from utils.currency import format_currency
 from utils.dates import get_current_time_in_tz
 import inspect
 from bot.feature_registry import feature_allowed
+from bot.auth import get_effective_view_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ async def _safe_answer_alert(query, text: str = "⛔ This feature is disabled fo
 
 async def nav_home(query, context, parts, ws_id, ws_ctx, update=None):
     caller_id = query.from_user.id if query.from_user else None
-    view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ws_ctx, caller_id)
     is_switched = bool(ws_ctx and ws_ctx.workspace and getattr(ws_ctx.workspace, 'chat_id', None) is not None and ws_ctx.chat_id != ws_ctx.workspace.chat_id)
     text = render_home_menu_text(workspace_id=ws_id, user_id=view_user_id, switched=is_switched)
     await query.edit_message_text(text, reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
@@ -70,7 +71,7 @@ async def nav_home(query, context, parts, ws_id, ws_ctx, update=None):
 
 async def nav_balance(query, context, parts, ws_id, ws_ctx, update=None):
     caller_id = query.from_user.id if query.from_user else None
-    view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ws_ctx, caller_id)
     overall = get_overall_summary(workspace_id=ws_id, user_id=view_user_id)
     today_stats = get_today_summary(workspace_id=ws_id, user_id=view_user_id)
     balance = overall.current_balance
@@ -96,7 +97,7 @@ async def nav_today(query, context, parts, ws_id, ws_ctx, update=None):
     if not feature_allowed(ws_id, caller_id, "history"):
         await _safe_answer_alert(query)
         return
-    view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ws_ctx, caller_id)
     today_stats = get_today_summary(workspace_id=ws_id, user_id=view_user_id)
     today_date = get_current_time_in_tz().date()
     txs = get_transactions_by_date(today_date, workspace_id=ws_id, user_id=view_user_id)
@@ -125,7 +126,7 @@ async def nav_history(query, context, parts, ws_id, ws_ctx, update=None):
         await _safe_answer_alert(query)
         return
     from bot.commands import render_history_page
-    view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ws_ctx, caller_id)
     page = int(parts[2]) if len(parts) > 2 else 1
     ft = parts[3] if len(parts) > 3 else "ALL"
     sb = parts[4] if len(parts) > 4 else "date_desc"
@@ -397,7 +398,7 @@ async def nav_stats(query, context, parts, ws_id, ws_ctx, update=None):
         await query.answer("⛔ This feature is disabled for your role.", show_alert=True)
         return
     now_dt = get_current_time_in_tz()
-    view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ws_ctx, caller_id)
     stats = get_monthly_summary(now_dt.year, now_dt.month, workspace_id=ws_id, user_id=view_user_id)
     month_name = date(now_dt.year, now_dt.month, 1).strftime("%B %Y")
     top_p_text = "N/A"

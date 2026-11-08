@@ -14,7 +14,7 @@ from bot.auth import (
     require_authorized, require_admin, require_owner, require_member, is_owner,
     is_global_owner, get_callback_policy,
     get_workspace_context, resolve_workspace_context, WORKSPACE_CALLBACK_POLICY,
-    get_effective_user_id
+    get_effective_user_id, get_effective_view_user_id
 )
 from bot.commands import (
     is_admin_user, render_home_menu_text,
@@ -811,7 +811,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
 
     elif action == "menu_main":
         caller_id = query.from_user.id if query.from_user else None
-        view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+        view_user_id = get_effective_view_user_id(ws_ctx, caller_id)
         is_switched = bool(ws_ctx and ws_ctx.workspace and getattr(ws_ctx.workspace, 'chat_id', None) is not None and ws_ctx.chat_id != ws_ctx.workspace.chat_id)
         text = render_home_menu_text(workspace_id=ws_id, user_id=view_user_id, switched=is_switched)
         await query.edit_message_text(text, reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
@@ -2776,7 +2776,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         if not feature_allowed(ws_id, caller_uid, "history"):
             await query.answer("⛔ History is restricted for your role in this workspace.", show_alert=True)
             return
-        view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin', 'viewer')) else caller_uid
+        view_user_id = get_effective_view_user_id(ws_ctx, caller_uid)
         filter_type = parts[1]
         now = get_current_time_in_tz()
         
@@ -2851,7 +2851,7 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
         if not feature_allowed(ws_id, caller_id, "history"):
             await query.answer("⛔ History is restricted for your role in this workspace.", show_alert=True)
             return
-        view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+        view_user_id = get_effective_view_user_id(ws_ctx, caller_id)
         sort_by = parts[1]
         if sort_by == "back_filters":
             await query.edit_message_text("🎛️ <b>Filter & Sort Transactions:</b>\n\nChoose an option below:", reply_markup=get_filter_keyboard(), parse_mode='HTML')
@@ -3668,7 +3668,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check quick menu trigger
     if text.strip().lower() in ('menu', 'home', 'start'):
         caller_id = update.effective_user.id if update.effective_user else None
-        view_user_id = None if (ws_ctx and ws_ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+        view_user_id = get_effective_view_user_id(ws_ctx, caller_id)
         is_switched = bool(ws_ctx and ws_ctx.workspace and getattr(ws_ctx.workspace, 'chat_id', None) is not None and ws_ctx.chat_id != ws_ctx.workspace.chat_id)
         await update.message.reply_text(render_home_menu_text(workspace_id=ws_id, user_id=view_user_id, switched=is_switched), reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
         return

@@ -10,6 +10,7 @@ from database.queries import (
 )
 from services.balance_service import get_today_summary, get_overall_summary, recalculate_all_balances
 from services.export_service import generate_excel_report
+from bot.auth import get_effective_view_user_id
 from utils.currency import format_currency, parse_amount
 from utils.dates import parse_date, get_current_time_in_tz, format_display_date
 from datetime import datetime
@@ -364,7 +365,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ctx = get_workspace_context(update)
     ws_id = ctx.workspace_id if ctx else None
     caller_id = update.effective_user.id if update.effective_user else None
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ctx, caller_id)
     is_switched = bool(ctx and ctx.workspace and getattr(ctx.workspace, 'chat_id', None) is not None and ctx.chat_id != ctx.workspace.chat_id)
     menu_text = render_home_menu_text(workspace_id=ws_id, user_id=view_user_id, switched=is_switched)
     await update.message.reply_text(menu_text, reply_markup=get_home_menu_keyboard(), parse_mode='HTML')
@@ -644,7 +645,7 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     ws_id = ctx.workspace_id
     caller_id = update.effective_user.id if update.effective_user else None
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ctx, caller_id)
 
     recalculate_all_balances(workspace_id=ws_id)
     overall = get_overall_summary(workspace_id=ws_id, user_id=view_user_id)
@@ -774,7 +775,7 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ctx, caller_id)
     summary = get_day_financial_summary(target_d, workspace_id=ws_id, user_id=view_user_id)
     text = render_day_financial_statement(summary)
     await update.message.reply_text(text, reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
@@ -794,7 +795,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not feature_allowed(ws_id, caller_id, "history"):
         await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ctx, caller_id)
 
     recalculate_all_balances(workspace_id=ws_id)
 
@@ -881,7 +882,7 @@ async def last5_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not feature_allowed(ws_id, caller_id, "history"):
         await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ctx, caller_id)
     recalculate_all_balances(workspace_id=ws_id)
     text, markup = render_history_page(page=1, filter_type="ALL", page_size=5, workspace_id=ws_id, user_id=view_user_id)
     await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
@@ -898,7 +899,7 @@ async def details_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ <b>Access Denied:</b> Transaction details feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
     
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ctx, caller_id)
     from bot.keyboards import get_standard_nav_keyboard
     transactions = get_all_transactions_asc(workspace_id=ws_id, user_id=view_user_id)
     if not transactions:
@@ -983,7 +984,7 @@ async def date_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     caller_id = update.effective_user.id if update.effective_user else None
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ctx, caller_id)
     txs = search_transactions(target_date=target_d, sort_by="date_desc", workspace_id=ws_id, user_id=view_user_id)
     if not txs:
         await update.message.reply_text(f"No transactions found on <b>{html.escape(target_d.strftime('%d %b %Y'))}</b>.", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
@@ -1024,7 +1025,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not feature_allowed(ws_id, caller_id, "history"):
         await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ctx, caller_id)
     from bot.keyboards import get_standard_nav_keyboard
     
     if not context.args:
@@ -1106,7 +1107,7 @@ async def amount_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     caller_id = update.effective_user.id if update.effective_user else None
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ctx, caller_id)
     txs = search_transactions(exact_amount=amt, sort_by="date_desc", workspace_id=ws_id, user_id=view_user_id)
     if not txs:
         await update.message.reply_text(f"💵 No transactions found with amount <b>{html.escape(format_currency(amt))}</b>.", reply_markup=get_standard_nav_keyboard(), parse_mode='HTML')
@@ -1143,7 +1144,7 @@ async def monthly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not feature_allowed(ws_id, caller_id, "monthly"):
         await update.message.reply_text("⛔ <b>Access Denied:</b> Monthly view feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ctx, caller_id)
     
     now = get_current_time_in_tz()
     year = now.year
@@ -1201,7 +1202,7 @@ async def sort_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not feature_allowed(ws_id, caller_id, "history"):
         await update.message.reply_text("⛔ <b>Access Denied:</b> History feature is restricted for your role in this workspace.", parse_mode='HTML')
         return
-    view_user_id = None if (ctx and ctx.role in ('owner', 'admin', 'viewer')) else caller_id
+    view_user_id = get_effective_view_user_id(ctx, caller_id)
     from bot.keyboards import get_sort_keyboard
     
     # If user provided argument e.g. /sort high, /sort low, /sort amount, /sort money
