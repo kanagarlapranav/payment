@@ -686,6 +686,171 @@ class TestBackupRestorePrompt6(unittest.TestCase):
             self.assertIsNotNone(row)
             self.assertEqual(row["value"], "1")
 
+    def test_stale_backup_prevention_on_delete_and_restart(self):
+        """
+        Problem 1 Regression Test:
+        Deleting a transaction must update the cloud backup so a wiped DB restart does NOT
+        restore the stale pre-delete backup. Confirmation message must report backup status honestly.
+        """
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from bot.handlers import handle_callback_query
+        from services.backup_service import restore_from_telegram, backup_to_telegram
+        from services.balance_service import set_explicit_balance
+        from bot.commands import setbalance_command
+
+        # 0. Clean database for this test
+        with get_db_connection() as conn:
+            conn.execute("DELETE FROM transactions")
+            conn.execute("UPDATE settings SET value = '0.0' WHERE key = 'current_balance'")
+            conn.commit()
+
+        # 1. Setup initial state: transaction with balance
+        t = Transaction(amount=100.0, transaction_type="RECEIVED", person_name="Alice")
+        tx_id = insert_transaction_with_balance(t)
+        self.assertEqual(get_balance_setting(), 100.0)
+
+        # 2. Simulate Telegram bot with mock chat and pinned message storage
+        pinned_holder = {'pinned': None}
+
+        async def fake_send_document(chat_id, document, caption=None, **kwargs):
+            doc_file = MagicMock()
+            doc_file.file_id = f"file_{uuid.uuid4().hex}"
+            doc_file.file_name = "backup.json"
+            # Read bytes of document
+            if hasattr(document, 'seek'):
+                document.seek(0)
+                content = document.read()
+            else:
+                content = document
+            msg = MagicMock()
+            msg.message_id = 9999
+            msg.document = doc_file
+            msg.caption = caption
+            msg._file_content = content
+            pinned_holder['pinned'] = msg
+            return msg
+
+        async def fake_get_chat(chat_id):
+            chat = MagicMock()
+            chat.pinned_message = pinned_holder['pinned']
+            return chat
+
+        async def fake_get_file(file_id):
+            f = MagicMock()
+            async def fake_download(custom_path):
+                with open(custom_path, 'wb') as out:
+                    out.write(pinned_holder['pinned']._file_content)
+            f.download_to_drive = AsyncMock(side_effect=fake_download)
+            return f
+
+        mock_bot = MagicMock()
+        mock_bot.send_document = AsyncMock(side_effect=fake_send_document)
+        mock_bot.get_chat = AsyncMock(side_effect=fake_get_chat)
+        mock_bot.get_file = AsyncMock(side_effect=fake_get_file)
+        mock_bot.pin_chat_message = AsyncMock(return_value=True)
+        mock_bot.unpin_chat_message = AsyncMock(return_value=True)
+
+        # 3. Create initial pre-delete cloud backup pinned in Telegram
+        loop = asyncio.new_event_loop()
+        try:
+            bk_ok = loop.run_until_complete(backup_to_telegram(mock_bot, force=True))
+            self.assertTrue(bk_ok)
+            self.assertIsNotNone(pinned_holder['pinned'])
+
+            # 4. Invoke delete callback via handle_callback_query
+            query = MagicMock()
+            query.data = f"delete_confirm:{tx_id}"
+            query.answer = AsyncMock()
+            edit_calls = []
+            async def fake_edit(text, **kwargs):
+                edit_calls.append(text)
+            query.edit_message_text = AsyncMock(side_effect=fake_edit)
+            query.message = MagicMock()
+            query.message.edit_text = AsyncMock(side_effect=fake_edit)
+
+            update = MagicMock()
+            update.callback_query = query
+            update.effective_chat = MagicMock(id=123456789)
+            update.effective_user = MagicMock(id=123456789)
+
+            context = MagicMock()
+            context.bot = mock_bot
+            context.user_data = {}
+
+            with patch("bot.handlers.is_owner", return_value=True), \
+                 patch("bot.handlers.require_owner", AsyncMock(return_value=True)):
+                loop.run_until_complete(handle_callback_query(update, context))
+
+            # Verify confirmation message shows honest backup status
+            self.assertTrue(len(edit_calls) > 0)
+            conf_msg = edit_calls[-1]
+            self.assertIn("Cloud backup completed", conf_msg)
+
+            # 5. Wipe isolated database
+            with get_db_connection() as conn:
+                conn.execute("DELETE FROM transactions")
+                conn.execute("UPDATE settings SET value = '0' WHERE key = 'database_initialized'")
+                conn.execute("UPDATE settings SET value = '0.0' WHERE key = 'current_balance'")
+                conn.commit()
+
+            # 6. Restore from Telegram into empty database
+            res = loop.run_until_complete(restore_from_telegram(mock_bot, chat_id="123456789"))
+            self.assertTrue(res.success)
+
+            # Assert: deleted row MUST STAY DELETED and balance must NOT revert to 100.0!
+            with get_db_connection() as conn:
+                live_cnt = conn.execute("SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL").fetchone()[0]
+                self.assertEqual(live_cnt, 0)
+                bal = float(conn.execute("SELECT value FROM settings WHERE key = 'current_balance'").fetchone()[0])
+                self.assertEqual(bal, 0.0)
+
+            # 7. Also verify balance change sequence persists across wipe
+            context.args = ["250.0"]
+            update.message = MagicMock()
+            update.message.reply_text = AsyncMock()
+            loop.run_until_complete(setbalance_command(update, context))
+
+            # Wipe DB again
+            with get_db_connection() as conn:
+                conn.execute("DELETE FROM transactions")
+                conn.execute("UPDATE settings SET value = '0' WHERE key = 'database_initialized'")
+                conn.execute("UPDATE settings SET value = '0.0' WHERE key = 'current_balance'")
+                conn.commit()
+
+            # Restore again
+            res2 = loop.run_until_complete(restore_from_telegram(mock_bot, chat_id="123456789"))
+            self.assertTrue(res2.success)
+            self.assertEqual(get_balance_setting(), 250.0)
+
+            # 8. Verify failure reporting when cloud backup fails
+            t2 = Transaction(amount=50.0, transaction_type="SENT", person_name="Bob")
+            tx2_id = insert_transaction_with_balance(t2)
+            query2 = MagicMock()
+            query2.data = f"delete_confirm:{tx2_id}"
+            query2.answer = AsyncMock()
+            edit_calls2 = []
+            async def fake_edit2(text, **kwargs):
+                edit_calls2.append(text)
+            query2.edit_message_text = AsyncMock(side_effect=fake_edit2)
+            update2 = MagicMock()
+            update2.callback_query = query2
+            update2.effective_chat = MagicMock(id=123456789)
+            update2.effective_user = MagicMock(id=123456789)
+            fail_bot = MagicMock()
+            fail_bot.send_document = AsyncMock(side_effect=RuntimeError("Network down"))
+            fail_bot.get_chat = AsyncMock(side_effect=RuntimeError("Network down"))
+            context2 = MagicMock()
+            context2.bot = fail_bot
+            context2.user_data = {}
+            with patch("bot.handlers.is_owner", return_value=True), \
+                 patch("bot.handlers.require_owner", AsyncMock(return_value=True)):
+                loop.run_until_complete(handle_callback_query(update2, context2))
+            self.assertTrue(len(edit_calls2) > 0)
+            self.assertIn("cloud backup is pending retry", edit_calls2[-1])
+        finally:
+            loop.close()
+
 
 if __name__ == '__main__':
     unittest.main()

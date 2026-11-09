@@ -28,7 +28,7 @@ def recalculate_in_connection(conn: sqlite3.Connection, workspace_id: str = None
     if workspace_id is _UNSET or not workspace_id:
         import os
         if os.environ.get("PAYMENT_TRACKER_ENV") == "test":
-            ws_id = get_default_workspace_id()
+            ws_id = get_default_workspace_id(conn=conn)
         else:
             raise ValueError("workspace_id is required for recalculate_in_connection")
     else:
@@ -39,7 +39,7 @@ def recalculate_in_connection(conn: sqlite3.Connection, workspace_id: str = None
     # 1. Fetch initial_balance anchor from workspace_settings, fallback to settings only for default workspace
     cursor.execute("SELECT value FROM workspace_settings WHERE workspace_id = ? AND key = 'initial_balance'", (ws_id,))
     row = cursor.fetchone()
-    if not row and ws_id == get_default_workspace_id():
+    if not row and ws_id == get_default_workspace_id(conn=conn):
         cursor.execute("SELECT value FROM settings WHERE key = 'initial_balance'")
         row = cursor.fetchone()
     init_val_str = row['value'] if row and row['value'] is not None else '0.0'
@@ -52,7 +52,7 @@ def recalculate_in_connection(conn: sqlite3.Connection, workspace_id: str = None
         raise ValueError(f"Invalid initial_balance in settings: {init_val_str!r} ({err})")
 
     # 2. Fetch all live transactions for this workspace in strict chronological order
-    default_ws = get_default_workspace_id()
+    default_ws = get_default_workspace_id(conn=conn)
     ws_filter = "(workspace_id = ? OR workspace_id IS NULL OR workspace_id = '')" if ws_id == default_ws else "workspace_id = ?"
     cursor.execute(f'''
         SELECT id, transaction_type, amount, occurred_at, created_at
@@ -95,7 +95,7 @@ def recalculate_in_connection(conn: sqlite3.Connection, workspace_id: str = None
         "INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at) VALUES (?, 'current_balance', ?, ?)",
         (ws_id, str(final_float), now_utc)
     )
-    if ws_id == get_default_workspace_id():
+    if ws_id == get_default_workspace_id(conn=conn):
         cursor.execute(
             "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('current_balance', ?, ?)",
             (str(final_float), now_utc)
@@ -452,7 +452,7 @@ def validate_ledger_invariants(db_path=None, workspace_id: str = None, conn=None
     try:
         cursor = active_conn.cursor()
         from database.queries import get_default_workspace_id
-        default_ws = get_default_workspace_id()
+        default_ws = get_default_workspace_id(conn=active_conn)
 
         # 1. Inspect all rows (live and deleted) for structural validity
         if workspace_id:

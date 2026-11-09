@@ -62,20 +62,28 @@ else:
     raw_data = os.getenv("DATA_DIR")
     DATA_DIR = Path(raw_data.strip()).resolve() if (raw_data and raw_data.strip()) else DEFAULT_PERSISTENT_DATA_DIR
 
-# Loud startup warning if DATA_DIR is inside the repository
-if not IS_TEST_ENV and (DATA_DIR == BASE_DIR or BASE_DIR in DATA_DIR.parents or DATA_DIR == repo_internal_dir or repo_internal_dir in DATA_DIR.parents):
-    logging.warning(
-        "⚠️ CRITICAL PERSISTENCE WARNING: DATA_DIR (%s) is located INSIDE the repository directory (%s)! "
-        "A fresh git clone or redeploy WILL WIPE your live SQLite database and stored media! "
-        "Please move DATA_DIR outside the repository (default: %s) or set the DATA_DIR environment variable.",
-        DATA_DIR, BASE_DIR, DEFAULT_PERSISTENT_DATA_DIR
-    )
-
 IMAGE_DIR = DATA_DIR / 'images'
 LOG_DIR = Path(os.getenv('LOG_DIR', str(DATA_DIR / 'logs'))).resolve()
 DB_PATH = Path(os.getenv('DATABASE_PATH', str(DATA_DIR / 'database.sqlite3'))).resolve()
 DATABASE_PATH = DB_PATH
 BACKUP_JSON_PATH = Path(os.getenv('BACKUP_JSON_PATH', str(DATA_DIR / 'backup_transactions.json'))).resolve()
+
+# Loud startup warning if DATA_DIR or DB_PATH is inside the repository
+if not IS_TEST_ENV and (
+    DATA_DIR == BASE_DIR or BASE_DIR in DATA_DIR.parents or DATA_DIR == repo_internal_dir or repo_internal_dir in DATA_DIR.parents
+    or DB_PATH == BASE_DIR or BASE_DIR in DB_PATH.parents or DB_PATH == repo_internal_dir or repo_internal_dir in DB_PATH.parents
+):
+    logging.warning(
+        "⚠️ CRITICAL PERSISTENCE WARNING: DATA_DIR (%s) or DB_PATH (%s) is located INSIDE the repository directory (%s)! "
+        "A fresh git clone or redeploy WILL WIPE your live SQLite database and stored media! "
+        "Please move DATA_DIR outside the repository (default: %s) or set the DATA_DIR/DATABASE_PATH environment variable.",
+        DATA_DIR, DB_PATH, BASE_DIR, DEFAULT_PERSISTENT_DATA_DIR
+    )
+
+logging.info(
+    "Storage configuration: DATA_DIR=%s, DB_PATH=%s, BACKUP_JSON_PATH=%s, LOG_DIR=%s",
+    DATA_DIR, DB_PATH, BACKUP_JSON_PATH, LOG_DIR
+)
 
 if IS_TEST_ENV:
     if DB_PATH == production_dir / "database.sqlite3" or production_dir in DB_PATH.parents:

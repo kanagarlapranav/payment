@@ -42,11 +42,43 @@ def increment_revision_and_mark_dirty(conn) -> int:
 # WORKSPACE & MULTI-TENANT MANAGEMENT
 # ==============================================================================
 
-def get_default_workspace_id() -> str:
+def get_default_workspace_id(conn=None) -> str:
     """
     Returns the system's default workspace ID from settings.
     Provisions one if missing (idempotent fallback).
     """
+    if conn is not None:
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
+        row = cursor.fetchone()
+        if row and row['value']:
+            candidate_id = str(row['value'])
+            cursor.execute("SELECT id FROM workspaces WHERE id = ? AND is_active = 1", (candidate_id,))
+            if cursor.fetchone():
+                return candidate_id
+
+        cursor.execute("SELECT id FROM workspaces WHERE is_active = 1 ORDER BY created_at ASC LIMIT 1")
+        ws_row = cursor.fetchone()
+        if ws_row and ws_row['id']:
+            ws_id = str(ws_row['id'])
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('default_workspace_id', ?, ?)", (ws_id, utc_now_iso()))
+            return ws_id
+
+        new_ws_id = str(uuid.uuid4())
+        now_utc = utc_now_iso()
+        cursor.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('default_workspace_id', ?, ?)", (new_ws_id, now_utc))
+        cursor.execute("""
+            INSERT OR IGNORE INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
+            VALUES (?, NULL, 'private', 'Default Workspace', 1, ?, ?)
+        """, (new_ws_id, now_utc, now_utc))
+        from config import TELEGRAM_USER_ID
+        owner_uid = int(TELEGRAM_USER_ID) if TELEGRAM_USER_ID else 1
+        cursor.execute("""
+            INSERT OR IGNORE INTO workspace_members (workspace_id, telegram_user_id, role, is_active, status, joined_at, updated_at)
+            VALUES (?, ?, 'owner', 1, 'active', ?, ?)
+        """, (new_ws_id, owner_uid, now_utc, now_utc))
+        return new_ws_id
+
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
@@ -85,6 +117,12 @@ def get_default_workspace_id() -> str:
                 INSERT OR IGNORE INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
                 VALUES (?, 0, 'private', 'Primary Workspace', 1, ?, ?)
             """, (new_ws_id, now_utc, now_utc))
+            from config import TELEGRAM_USER_ID
+            owner_uid = int(TELEGRAM_USER_ID) if TELEGRAM_USER_ID else 1
+            cursor.execute("""
+                INSERT OR IGNORE INTO workspace_members (workspace_id, telegram_user_id, role, is_active, status, joined_at, updated_at)
+                VALUES (?, ?, 'owner', 1, 'active', ?, ?)
+            """, (new_ws_id, owner_uid, now_utc, now_utc))
             conn.commit()
             return new_ws_id
 
@@ -662,6 +700,11 @@ def remove_workspace_member(workspace_id: str, telegram_user_id: int | str) -> b
     try:
         from bot.auth import set_user_active_workspace
         set_user_active_workspace(uid, None)
+    except Exception:
+        pass
+    try:
+        from services.dashboard_auth import revoke_user_sessions
+        revoke_user_sessions(workspace_id, uid)
     except Exception:
         pass
     return removed

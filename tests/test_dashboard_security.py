@@ -398,6 +398,78 @@ class TestDashboardSecurity(unittest.TestCase):
         # Database persistence must still enforce rate limiting
         self.assertTrue(is_rate_limited(client_ip))
 
+    def test_removed_member_loses_dashboard_access_immediately_and_revalidation_fails_closed(self):
+        """
+        Problem 2 Regression Test:
+        A removed member must lose dashboard access immediately. Revalidation must reject
+        when membership is missing, and must fail closed (reject) on any database error.
+        """
+        from database.queries import add_workspace_member, remove_workspace_member, get_default_workspace_id
+        from services.dashboard_auth import create_one_time_code, exchange_code_for_session
+
+        ws_id = get_default_workspace_id()
+        user_id = 88888
+
+        # 1. Add member and establish a valid dashboard session
+        add_workspace_member(ws_id, user_id, "member", "active")
+        code = create_one_time_code(workspace_id=ws_id, user_id=user_id, role="member")
+        success, sid, _ = exchange_code_for_session(code, client_ip="127.0.0.1")
+        self.assertTrue(success)
+        self.assertIsNotNone(sid)
+
+        cookie_hdr = f"session_id={sid}"
+
+        # Verify session works before removal
+        handler = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
+        handler.path = '/dashboard'
+        handler.client_address = ('127.0.0.1', 5000)
+        handler.headers = {'Cookie': cookie_hdr}
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        handler.wfile = io.BytesIO()
+        handler.do_GET()
+        self.assertEqual(handler.send_response.call_args[0][0], 200)
+
+        # 2. Remove workspace member
+        removed = remove_workspace_member(ws_id, user_id)
+        self.assertTrue(removed)
+
+        # 3. Assert /dashboard, /api/transactions, /api/export.csv immediately reject the old session
+        for ep in ['/dashboard', '/api/transactions', '/api/export.csv']:
+            h = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
+            h.path = ep
+            h.client_address = ('127.0.0.1', 5000)
+            h.headers = {'Cookie': cookie_hdr}
+            h.send_response = MagicMock()
+            h.send_header = MagicMock()
+            h.end_headers = MagicMock()
+            h.wfile = io.BytesIO()
+            h.do_GET()
+            self.assertEqual(h.send_response.call_args[0][0], 401, f"Endpoint {ep} allowed access for removed member!")
+
+        # 4. Revalidation fails closed on database error
+        # Re-add member and create a fresh session
+        add_workspace_member(ws_id, user_id, "member", "active")
+        code2 = create_one_time_code(workspace_id=ws_id, user_id=user_id, role="member")
+        success2, sid2, _ = exchange_code_for_session(code2, client_ip="127.0.0.1")
+        self.assertTrue(success2)
+        cookie_hdr2 = f"session_id={sid2}"
+
+        # Simulate database error during membership revalidation
+        with patch("services.dashboard_auth.get_db_connection", side_effect=RuntimeError("Simulated DB connection failure")):
+            h_err = WebAppAndHealthHandler.__new__(WebAppAndHealthHandler)
+            h_err.path = '/dashboard'
+            h_err.client_address = ('127.0.0.1', 5000)
+            h_err.headers = {'Cookie': cookie_hdr2}
+            h_err.send_response = MagicMock()
+            h_err.send_header = MagicMock()
+            h_err.end_headers = MagicMock()
+            h_err.wfile = io.BytesIO()
+            h_err.do_GET()
+            # Must fail closed (401), NEVER allow access (200)
+            self.assertEqual(h_err.send_response.call_args[0][0], 401, "Revalidation failed open on DB error!")
+
 
 if __name__ == '__main__':
     unittest.main()

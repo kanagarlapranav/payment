@@ -382,8 +382,8 @@ class TestUXAndNavigation(unittest.TestCase):
              patch('services.task_manager.schedule_debounced_backup') as mock_sched:
             asyncio.run(handle_callback_query(update, context))
 
-        # Assert no auto-backups were pushed to Telegram
-        mock_bkp.assert_not_called()
+        # Assert immediate cloud backup was awaited to ensure durability
+        mock_bkp.assert_called_once_with(context.bot)
         mock_sched.assert_not_called()
 
         # 1. Immediate answer called with "✅ Delete Confirmed!"
@@ -607,7 +607,7 @@ class TestUXAndNavigation(unittest.TestCase):
              patch('services.backup_service.backup_to_telegram', AsyncMock(return_value=True)) as mock_bkp:
             asyncio.run(handle_callback_query(update, context))
 
-        mock_bkp.assert_not_called()
+        mock_bkp.assert_called_once_with(context.bot)
         query.answer.assert_called_with("↩️ Processing Undo...", show_alert=False)
         query.edit_message_text.assert_called_once()
         text = query.edit_message_text.call_args[0][0]

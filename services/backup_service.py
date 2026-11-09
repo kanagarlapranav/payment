@@ -28,7 +28,7 @@ class RestoreAborted(Exception):
     """Exception raised when database restore or import must abort and roll back all changes."""
     pass
 
-def export_database_to_json(output_path: Path = None) -> dict:
+def export_database_to_json(output_path: Path = None, version: int = None) -> dict:
     """
     Exports all transactions (including tombstones), custom menu items, budgets, and settings
     to a versioned JSON structure (Format v2) and saves to disk atomically under EXPORT_LOCK and LEDGER_LOCK.
@@ -143,8 +143,10 @@ def export_database_to_json(output_path: Path = None) -> dict:
                     settings['last_local_backup_at'] = now_utc
                     conn.commit()
 
+                export_version = version or 2
                 backup_data = {
-                    "version": 2,
+                    "version": export_version,
+                    "format_version": "v3",
                     "database_id": db_id,
                     "revision": rev,
                     "exported_at": now_utc,
@@ -317,17 +319,27 @@ def export_workspace_backup(workspace_id: str, output_path: Path = None) -> dict
 
 def compute_canonical_checksum(data_dict: dict) -> str:
     """
-    Computes SHA-256 over canonical JSON (sort_keys=True, ensure_ascii=False, compact separators)
-    of version, revision, settings, custom_menu_items, budgets, transactions, and optionally workspace metadata.
+    Computes SHA-256 over canonical JSON (sort_keys=True, ensure_ascii=False, compact separators).
+    In Format v3, covers ALL restored collections including recurring_payments and monthly_reviews.
     """
+    version = data_dict.get("version", 2)
+    format_ver = data_dict.get("format_version")
+    is_v3 = (version >= 3 or format_ver in ("v3", "global_v3"))
+
     payload_for_hash = {
-        "version": data_dict.get("version", 2),
+        "version": version,
         "revision": data_dict.get("revision", 1),
         "settings": data_dict.get("settings", {}),
         "custom_menu_items": data_dict.get("custom_menu_items", []),
         "budgets": data_dict.get("budgets", []),
         "transactions": data_dict.get("transactions", []),
     }
+    if is_v3:
+        payload_for_hash["recurring_payments"] = data_dict.get("recurring_payments", [])
+        payload_for_hash["monthly_reviews"] = data_dict.get("monthly_reviews", [])
+        if "format_version" in data_dict:
+            payload_for_hash["format_version"] = data_dict["format_version"]
+
     if "workspaces" in data_dict:
         payload_for_hash["workspaces"] = data_dict["workspaces"]
     if "workspace_members" in data_dict:
@@ -346,6 +358,9 @@ def compute_canonical_checksum(data_dict: dict) -> str:
         payload_for_hash["workspace"] = data_dict["workspace"]
     if "members" in data_dict:
         payload_for_hash["members"] = data_dict["members"]
+    if is_v3 and "payee_categories" in data_dict:
+        payload_for_hash["payee_categories"] = data_dict["payee_categories"]
+
     canonical_str = json.dumps(
         payload_for_hash,
         sort_keys=True,
@@ -356,19 +371,30 @@ def compute_canonical_checksum(data_dict: dict) -> str:
 
 def verify_backup_payload(data_dict: dict) -> tuple[bool, str]:
     """
-    Validates backup payload schema, Format v2 checksum, and every field using utils/validation.
+    Validates backup payload schema, checksum, and every field using utils/validation.
     Returns (True, "OK") or (False, error_message).
     """
     if not isinstance(data_dict, dict):
         return False, "Payload must be a JSON object"
 
     version = data_dict.get("version", 1)
+    format_ver = data_dict.get("format_version")
+    is_v3 = (version >= 3 or format_ver in ("v3", "global_v3"))
+
     transactions = data_dict.get("transactions", [])
     if not isinstance(transactions, list):
         return False, "'transactions' must be a list"
 
-    # For Format v2 backups: verify mandatory checksum
-    if version >= 2:
+    # For Format v3 backups: strictly verify complete checksum covering all collections
+    if is_v3:
+        checksum = data_dict.get("checksum")
+        if not checksum or not isinstance(checksum, str):
+            return False, "Missing or empty checksum in Format v3 backup"
+        expected_checksum = compute_canonical_checksum(data_dict)
+        if checksum != expected_checksum:
+            return False, f"Checksum mismatch in Format v3 backup: expected {expected_checksum} but got {checksum}"
+    elif version >= 2:
+        logger.info("Importing legacy Format v2 backup via labeled legacy path...")
         checksum = data_dict.get("checksum")
         if not checksum or not isinstance(checksum, str):
             return False, "Missing or empty checksum in Format v2 backup"
@@ -1531,11 +1557,11 @@ async def restore_from_telegram(bot, chat_id: str = None) -> TelegramRestoreResu
     """
     chats_to_check = []
     if chat_id:
-        chats_to_check.append(chat_id)
-    if TELEGRAM_USER_ID and TELEGRAM_USER_ID not in chats_to_check:
-        chats_to_check.append(TELEGRAM_USER_ID)
-    if TELEGRAM_GROUP_ID and TELEGRAM_GROUP_ID not in chats_to_check:
-        chats_to_check.append(TELEGRAM_GROUP_ID)
+        chats_to_check.append(str(chat_id))
+    if TELEGRAM_USER_ID and str(TELEGRAM_USER_ID) not in chats_to_check:
+        chats_to_check.append(str(TELEGRAM_USER_ID))
+    if TELEGRAM_GROUP_ID and str(TELEGRAM_GROUP_ID) not in chats_to_check:
+        chats_to_check.append(str(TELEGRAM_GROUP_ID))
 
     if not chats_to_check or not bot:
         logger.warning("No Telegram chat or bot available for cloud restore.")
@@ -1600,7 +1626,72 @@ async def restore_from_telegram(bot, chat_id: str = None) -> TelegramRestoreResu
             download_path = DATA_DIR / "temp_cloud_backup.json"
             try:
                 await file.download_to_drive(custom_path=download_path)
-                res = import_database_from_json(input_path=download_path)
+                data_dict = None
+                if download_path.exists():
+                    try:
+                        with open(download_path, 'r', encoding='utf-8') as f:
+                            data_dict = json.load(f)
+                    except Exception as json_err:
+                        logger.warning(f"Could not parse downloaded backup JSON: {json_err}")
+
+                if data_dict and data_dict.get("format_version") == "workspace_v1":
+                    payload_ws_id = str(data_dict.get("workspace_id") or "")
+                    if not payload_ws_id:
+                        res = {"success": False, "error": "Missing workspace_id in workspace backup payload"}
+                    else:
+                        # Verify workspace ID and source Telegram chat mapping agreement
+                        ws_err = None
+                        with LEDGER_LOCK:
+                            with get_db_connection() as conn:
+                                cur = conn.cursor()
+                                cur.execute("SELECT id, chat_id, title FROM workspaces WHERE id = ?", (payload_ws_id,))
+                                ws_by_id = cur.fetchone()
+                                cur.execute("SELECT id, chat_id, title FROM workspaces WHERE chat_id = ?", (str(target_chat),))
+                                ws_by_chat = cur.fetchone()
+
+                                if ws_by_id and ws_by_id['chat_id'] and str(ws_by_id['chat_id']) != str(target_chat):
+                                    ws_err = f"Workspace/chat mismatch: backup workspace '{payload_ws_id}' is mapped to chat '{ws_by_id['chat_id']}', not '{target_chat}'"
+                                elif ws_by_chat and ws_by_chat['id'] != payload_ws_id:
+                                    ws_err = f"Workspace mismatch: chat '{target_chat}' is already mapped to workspace '{ws_by_chat['id']}', cannot restore '{payload_ws_id}'"
+                                else:
+                                    # On empty install / missing workspace, create original workspace identity
+                                    if not ws_by_id:
+                                        now_utc = utc_now_iso()
+                                        ws_title = data_dict.get("workspace_title") or data_dict.get("title") or "Workspace"
+                                        c_id = int(target_chat) if str(target_chat).lstrip('-').isdigit() else None
+                                        cur.execute("""
+                                            INSERT OR IGNORE INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at)
+                                            VALUES (?, ?, 'supergroup', ?, 1, ?, ?)
+                                        """, (payload_ws_id, c_id, ws_title, now_utc, now_utc))
+                                        for mem in data_dict.get("members", []):
+                                             m_uid = mem.get('telegram_user_id') or mem.get('user_id')
+                                             if m_uid:
+                                                 cur.execute("""
+                                                     INSERT OR IGNORE INTO workspace_members (workspace_id, telegram_user_id, role, is_active, status, joined_at, updated_at)
+                                                     VALUES (?, ?, ?, ?, ?, ?, ?)
+                                                 """, (
+                                                     payload_ws_id,
+                                                     int(m_uid),
+                                                     mem.get('role', 'member'),
+                                                     mem.get('is_active', 1),
+                                                     mem.get('status', 'active'),
+                                                     mem.get('joined_at') or mem.get('created_at') or now_utc,
+                                                     mem.get('updated_at', now_utc)
+                                                 ))
+                                        conn.commit()
+
+                        if ws_err:
+                            res = {"success": False, "error": ws_err}
+                        else:
+                            res = restore_workspace_from_json(payload_ws_id, data_dict)
+                else:
+                    # Global multi-tenant backup: never restore into a group
+                    is_group_chat = str(target_chat).startswith('-') or (int(target_chat) < 0 if str(target_chat).lstrip('-').isdigit() else False)
+                    if is_group_chat and data_dict:
+                        res = {"success": False, "error": f"Refusing to restore full multi-tenant backup from group chat {target_chat}"}
+                    else:
+                        res = import_database_from_json(input_path=download_path, data_dict=data_dict)
+
                 if res.get('success'):
                     logger.info(f"Cloud restore from {target_chat} (Rev {rev}) succeeded!")
                     return TelegramRestoreResult(success=True, found=True, error=None)
@@ -1617,8 +1708,12 @@ async def restore_from_telegram(bot, chat_id: str = None) -> TelegramRestoreResu
             last_import_error = str(cand_err)
             logger.warning(f"Error restoring candidate from {target_chat} (Rev {rev}): {cand_err}")
 
-    logger.info("Cloud restore checks complete. Attempting local seed/fallback...")
-    fallback_ok = restore_local_fallback_if_valid()
+    if chat_id or last_import_error:
+        fallback_ok = False
+    else:
+        logger.info("Cloud restore checks complete. Attempting local seed/fallback...")
+        fallback_ok = restore_local_fallback_if_valid()
+
     return TelegramRestoreResult(
         success=fallback_ok,
         found=True,
@@ -1794,6 +1889,23 @@ def restore_workspace_from_json(workspace_id: str, data_dict: dict, actor_user_i
                         INSERT OR REPLACE INTO workspace_settings (workspace_id, key, value, updated_at)
                         VALUES (?, ?, ?, ?)
                     """, (str(workspace_id), s['key'], s['value'], s.get('updated_at') or now_utc))
+
+                # Restore members
+                for mem in data_dict.get("members", []):
+                    m_uid = mem.get('telegram_user_id') or mem.get('user_id')
+                    if m_uid:
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO workspace_members (workspace_id, telegram_user_id, role, is_active, status, joined_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            str(workspace_id),
+                            int(m_uid),
+                            mem.get('role', 'member'),
+                            mem.get('is_active', 1),
+                            mem.get('status', 'active'),
+                            mem.get('joined_at') or mem.get('created_at') or now_utc,
+                            mem.get('updated_at') or now_utc
+                        ))
 
                 # Restore transactions
                 cursor.execute("PRAGMA table_info(transactions)")

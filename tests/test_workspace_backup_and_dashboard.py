@@ -278,3 +278,161 @@ def test_backup_to_telegram_group_scoping(monkeypatch, tmp_path):
     assert len(owner_redirect_calls) == 1
 
 
+def test_problem_3_group_auto_restore_five_cases(monkeypatch, tmp_path):
+    """
+    Problem 3 Regression Test Suite:
+    1. Group-only recovery into an empty database (creates original UUID).
+    2. Group recovery into an existing matching workspace.
+    3. Mismatched workspace/chat (must refuse).
+    4. Invalid checksum (must refuse).
+    5. Owner-DM global backup unavailable (falls back to group backup).
+    """
+    import asyncio
+    import hashlib
+    from unittest.mock import AsyncMock, MagicMock
+    from services.backup_service import restore_from_telegram
+    from database.db import get_db_connection
+
+    p3_db = tmp_path / "p3_test.sqlite3"
+    monkeypatch.setattr("config.DB_PATH", p3_db)
+    monkeypatch.setattr("database.db.DB_PATH", p3_db)
+    monkeypatch.setattr("services.backup_service.DB_PATH", p3_db)
+    setup_database()
+
+    loop = asyncio.new_event_loop()
+
+    def make_ws_payload(ws_id, title, tx_uid=None):
+        uid_val = tx_uid or uuid.uuid4().hex
+        p = {
+            "format_version": "workspace_v1",
+            "workspace_id": ws_id,
+            "workspace_title": title,
+            "exported_at": "2026-10-10T12:00:00Z",
+            "settings": [{"key": "current_balance", "value": "500.0"}],
+            "members": [{"telegram_user_id": 111, "role": "owner"}],
+            "transactions": [{
+                "uid": uid_val,
+                "transaction_type": "RECEIVED",
+                "amount": 500.0,
+                "person_name": "Client",
+                "transaction_date": "2026-10-10",
+                "balance_before": 0.0,
+                "balance_after": 500.0,
+            }],
+            "custom_menu_items": [],
+            "payee_categories": [],
+            "recurring_payments": [],
+            "monthly_reviews": []
+        }
+        canonical = json.dumps(p, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+        p["checksum"] = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+        return p
+
+    def create_mock_bot(chats_dict):
+        bot = MagicMock()
+        async def fake_get_chat(chat_id):
+            cid = str(chat_id)
+            if cid in chats_dict:
+                chat = MagicMock()
+                chat.pinned_message = chats_dict[cid]
+                return chat
+            chat = MagicMock()
+            chat.pinned_message = None
+            return chat
+
+        async def fake_get_file(file_id):
+            f = MagicMock()
+            async def fake_download(custom_path):
+                # file_id contains the JSON string
+                with open(custom_path, 'w', encoding='utf-8') as out:
+                    out.write(file_id)
+            f.download_to_drive = AsyncMock(side_effect=fake_download)
+            return f
+
+        bot.get_chat = AsyncMock(side_effect=fake_get_chat)
+        bot.get_file = AsyncMock(side_effect=fake_get_file)
+        return bot
+
+    try:
+        # Case 1: Group-only recovery into an empty database
+        with get_db_connection() as conn:
+            conn.execute("DELETE FROM transactions")
+            conn.execute("DELETE FROM workspace_members")
+            conn.execute("DELETE FROM workspaces")
+            conn.commit()
+
+        ws1_id = "11111111-1111-1111-1111-111111111111"
+        payload1 = make_ws_payload(ws1_id, "Finance Team Group")
+        msg1 = MagicMock()
+        msg1.caption = "#PAYMENT_TRACKER_BACKUP Rev 10"
+        msg1.document = MagicMock(file_id=json.dumps(payload1), file_name="Finance_Team_Group_backup.json")
+        bot1 = create_mock_bot({"-100111": msg1})
+
+        res1 = loop.run_until_complete(restore_from_telegram(bot1, chat_id="-100111"))
+        assert res1.success is True, f"Case 1 failed: {res1.error}"
+
+        # Assert original workspace UUID was restored
+        with get_db_connection() as conn:
+            ws_row = conn.execute("SELECT id, title, chat_id FROM workspaces WHERE id = ?", (ws1_id,)).fetchone()
+            assert ws_row is not None
+            assert str(ws_row["chat_id"]) == "-100111"
+            assert ws_row["title"] == "Finance Team Group"
+            tx_cnt = conn.execute("SELECT COUNT(*) FROM transactions WHERE workspace_id = ?", (ws1_id,)).fetchone()[0]
+            assert tx_cnt == 1
+
+        # Case 2: Into an existing matching workspace
+        ws2_id = "22222222-2222-2222-2222-222222222222"
+        now_str = "2026-10-10T12:00:00Z"
+        with get_db_connection() as conn:
+            conn.execute("INSERT OR REPLACE INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at) VALUES (?, -100222, 'supergroup', 'Marketing', 1, ?, ?)", (ws2_id, now_str, now_str))
+            conn.commit()
+        payload2 = make_ws_payload(ws2_id, "Marketing")
+        msg2 = MagicMock()
+        msg2.caption = "#PAYMENT_TRACKER_BACKUP Rev 20"
+        msg2.document = MagicMock(file_id=json.dumps(payload2), file_name="Marketing_backup.json")
+        bot2 = create_mock_bot({"-100222": msg2})
+
+        res2 = loop.run_until_complete(restore_from_telegram(bot2, chat_id="-100222"))
+        assert res2.success is True, f"Case 2 failed: {res2.error}"
+
+        # Case 3: Mismatched workspace/chat (must refuse)
+        ws3_id = "33333333-3333-3333-3333-333333333333"
+        with get_db_connection() as conn:
+            conn.execute("INSERT OR REPLACE INTO workspaces (id, chat_id, chat_type, title, is_active, created_at, updated_at) VALUES (?, -100333, 'supergroup', 'Engineering', 1, ?, ?)", (ws3_id, now_str, now_str))
+            conn.commit()
+        # Payload claiming a different workspace ID for the same chat -100333
+        payload3 = make_ws_payload("mismatched-uuid-9999", "Engineering")
+        msg3 = MagicMock()
+        msg3.caption = "#PAYMENT_TRACKER_BACKUP Rev 30"
+        msg3.document = MagicMock(file_id=json.dumps(payload3), file_name="Engineering_backup.json")
+        bot3 = create_mock_bot({"-100333": msg3})
+
+        res3 = loop.run_until_complete(restore_from_telegram(bot3, chat_id="-100333"))
+        assert res3.success is False
+        assert "mismatch" in res3.error.lower()
+
+        # Case 4: Invalid checksum
+        bad_payload = make_ws_payload(ws2_id, "Corrupted")
+        bad_payload["checksum"] = "0" * 64
+        msg4 = MagicMock()
+        msg4.caption = "#PAYMENT_TRACKER_BACKUP Rev 40"
+        msg4.document = MagicMock(file_id=json.dumps(bad_payload), file_name="bad_backup.json")
+        bot4 = create_mock_bot({"-100222": msg4})
+
+        res4 = loop.run_until_complete(restore_from_telegram(bot4, chat_id="-100222"))
+        assert res4.success is False
+        assert "checksum" in res4.error.lower()
+
+        # Case 5: Owner-DM global backup unavailable, falls back to group backup
+        monkeypatch.setattr("services.backup_service.TELEGRAM_USER_ID", "999111")
+        monkeypatch.setattr("services.backup_service.TELEGRAM_GROUP_ID", "-100222")
+        # Owner DM 999111 has None, group -100222 has msg2
+        bot5 = create_mock_bot({"-100222": msg2})
+        res5 = loop.run_until_complete(restore_from_telegram(bot5))
+        assert res5.success is True, f"Case 5 failed: {res5.error}"
+
+    finally:
+        loop.close()
+
+
+

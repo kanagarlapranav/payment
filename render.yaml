@@ -1,7 +1,9 @@
 # Render Deployment Blueprint for Payment Tracker
 # NOTE: Free plan instances on Render use ephemeral disks that reset on redeploy or inactivity spin-down.
 # Payment Tracker handles this automatically by pulling the latest verified cloud backup on cold start.
-# For guaranteed zero-latency persistence, upgrade to 'starter' plan and attach a persistent disk.
+# For dedicated 24/7 hosting with a persistent disk on Azure (e.g. Azure for Students B1s VM),
+# please see the complete runbook in docs/DEPLOY_AZURE.md.
+# Alternatively, to attach a persistent disk on Render (requires Starter plan), upgrade plan and uncomment disk below.
 services:
   - type: web
     name: payment-tracker-bot

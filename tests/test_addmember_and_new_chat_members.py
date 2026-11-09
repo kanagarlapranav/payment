@@ -13,17 +13,13 @@ from telegram import Update, User, Chat, Message
 
 
 @pytest.fixture(autouse=True)
-def clean_db():
+def clean_db(monkeypatch, tmp_path):
+    db_file = tmp_path / "test_addmember.sqlite3"
+    monkeypatch.setattr("config.DB_PATH", db_file)
+    monkeypatch.setattr("database.db.DB_PATH", db_file)
+    monkeypatch.setattr("services.backup_service.DB_PATH", db_file)
     setup_database()
-    with get_db_connection() as conn:
-        conn.execute("DELETE FROM workspace_members")
-        conn.execute("DELETE FROM workspaces")
-        conn.commit()
     yield
-    with get_db_connection() as conn:
-        conn.execute("DELETE FROM workspace_members")
-        conn.execute("DELETE FROM workspaces")
-        conn.commit()
 
 
 def make_update(user_id: int, chat_id: int, text: str = ""):

@@ -415,16 +415,59 @@ def get_session_info(session_id: Optional[str]) -> Optional[Dict[str, Any]]:
                 WHERE workspace_id = ? AND telegram_user_id = ?
             """, (str(ws_id), int(uid)))
             mem = cursor.fetchone()
-            if mem:
-                if not mem['is_active'] or mem['status'] in ('suspended', 'removed', 'revoked'):
-                    # Revoke session if user has been deactivated or removed from existing workspace
-                    revoke_session(session_id)
-                    return None
-                data['role'] = mem['role']
+            if not mem:
+                from config import TELEGRAM_USER_ID, SUPER_ADMIN_IDS
+                is_owner_or_super = (TELEGRAM_USER_ID and int(uid) == int(TELEGRAM_USER_ID)) or (int(uid) in SUPER_ADMIN_IDS)
+                cursor.execute("SELECT value FROM settings WHERE key = 'default_workspace_id'")
+                def_ws_row = cursor.fetchone()
+                is_default_ws = def_ws_row and def_ws_row['value'] == str(ws_id)
+                if is_owner_or_super and is_default_ws:
+                    data['role'] = 'owner'
+                    return data
+                logger.warning(f"Revoking session for removed member {uid} in workspace {ws_id}")
+                revoke_session(session_id)
+                return None
+            if not mem['is_active'] or mem['status'] in ('suspended', 'removed', 'revoked'):
+                # Revoke session if user has been deactivated or removed from existing workspace
+                revoke_session(session_id)
+                return None
+            data['role'] = mem['role']
     except Exception as e:
-        logger.debug(f"Live membership revalidation notice: {e}")
+        logger.warning(f"Live membership revalidation error (failing closed): {e}")
+        return None
 
     return data
+
+
+def revoke_user_sessions(workspace_id: str, telegram_user_id: int | str) -> int:
+    """Eagerly revokes all active sessions for a specific user in a workspace."""
+    if not workspace_id or not telegram_user_id:
+        return 0
+    uid = int(telegram_user_id)
+    ws_id = str(workspace_id)
+
+    # 1. Revoke in-memory sessions
+    revoked_count = 0
+    for sid, sdata in list(_SESSIONS.items()):
+        if str(sdata.get('workspace_id')) == ws_id and int(sdata.get('user_id', 0)) == uid:
+            _SESSIONS.pop(sid, None)
+            revoked_count += 1
+
+    # 2. Revoke in database
+    try:
+        with LEDGER_LOCK:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE dashboard_sessions 
+                    SET revoked_at = ? 
+                    WHERE workspace_id = ? AND user_id = ? AND revoked_at IS NULL
+                """, (utc_now_iso(), ws_id, uid))
+                conn.commit()
+    except Exception as e:
+        logger.warning(f"Error eagerly revoking sessions in DB for user {uid} in ws {ws_id}: {e}")
+
+    return revoked_count
 
 
 def revoke_session(session_id: Optional[str]) -> bool:

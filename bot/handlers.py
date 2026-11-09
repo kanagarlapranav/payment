@@ -2617,6 +2617,17 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
                 if os.path.exists(bkp):
                     create_tracked_task(asyncio.to_thread(upload_backup_to_drive, str(bkp)), name="gdrive_backup_upload")
             
+            from services.backup_service import backup_to_telegram
+            backup_ok = False
+            try:
+                if context and context.bot:
+                    backup_ok = await backup_to_telegram(context.bot)
+            except Exception as bk_err:
+                logger.warning(f"Cloud backup failed after delete: {bk_err}")
+                backup_ok = False
+
+            backup_status = "✅ Cloud backup completed." if backup_ok else "⚠️ Deleted locally; cloud backup is pending retry."
+
             await safe_edit_callback_message(
                 query,
                 f"✅ <b>Delete Confirmed!</b>\n"
@@ -2625,7 +2636,8 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
                 f"• <b>Type:</b> {html.escape(str(tx_type))}\n"
                 f"• <b>Amount:</b> {html.escape(amt_str)}\n"
                 f"• <b>Person:</b> {html.escape(str(person))}\n\n"
-                f"💰 <b>Updated Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>",
+                f"💰 <b>Updated Current Balance:</b> <b>{html.escape(format_currency(new_bal))}</b>\n\n"
+                f"{backup_status}",
                 reply_markup=get_delete_confirmed_keyboard(),
                 parse_mode='HTML'
             )
@@ -2654,7 +2666,18 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
                 export_database_to_json()
             except Exception as bkp_err:
                 logger.warning(f"Could not update local JSON backup on undo: {bkp_err}")
-            await safe_edit_callback_message(query, msg, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
+
+            from services.backup_service import backup_to_telegram
+            backup_ok = False
+            try:
+                if context and context.bot:
+                    backup_ok = await backup_to_telegram(context.bot)
+            except Exception as bk_err:
+                logger.warning(f"Cloud backup failed after undo: {bk_err}")
+                backup_ok = False
+
+            backup_status = "✅ Cloud backup completed." if backup_ok else "⚠️ Restored locally; cloud backup is pending retry."
+            await safe_edit_callback_message(query, f"{msg}\n\n{backup_status}", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         else:
             await safe_edit_callback_message(query, f"❌ Nothing was saved: {msg}", reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
 
@@ -2676,11 +2699,23 @@ async def _dispatch_callback_query(update: Update, context: ContextTypes.DEFAULT
                 export_database_to_json()
             except Exception as bkp_err:
                 logger.warning(f"Could not update local JSON backup on undo: {bkp_err}")
+
+            from services.backup_service import backup_to_telegram
+            backup_ok = False
+            try:
+                if context and context.bot:
+                    backup_ok = await backup_to_telegram(context.bot)
+            except Exception as bk_err:
+                logger.warning(f"Cloud backup failed after undo: {bk_err}")
+                backup_ok = False
+
+            backup_status = "✅ Cloud backup completed." if backup_ok else "⚠️ Restored locally; cloud backup is pending retry."
             text = (
                 "✅ <b>Undo Confirmed & Applied!</b>\n"
                 "━━━━━━━━━━━━━━\n"
                 f"{msg}\n\n"
-                f"💰 <b>Current Balance:</b> <b>{html.escape(format_currency(bal))}</b>"
+                f"💰 <b>Current Balance:</b> <b>{html.escape(format_currency(bal))}</b>\n\n"
+                f"{backup_status}"
             )
             await safe_edit_callback_message(query, text, reply_markup=get_back_to_menu_keyboard(), parse_mode='HTML')
         else:
