@@ -1,0 +1,20 @@
+[Unit]
+Description=Payment Tracker Telegram Bot & Web Service
+After=network.target
+
+[Service]
+Type=simple
+User=azureuser
+WorkingDirectory=/home/azureuser/payment
+EnvironmentFile=/home/azureuser/payment/.env
+ExecStart=/home/azureuser/payment/venv/bin/python app.py
+Restart=on-failure
+RestartSec=5s
+
+# Process security and resource limits
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
