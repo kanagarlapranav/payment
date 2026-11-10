@@ -163,5 +163,91 @@ def test_auto_deploy_azure_documentation():
     assert "dynamic" in content.lower()
     assert "update_azure.sh" in content
     assert ".env" in content
+    assert "B2ts_v2" in content
+    assert "B1s" not in content
+
+
+def test_no_b1s_references_in_azure_deployment_files():
+    """Verify B1s error is eliminated and replaced with B2ts_v2 across Azure deployment files."""
+    wf_path = BASE_DIR / ".github" / "workflows" / "deploy-azure.yml"
+    assert "B1s" not in wf_path.read_text(encoding="utf-8")
+    assert "B2ts_v2" in wf_path.read_text(encoding="utf-8")
+
+    doc_auto = BASE_DIR / "docs" / "AUTO_DEPLOY_AZURE.md"
+    assert "B1s" not in doc_auto.read_text(encoding="utf-8")
+    assert "B2ts_v2" in doc_auto.read_text(encoding="utf-8")
+
+
+def test_configure_env_script_syntax_and_behavior(tmp_path):
+    """Verify scripts/configure_env.sh handles missing keys, placeholders, and preserves existing keys."""
+    script_path = BASE_DIR / "scripts" / "configure_env.sh"
+    assert script_path.exists(), "scripts/configure_env.sh does not exist"
+
+    # 1. Syntax check
+    bash_bins = ["bash", r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files\Git\usr\bin\bash.exe"]
+    bash_bin = None
+    for b in bash_bins:
+        try:
+            res = subprocess.run([b, "-n", str(script_path)], capture_output=True, text=True)
+            if res.returncode == 0:
+                bash_bin = b
+                break
+        except FileNotFoundError:
+            continue
+
+    assert bash_bin is not None, "bash binary not available for testing configure_env.sh"
+
+    # 2. Test handling a .env with missing GEMINI_API_KEY and placeholders
+    test_env = tmp_path / "test.env"
+    initial_content = (
+        "PORT=10000\n"
+        "TELEGRAM_BOT_TOKEN=123456789:AAFakePlaceholderBotTokenForTesting35\n"
+        "TELEGRAM_USER_ID=123456789\n"
+        "TELEGRAM_GROUP_ID=-1001234567890\n"
+        "# No GEMINI_API_KEY line present\n"
+        "DEFAULT_TIMEZONE=Asia/Kolkata\n"
+    )
+    test_env.write_text(initial_content, encoding="utf-8")
+
+    # Inputs:
+    # 1: real bot token
+    # 2: user id (empty to accept 8379948573)
+    # 3: group id (empty to accept -1004310685141)
+    # 4: gemini key
+    inputs = "987654321:AAValidTokenForTestingPurposesOnly12345\n\n\nAQ.ValidGeminiKeyForTestingOnly12345\n"
+    proc = subprocess.run(
+        [bash_bin, str(script_path), str(test_env)],
+        input=inputs,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+
+    result_content = test_env.read_text(encoding="utf-8")
+    assert "TELEGRAM_USER_ID=8379948573" in result_content
+    assert "TELEGRAM_GROUP_ID=-1004310685141" in result_content
+    assert "GEMINI_API_KEY=AQ.ValidGeminiKeyForTestingOnly12345" in result_content
+    assert "GEMINI_MODEL=gemini-3.6-flash" in result_content
+    assert "PORT=10000" in result_content
+    assert "DEFAULT_TIMEZONE=Asia/Kolkata" in result_content
+
+    # Output must not leak full secret tokens
+    assert "AAValidTokenForTestingPurposesOnly12345" not in proc.stdout
+    assert "ValidGeminiKeyForTestingOnly12345" not in proc.stdout
+
+    # 3. Test idempotence: running it again with already-correct values leaves them untouched
+    proc2 = subprocess.run(
+        [bash_bin, str(script_path), str(test_env)],
+        input="\n",
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    result_content_2 = test_env.read_text(encoding="utf-8")
+    assert result_content_2 == result_content
+    assert result_content_2.count("TELEGRAM_USER_ID=") == 1
+    assert result_content_2.count("GEMINI_API_KEY=") == 1
+    assert "OK (configured)" in proc2.stdout
+
 
 

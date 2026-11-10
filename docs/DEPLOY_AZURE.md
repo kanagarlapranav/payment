@@ -1,6 +1,6 @@
-# Deploying Payment Tracker to Azure B1s VM (Ubuntu 24.04 / Python 3.13)
+# Deploying Payment Tracker to Azure Standard_B2ts_v2 VM (Ubuntu 24.04 / Python 3.13)
 
-This guide provides complete, step-by-step instructions for running Payment Tracker on an Azure B1s Virtual Machine using persistent disk storage under the **Azure for Students** subscription ($100 credit, 365 days).
+This guide provides complete, step-by-step instructions for running Payment Tracker on an Azure Standard_B2ts_v2 Virtual Machine using persistent disk storage under the **Azure for Students** subscription ($100 credit, 365 days).
 
 ---
 

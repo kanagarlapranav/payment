@@ -19,17 +19,38 @@ When you push code changes to the `main` branch of `kanagarlapranav/payment`:
 
 ## ⚠️ Important Note on Dynamic IP
 
-The Azure B1s VM uses a **dynamic public IP** (`172.198.162.13`) by default.
+The Azure Standard_B2ts_v2 VM uses a **dynamic public IP** (`172.198.162.13`) by default.
 - If you stop/deallocate the VM in Azure Portal, Azure may release the IP and assign a new one when restarted.
 - **If deployment fails to connect:** Check your VM's public IP in the Azure Portal. If it changed, simply update the `AZURE_VM_HOST` secret in GitHub.
 - **Permanent fix (optional):** In Azure Portal, navigate to **payment-tracker-vm** > **Networking** > click the Public IP resource > **Configuration** > set Assignment to **Static**.
 
 ---
 
-## One-Time Setup Instructions
+## One-Time Cutover Sequence (Steps 1, 2, and 3)
 
-### Step 1: Generate an SSH Key Pair
+Follow these steps in order to cut over cleanly to the Azure VM:
 
+### Step 1: Configure Environment Variables on the VM (`.env`)
+The VM needs your real bot credentials before it can start. Run the interactive configuration script directly on the VM:
+```bash
+cd ~/payment
+git pull origin main
+bash scripts/configure_env.sh
+```
+- It automatically detects placeholder values and prompts you for real values.
+- If the `GEMINI_API_KEY` line is missing, it adds it automatically.
+- Paste your real `TELEGRAM_BOT_TOKEN` and `GEMINI_API_KEY` (typing will be hidden).
+- It will verify `TELEGRAM_USER_ID=8379948573`, `TELEGRAM_GROUP_ID=-1004310685141`, and `GEMINI_MODEL=gemini-3.6-flash`.
+- It preserves every other existing configuration line in `.env`.
+
+> [!CRITICAL]
+> You must complete `.env` configuration **before** starting the service; otherwise, the bot cannot authenticate with Telegram.
+
+---
+
+### Step 2: One-Time SSH Key & GitHub Secrets Setup
+
+#### A. Generate an SSH Key Pair on Your PC
 Run this command in your PC's terminal (PowerShell or Bash):
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/azure_deploy -C "github-actions-azure-deploy"
@@ -40,10 +61,7 @@ This creates two files in your `~/.ssh/` folder:
 - `~/.ssh/azure_deploy.pub` (Public key — added to the VM)
 - `~/.ssh/azure_deploy` (Private key — added to GitHub Secrets)
 
----
-
-### Step 2: Add Public Key to the Azure VM
-
+#### B. Add Public Key to the Azure VM
 1. Copy the content of your public key (`~/.ssh/azure_deploy.pub`). On Windows PowerShell:
    ```powershell
    Get-Content ~/.ssh/azure_deploy.pub
@@ -63,10 +81,7 @@ This creates two files in your `~/.ssh/` folder:
    ssh -i ~/.ssh/azure_deploy azureuser@172.198.162.13
    ```
 
----
-
-### Step 3: Add Secrets to GitHub Repository
-
+#### C. Add Secrets to GitHub Repository
 1. Open your GitHub repository in your browser: [https://github.com/kanagarlapranav/payment](https://github.com/kanagarlapranav/payment)
 2. Go to **Settings** > **Secrets and variables** > **Actions**.
 3. Click **New repository secret** and add each of the following:
@@ -83,6 +98,19 @@ This creates two files in your `~/.ssh/` folder:
 
 ---
 
+### Step 3: First Code Pull on the VM
+
+The VM currently has an older code commit. Before the GitHub Actions workflow takes over, pull the latest code onto the VM once by hand:
+```bash
+cd ~/payment
+git pull origin main
+bash scripts/update_azure.sh
+```
+- This pulls all automation scripts, installs any updated requirements, and restarts the `payment-tracker` service.
+- **After this one-time manual pull, you never need to pull by hand again.** Every future push to `main` will automatically deploy through GitHub Actions!
+
+---
+
 ## Step 4: Testing the Workflow
 
 You can test the deployment in two ways:
@@ -93,3 +121,4 @@ You can test the deployment in two ways:
    sudo systemctl status payment-tracker
    sudo journalctl -u payment-tracker -n 20 --no-pager
    ```
+
