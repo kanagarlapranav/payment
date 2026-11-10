@@ -107,3 +107,61 @@ def test_deploy_azure_runbook_completeness():
     assert "Render" in content
     assert "Suspend Service" in content or "STOP the Render service" in content
     assert "GEMINI_API_KEY" in content
+
+
+def test_deploy_azure_workflow_syntax_and_structure():
+    """Verify .github/workflows/deploy-azure.yml is valid YAML and follows security invariants."""
+    import yaml
+    wf_path = BASE_DIR / ".github" / "workflows" / "deploy-azure.yml"
+    assert wf_path.exists(), ".github/workflows/deploy-azure.yml does not exist"
+
+    raw_text = wf_path.read_text(encoding="utf-8")
+    parsed = yaml.safe_load(raw_text)
+
+    # 1. Valid YAML structure
+    assert isinstance(parsed, dict)
+    assert parsed.get("name") == "Deploy to Azure VM"
+
+    # 2. Triggers on push to main
+    triggers = parsed.get("on") or parsed.get(True)
+    if isinstance(triggers, dict):
+        assert "push" in triggers
+        push_branches = triggers["push"].get("branches", [])
+        assert "main" in push_branches
+        assert "workflow_dispatch" in triggers
+    else:
+        assert "push" in str(triggers)
+
+    # 3. References required secrets without hardcoding values
+    assert "secrets.AZURE_VM_HOST" in raw_text
+    assert "secrets.AZURE_VM_USER" in raw_text
+    assert "secrets.AZURE_VM_SSH_KEY" in raw_text
+
+    # 4. Never hardcode live IP addresses or passwords
+    lines_without_comments = [
+        line for line in raw_text.splitlines()
+        if not line.strip().startswith("#")
+    ]
+    code_text = "\n".join(lines_without_comments)
+    assert "172.198.162.13" not in code_text, "Hardcoded IP found outside comments"
+
+    # 5. Calls update_azure.sh and does not touch .env
+    assert "scripts/update_azure.sh" in raw_text
+    assert "rm -f .env" not in raw_text
+    assert "cp .env.example .env" not in raw_text
+
+
+def test_auto_deploy_azure_documentation():
+    """Verify docs/AUTO_DEPLOY_AZURE.md explains dynamic IP, SSH setup, and secrets."""
+    doc_path = BASE_DIR / "docs" / "AUTO_DEPLOY_AZURE.md"
+    assert doc_path.exists()
+
+    content = doc_path.read_text(encoding="utf-8")
+    assert "AZURE_VM_HOST" in content
+    assert "AZURE_VM_USER" in content
+    assert "AZURE_VM_SSH_KEY" in content
+    assert "dynamic" in content.lower()
+    assert "update_azure.sh" in content
+    assert ".env" in content
+
+

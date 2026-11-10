@@ -1,0 +1,66 @@
+name: Deploy to Azure VM
+
+# ==============================================================================
+# Auto-Deployment to Azure VM
+# Triggers automatically on every push to main, deploying updated code to the VM.
+#
+# DYNAMIC IP NOTE:
+# The Azure VM public IP (e.g. 172.198.162.13) is dynamic by default on Azure B1s.
+# If the VM is stopped/deallocated, Azure may assign a new public IP.
+# If deployment fails due to a changed IP, update the AZURE_VM_HOST secret
+# in GitHub Settings -> Secrets and variables -> Actions with the new IP address
+# (or assign a static Public IP address in Azure Portal).
+#
+# ENVIRONMENT INTEGRITY:
+# This workflow deploys CODE only. It executes scripts/update_azure.sh on the VM.
+# It NEVER modifies, overwrites, or deletes /home/azureuser/payment/.env or live data.
+# ==============================================================================
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Ensure sequential deployments to avoid git pull collisions on the VM
+concurrency:
+  group: deploy-azure-vm
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: SSH Deploy to Azure VM
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate Deployment Secrets
+        env:
+          VM_HOST: ${{ secrets.AZURE_VM_HOST }}
+          VM_USER: ${{ secrets.AZURE_VM_USER }}
+          VM_KEY: ${{ secrets.AZURE_VM_SSH_KEY }}
+        run: |
+          MISSING=""
+          [ -z "$VM_HOST" ] && MISSING="$MISSING AZURE_VM_HOST"
+          [ -z "$VM_USER" ] && MISSING="$MISSING AZURE_VM_USER"
+          [ -z "$VM_KEY" ] && MISSING="$MISSING AZURE_VM_SSH_KEY"
+          if [ -n "$MISSING" ]; then
+            echo "::error::Missing required GitHub Secrets:$MISSING"
+            echo "Please configure these in GitHub: Settings -> Secrets and variables -> Actions."
+            echo "Refer to docs/AUTO_DEPLOY_AZURE.md for setup instructions."
+            exit 1
+          fi
+
+      - name: Execute Update on Azure VM via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.AZURE_VM_HOST }}
+          username: ${{ secrets.AZURE_VM_USER }}
+          key: ${{ secrets.AZURE_VM_SSH_KEY }}
+          port: ${{ secrets.AZURE_VM_PORT || '22' }}
+          script_stop: true
+          command_timeout: 10m
+          script: |
+            # Executes the idempotent code update script on the VM.
+            # This script pulls git, installs requirements, and restarts payment-tracker.
+            # It NEVER overwrites, modifies, or deletes the VM's .env or ledger database.
+            bash /home/${{ secrets.AZURE_VM_USER }}/payment/scripts/update_azure.sh
